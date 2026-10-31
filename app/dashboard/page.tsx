@@ -4,6 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { useStudio } from '@/lib/studio-context';
 import { AppShell } from '@/components/layout/app-shell';
+import { formatUtcDateTime } from '@/lib/date-display';
 import {
   Plus,
   FileText,
@@ -363,7 +364,7 @@ export default function DashboardPage() {
                         <div className="flex items-center justify-between text-[11px] font-mono text-slate-500">
                           <span>
                             {art.scheduledAt
-                              ? new Date(art.scheduledAt).toLocaleString()
+                              ? formatUtcDateTime(art.scheduledAt)
                               : 'Approved · Awaiting slot'}
                           </span>
                           <span className="uppercase text-[#087f83] dark:text-teal-400 font-semibold">
