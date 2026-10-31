@@ -7,6 +7,7 @@ import { useStudio } from '@/lib/studio-context';
 import { Article, ArticleStatus, Locale } from '@/lib/types';
 import { validateDoiSyntax, validateSafeUrl, getMediaDisplayPolicy } from '@/lib/editorial-rules';
 import { AppShell } from '@/components/layout/app-shell';
+import { formatUtcDate, parseUtcDateTimeInput, toUtcDateTimeInput } from '@/lib/date-display';
 import { ArticleTiptapEditor } from './article-tiptap-editor';
 import { CodexAssistantDrawer } from '@/components/assistant/codex-assistant-drawer';
 import {
@@ -85,7 +86,7 @@ export function ArticleWorkspace({ articleId }: { articleId?: string }) {
     existingArticle?.seo?.description || ''
   );
   const [scheduledAt, setScheduledAt] = useState(
-    existingArticle?.scheduledAt ? existingArticle.scheduledAt.slice(0, 16) : ''
+    toUtcDateTimeInput(existingArticle?.scheduledAt)
   );
 
   // Sync if existingArticle loads from IndexedDB after mount
@@ -107,7 +108,7 @@ export function ArticleWorkspace({ articleId }: { articleId?: string }) {
       setSeoTitle(existingArticle.seo?.title || '');
       setSeoDescription(existingArticle.seo?.description || '');
       setScheduledAt(
-        existingArticle.scheduledAt ? existingArticle.scheduledAt.slice(0, 16) : ''
+        toUtcDateTimeInput(existingArticle.scheduledAt)
       );
     }
   }, [existingArticle?.id, existingArticle?.version]);
@@ -141,6 +142,12 @@ export function ArticleWorkspace({ articleId }: { articleId?: string }) {
         setStatusMessage('Article title (H1) is required before saving.');
         return null;
       }
+      const parsedSchedule = scheduledAt ? parseUtcDateTimeInput(scheduledAt) : null;
+      if (scheduledAt && !parsedSchedule) {
+        setSaveState('error');
+        setStatusMessage('Enter a valid UTC scheduled publication date.');
+        return null;
+      }
       setSaveState('saving');
       const result = saveArticle(
         {
@@ -164,7 +171,7 @@ export function ArticleWorkspace({ articleId }: { articleId?: string }) {
             description: seoDescription,
             noindex: true,
           },
-          scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
+          scheduledAt: parsedSchedule?.toISOString(),
         },
         {
           createRevision: createRevisionSnapshot,
@@ -601,7 +608,7 @@ export function ArticleWorkspace({ articleId }: { articleId?: string }) {
                       htmlFor="inspector-schedule-input"
                       className="block font-semibold text-slate-700 dark:text-slate-200 mb-1"
                     >
-                      Scheduled Publication Date
+                      Scheduled Publication Date (UTC)
                     </label>
                     <input
                       id="inspector-schedule-input"
@@ -626,7 +633,13 @@ export function ArticleWorkspace({ articleId }: { articleId?: string }) {
                       id="inspector-primary-cat"
                       value={primaryCategoryId}
                       onChange={(e) => {
-                        setPrimaryCategoryId(e.target.value);
+                        const nextPrimary = e.target.value;
+                        setPrimaryCategoryId(nextPrimary);
+                        setSelectedCategoryIds((prev) =>
+                          prev.filter((id) =>
+                            categories.some((category) => category.id === id && category.parentId === nextPrimary)
+                          )
+                        );
                         markDirty();
                       }}
                       className="w-full px-2.5 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900"
@@ -647,7 +660,7 @@ export function ArticleWorkspace({ articleId }: { articleId?: string }) {
                     </div>
                     <div className="max-h-36 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded p-2 space-y-1 bg-slate-50/50 dark:bg-slate-900/40">
                       {categories
-                        .filter((c) => c.parentId === primaryCategoryId || c.parentId)
+                        .filter((c) => c.parentId === primaryCategoryId)
                         .map((sub) => {
                           const checked = selectedCategoryIds.includes(sub.id);
                           return (
@@ -1094,7 +1107,7 @@ export function ArticleWorkspace({ articleId }: { articleId?: string }) {
                               v{rev.version} · {rev.source}
                             </span>
                             <span className="text-[10px] text-slate-400 font-mono">
-                              {new Date(rev.createdAt).toLocaleDateString()}
+                              {formatUtcDate(rev.createdAt)}
                             </span>
                           </div>
                           <p className="text-[11px] text-slate-600 dark:text-slate-400">
