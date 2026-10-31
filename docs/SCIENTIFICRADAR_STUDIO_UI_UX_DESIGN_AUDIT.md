@@ -35,14 +35,14 @@ All retained screenshots are genuine captures of the AI Studio preview and were 
 
 | Ref | Screen/state | Viewport evidence | Theme |
 |---|---|---|---|
-| [01](audits/scientificradar-ui-ux/screenshots/01-mobile-editor-dark-crop.png) | Article editor, long title, writing controls | AI Studio Mobile preset; exact CSS size unverified | Dark |
-| [02](audits/scientificradar-ui-ux/screenshots/02-tablet-editor-dark-crop.png) | Article editor, manuscript + inspector | AI Studio Tablet preset; exact CSS size unverified | Dark |
-| [03](audits/scientificradar-ui-ux/screenshots/03-desktop-editor-dark-crop.png) | Article editor, long title + SEO inspector | Full-screen current canvas, native capture 1920×1018 | Dark |
-| [04](audits/scientificradar-ui-ux/screenshots/04-desktop-dashboard-dark-crop.png) | Dashboard | Full-screen current canvas | Dark |
-| [05](audits/scientificradar-ui-ux/screenshots/05-desktop-dashboard-light-crop.png) | Dashboard | Full-screen current canvas | Light |
-| [06](audits/scientificradar-ui-ux/screenshots/06-articles-list-light-crop.png) | Article table/list | Full-screen current canvas | Light |
-| [07](audits/scientificradar-ui-ux/screenshots/07-desktop-editor-taxonomy-light-crop.png) | Editor metadata / taxonomy tab | Full-screen current canvas | Light |
-| [08](audits/scientificradar-ui-ux/screenshots/08-assistant-drawer-light-crop.png) | AI Assistant drawer, disconnected state | Full-screen current canvas | Light |
+| [01](audits/scientificradar-ui-ux/screenshots/01-mobile-editor-dark.jpg) | Article editor, long title, writing controls | AI Studio Mobile preset; exact CSS size unverified | Dark |
+| [02](audits/scientificradar-ui-ux/screenshots/02-tablet-editor-dark.jpg) | Article editor, manuscript + inspector | AI Studio Tablet preset; exact CSS size unverified | Dark |
+| [03](audits/scientificradar-ui-ux/screenshots/03-desktop-editor-dark.jpg) | Article editor, long title + SEO inspector | Full-screen current canvas, native capture 1920×1018 | Dark |
+| [04](audits/scientificradar-ui-ux/screenshots/04-desktop-dashboard-dark.jpg) | Dashboard | Full-screen current canvas | Dark |
+| [05](audits/scientificradar-ui-ux/screenshots/05-desktop-dashboard-light.jpg) | Dashboard | Full-screen current canvas | Light |
+| [06](audits/scientificradar-ui-ux/screenshots/06-articles-list-light.jpg) | Article table/list | Full-screen current canvas | Light |
+| [07](audits/scientificradar-ui-ux/screenshots/07-desktop-editor-taxonomy-light.jpg) | Editor metadata / taxonomy tab | Full-screen current canvas | Light |
+| [08](audits/scientificradar-ui-ux/screenshots/08-assistant-drawer-light.jpg) | AI Assistant drawer, disconnected state | Full-screen current canvas | Light |
 
 **Additional observed, not retained as screenshot:** Media Library and selected scientific-figure inspector in light theme. Main screen families inspected: dashboard, navigation shell, articles list, article editor, assistant drawer, media library, SEO panel and taxonomy metadata. Editor states included long title, SEO metadata, taxonomy and assistant. Other required families not visually inspected in this session: categories/tags standalone, pages/reader preview, review queue/publishing calendar, settings/personalization and integrations. Source-only route evidence is not substituted for visual evidence in these areas.
 
@@ -58,7 +58,7 @@ Observed persistently across screenshots 01–08. Navigation is grouped into Gen
 
 ### C. Article Editor — highest priority
 
-Observed screenshots 01–03, 07–08 and the live SEO panel. The manuscript area’s serif title and paragraph typography are an appropriate scientific editorial canvas. A right-side inspector exposes Taxonomy, Sources, Figure, SEO and History. The title is visibly cut off in the mobile preset and at the right edge of the full-screen editor; this is more disruptive than minor toolbar polish because it hides the article’s identity while editing. At tablet width, the inspector and wide text controls compete for space. Main controls appear as a fairly continuous strip with heading, marks, lists and save/publish actions. Prefer grouping lower-frequency functions under labeled menus and keeping core writing controls visible; use contextual selection for specialized alignment, superscript/subscript, table/equation and insertion actions. Do not solve discoverability by permanently adding dozens of buttons.
+Observed screenshots 01–03, 07–08 and the live SEO panel. The manuscript area’s serif title and paragraph typography are an appropriate scientific editorial canvas. A right-side inspector exposes Taxonomy, Sources, Figure, SEO and History. The title is visibly cut off in the mobile preset and at the right edge of the full-screen editor; this is more disruptive than minor toolbar polish because it hides the article’s identity while editing. At tablet width, the inspector and wide text controls compete for space. The inspector already has a collapse/expand control in the editor; its responsive behavior and breakpoint presentation were not verified. Main controls appear as a fairly continuous strip with heading, marks, lists and save/publish actions. Prefer grouping lower-frequency functions under labeled menus and keeping core writing controls visible; use contextual selection for specialized alignment, superscript/subscript, table/equation and insertion actions. Do not solve discoverability by permanently adding dozens of buttons.
 
 The SEO panel communicates advisory warning counts and distinguishes a local search-result illustration from an external Google guarantee. The editor metadata inspector’s structured taxonomy and visible “2/6 tags” signal are helpful, but chip-heavy values consume vertical space. The AI drawer explicitly reports “Not Connected” and differentiates local checks from remote Codex; this truthful disconnected state should remain. Actual autosave timing, undo/redo behavior, HTML Source mode, media chooser insertion, citations, tables/equations and editor keyboard workflows were not exercised in this audit.
 
@@ -108,7 +108,7 @@ Avoid arbitrary pixel values from screenshots as design tokens. Establish a smal
 
 ## 7. Interaction and workflow analysis
 
-**Writing workflow:** open article → compose title/body → consult inspector → check quality → save or move through editorial state. The persistent inspector makes metadata available without leaving the manuscript, but reduces writing width. A responsive inspector that becomes a drawer or collapsible tab set at narrower widths would return space to the document while retaining one-step access.
+**Writing workflow:** open article → compose title/body → consult inspector → check quality → save or move through editorial state. The persistent inspector makes metadata available without leaving the manuscript, but reduces writing width. The inspector already supports manual collapse/expand. A responsive drawer or collapsible tab treatment at narrower breakpoints is a proposed improvement, not an existing behavior claim; verify breakpoints and interaction before implementation.
 
 **Media workflow:** image grid → select asset → review integrity policy and text/caption/credit/licence. This separation of scientific figure policies is beneficial. Verify a clear insertion action and preservation of the selected asset when returning to the article.
 
@@ -154,17 +154,17 @@ Severity: **High** = obstructs core task or hides important state; **Medium** = 
 |---|---|---|---|---|---|
 | **SRS-UXA-001 Editor title** | Screenshot 01 and 03: long article heading is cut off at mobile and desktop editor edges | Hides article identity during the core writing task; High | Let title field grow/wrap, preserving a single semantic H1 and keeping editor controls below it | P1; 120+ character title and Greek characters remain fully visible at 390/1024/1440; no horizontal page overflow | Extends **SRS-ED-003**; `components/editor/article-workspace.tsx`; Screenshot confirmed |
 | **SRS-UXA-002 Editor toolbar** | Screenshots 01–03: control strip consumes scarce width and the tablet view makes heading controls visually crowded | Slows format discovery and squeezes manuscript; Medium | Keep paragraph/H2/H3, bold/italic/link/list and undo/redo visible; group low-frequency scientific marks/insertion in labeled menus/contextual selection | P1; no control overlap/clipping at 390/1024/1440; keyboard access and active states are visible; common formatting requires at most one menu step | Extends **SRS-ED-002/004/005/007**; `components/editor/article-tiptap-editor.tsx`; Screenshot confirmed |
-| **SRS-UXA-003 Editor inspector** | Screenshots 02/03/07: right metadata inspector competes with manuscript and stacks many taxonomy fields | Reduces writing width; Medium | Collapse to an on-demand drawer/tab at tablet/mobile; retain current desktop inspector | P1; editor manuscript gets usable width at each breakpoint; panel open/close retains article scroll and focus | New; `components/editor/article-workspace.tsx`; Screenshot confirmed |
+| **SRS-UXA-003 Editor inspector** | Screenshots 02/03/07: right metadata inspector competes with manuscript and stacks many taxonomy fields; source confirms a manual collapse/expand control | Reduces writing width; Medium | Preserve the current collapse/expand control. Verify its breakpoint behavior; consider a responsive drawer/tab at tablet/mobile if the inspector still constrains the canvas | P1; desktop manual collapse/expand remains; responsive behavior is measured at each breakpoint; any drawer preserves article scroll and returns focus | New responsive proposal; `components/editor/article-workspace.tsx`; Screenshot confirmed |
 | **SRS-UXA-004 Article list actions** | Screenshot 06: far-right row actions appear clipped at visible container edge | May hide a core row action; Medium pending viewport confirmation | Give actions a reserved column, row overflow menu, or deliberate scroll with sticky identity; do not clip | P1; all actions reachable at 1024 and 390, visibly named/focusable; horizontal overflow is explicit | New; `app/articles/page.tsx`; screenshot-confirmed visual observation, requires exact viewport retest |
 | **SRS-UXA-005 Dashboard activity** | Screenshot 04: three consecutive rows repeat the same item/actor/time in displayed demo state | Weakens feed signal and confidence; Medium | Group identical repeated events or show meaningful distinct events; preserve event chronology | P2; repeated identical fixture events render as one grouped item with count or distinct event details | Extends **SRS-UX-003**; `app/dashboard/page.tsx`; screenshot-confirmed demo state only |
 | **SRS-UXA-006 Media insertion handoff** | Live Media Library: strong selected-asset details; insertion into article not exercised | Extra context switching may interrupt authoring; Medium | Provide a clear choose/insert action with article destination and retain selected asset metadata | P2; inserting an asset returns to same manuscript position; caption/alt/credit and locked contain policy remain associated | Extends **SRS-ED-007**, **SRS-MED-002**; Media route source; requires interaction test |
-| **SRS-UXA-007 SEO issue navigation** | Editor SEO panel screenshot/observation: advisory counts and preview caveat are clear; field navigation not tested | Fix workflow may require manual search; Medium | Link each finding directly to the relevant field and distinguish advisory vs blocking | P2; selecting an issue focuses its field, identifies required action, preserves editor context | Extends **SRS-SEO-002**; SEO inspector source; requires interaction test |
+| **SRS-UXA-007 SEO issue navigation** | Editor SEO panel screenshot/observation: advisory counts and preview caveat are clear; field navigation not tested | Navigation exists in source, but its interaction was not tested; the usability risk remains unverified; Medium | Verify the existing finding-to-field navigation and distinguish advisory vs blocking | P2; selecting representative SEO findings navigates to the intended inspector tab and focuses the associated field; context is preserved; advisory/blocking state remains clear | Extends **SRS-SEO-002**; `app/articles/[id]/seo/page.tsx`, `components/editor/article-workspace.tsx`; implemented in source, interaction verification required |
 | **SRS-UXA-008 Mobile navigation and focus** | Mobile editor screenshot shows narrow preview with app navigation affordance; open/close focus not tested | Keyboard/touch users may lose context; Medium, unverified | Keep current item/state clear; close on selection; restore focus to trigger; Escape dismisses | P1; keyboard-only open, navigate, close and return with visible focus at each step | Extends **SRS-UX-002**; `components/layout/app-shell.tsx`; requires interaction test |
 | **SRS-UXA-009 Theme state/status clarity** | Dashboard captured in light/dark; media missing-alt and provider-disconnected states use color plus text | Status is mostly legible, but contrast/consistency unmeasured; Low/Medium | Preserve dual themes; audit semantic status tokens and focus rings for contrast and redundant text/icon | P2; all status meanings remain identifiable without color in both themes; measured contrast documented | Extends **SRS-UX-002**; `app/globals.css`; subjective recommendation, contrast unverified |
 
 ## 12. Optional alternative layout concepts
 
-1. **Keep the desktop three-zone shell; collapse only the inspector responsively.** This preserves the recognizable navigation/editor/inspector model while giving the manuscript width at tablet and mobile. It is the recommended direction.
+1. **Keep the desktop three-zone shell; retain its existing inspector collapse/expand control and evaluate a responsive drawer at narrower breakpoints.** This preserves the recognizable navigation/editor/inspector model while potentially giving the manuscript more width at tablet and mobile; the breakpoint behavior needs verification. It is the recommended direction.
 2. **Use a two-column desktop editor with metadata drawer on demand.** This maximizes writing space but increases inspector open/close steps. Consider only if measured desktop writing width is inadequate after title/toolbar refinement.
 3. **Contextual toolbar for scientific actions.** Keep common formatting in the strip; reveal table/equation/superscript/subscript and figure actions by selection/type. This improves density but requires discoverable labels and keyboard paths. Avoid icon-only contextual menus.
 
@@ -176,13 +176,13 @@ The existing Development Backlog remains untouched. IDs below are recommendation
 |---|---|---|---|---|---|
 | SRS-UXA-001 Responsive article title wrapping | P1 | Editor / responsive UX | SRS-ED-003 | Full 120+ character titles wrap without clipping at 390/1024/1440; H1 semantics preserved | Extends SRS-ED-003 |
 | SRS-UXA-002 Grouped responsive editor toolbar | P1 | Editor / interaction | SRS-ED-002, SRS-ED-004/005/007 | Core tools visible, advanced tools grouped and keyboard reachable, no overlap/clipping at required viewports | Extends existing editor tasks |
-| SRS-UXA-003 Responsive metadata inspector | P1 | Editor / responsive UX | None | Desktop inspector retained; tablet/mobile inspector can open/close without losing manuscript position or focus | New |
+| SRS-UXA-003 Verify responsive metadata inspector behavior | P1 | Editor / responsive UX | None | Existing desktop collapse/expand remains; tablet/mobile breakpoint behavior is verified; if a drawer is proposed, it retains manuscript position and restores focus | New responsive behavior proposal; manual collapse/expand already exists |
 | SRS-UXA-004 Article table action visibility | P1 | Content management / responsive UX | None | Row actions remain available and labeled at narrow widths; overflow strategy is deliberate | New |
 | SRS-UXA-005 Demo activity-feed duplicate grouping | P2 | Dashboard | SRS-UX-003 | Identical repeated seed events are grouped or meaningful event details distinguish them | Extends SRS-UX-003 |
 | SRS-UXA-006 Media selection-to-insertion flow review | P2 | Editorial workflow | SRS-ED-007, SRS-MED-002 | Chosen media inserts at remembered cursor with its alt/caption/rights and layout policy | Extends existing media/editor tasks |
-| SRS-UXA-007 Field-level SEO finding navigation review | P2 | SEO workflow | SRS-SEO-002 | Each issue navigates/focuses its field and indicates advisory/blocking status | Extends SRS-SEO-002 |
+| SRS-UXA-007 Verify SEO finding-to-field navigation | P2 | Interaction verification | SRS-SEO-002 | Representative findings from SEO overview and pre-publish dialog navigate to the expected inspector tab and focus target; failure is documented; advisory/blocking status remains clear | Extends verification of SRS-SEO-002; navigation is implemented in source |
 | SRS-UXA-008 Keyboard/focus state audit across shell and drawer | P1 | Accessibility | SRS-UX-002 | Keyboard path, Escape, focus restore, contrast and screen-reader names are tested and documented | Extends SRS-UX-002 |
-| SRS-UXA-009 Reader preview and review/publish visual audit | P1 | Editorial / reader experience | Test fixture draft | Preview, sources/figures/tables, queue, schedule and confirmations inspected at exact viewports/themes | New; follow-up evidence task |
+| SRS-UXA-010 Reader preview and review/publish visual audit | P1 | Editorial / reader experience | Test fixture draft | Preview, sources/figures/tables, queue, schedule and confirmations inspected at exact viewports/themes | New; follow-up evidence task |
 
 ## 14. Six-Cycle Iterative Refinement
 
@@ -196,7 +196,7 @@ The existing Development Backlog remains untouched. IDs below are recommendation
 ### Cycle 2 — Editorial productivity
 - **Initial observations:** Main article and metadata are visible together; media inspector is science-aware; SEO panel gives field-level warnings.
 - **Assumptions challenged:** A visible inspector is not always worth the manuscript width it occupies; a media grid is not itself a complete insertion workflow.
-- **Revision:** Recommend responsive inspector collapse and explicit media insertion handoff; avoid more always-visible toolbar controls.
+- **Revision:** Recommend responsive breakpoint verification for the existing inspector collapse control and explicit media insertion handoff; avoid more always-visible toolbar controls.
 - **Findings:** UXA-002/003/006/007 retained, with interaction claims marked unverified.
 - **Decision:** Improve speed through grouping and context preservation.
 
@@ -217,7 +217,7 @@ The existing Development Backlog remains untouched. IDs below are recommendation
 ### Cycle 5 — Alternative design approaches
 - **Initial observations:** Three-zone editor supports simultaneous context but costs width.
 - **Assumptions challenged:** Replacing it with a conventional full-screen canvas could disrupt familiar workflow; keeping inspector always open harms smaller layouts.
-- **Revision:** Compared fixed inspector, responsive drawer, and desktop two-column layout; recommended retaining three-zone desktop and moving the inspector responsively.
+- **Revision:** Compared fixed inspector, responsive drawer, and desktop two-column layout; recommended retaining three-zone desktop and verifying the existing inspector collapse control and evaluating a responsive drawer.
 - **Findings:** UXA-003 retained; larger redesign rejected.
 - **Decision:** Minimal structural adaptation offers the best likely value.
 
@@ -249,7 +249,7 @@ The existing Development Backlog remains untouched. IDs below are recommendation
 
 ## 17. Final design direction
 
-Keep the existing teal/neutral identity, dual theme, serif manuscript title, persistent desktop navigation, compact status labels, and scientific media integrity inspector. Concentrate design effort on fully visible article identity, a grouped responsive toolbar, a collapsible narrow-screen inspector, explicit list action reachability, and a preserved-context media/SEO workflow. Validate missing screens and accessibility behaviors before extending conclusions. This refinement direction improves editorial efficiency while leaving the product recognizable.
+Keep the existing teal/neutral identity, dual theme, serif manuscript title, persistent desktop navigation, compact status labels, and scientific media integrity inspector. Concentrate design effort on fully visible article identity, a grouped responsive toolbar, verification of the existing inspector collapse control and a possible responsive narrow-screen drawer, explicit list action reachability, and a preserved-context media/SEO workflow. Validate missing screens and accessibility behaviors before extending conclusions. This refinement direction improves editorial efficiency while leaving the product recognizable.
 
 ## Verification record
 
