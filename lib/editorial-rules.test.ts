@@ -14,6 +14,7 @@ import {
   getPresetVisibility,
 } from './editorial-rules';
 import { Article, KnowledgeLink, MediaAsset, ScientificSource, Tag } from './types';
+import { formatUtcDate, formatUtcDateTime, toUtcDateTimeInput, parseUtcDateTimeInput } from './date-display';
 
 test('slugify handles English and Turkish characters cleanly', () => {
   assert.equal(
@@ -201,4 +202,22 @@ test('getPresetVisibility returns expected item visibility for balanced and show
   const showAll = getPresetVisibility('show_all');
   assert.equal(showAll.videos, true);
   assert.equal(showAll.settings_audit, true);
+});
+
+
+test('SSR date formatting is timezone-independent and explicitly UTC', () => {
+  assert.equal(formatUtcDate('2026-11-04T12:00:00.000Z'), 'Nov 4, 2026');
+  assert.equal(formatUtcDateTime('2026-11-04T12:00:00.000Z'), 'Nov 4, 2026, 12:00 UTC');
+  assert.equal(formatUtcDateTime('invalid'), 'Invalid date');
+  assert.equal(formatUtcDate('invalid'), 'Invalid date');
+});
+
+test('scheduled publication round-trips exactly through the UTC datetime-local field', () => {
+  const instant = '2026-11-04T12:00:00.000Z';
+  const input = toUtcDateTimeInput(instant);
+  assert.equal(input, '2026-11-04T12:00');
+  assert.equal(parseUtcDateTimeInput(input)?.toISOString(), instant);
+  assert.equal(parseUtcDateTimeInput('2026-02-30T12:00'), null);
+  assert.equal(parseUtcDateTimeInput('2026-11-04T25:00'), null);
+  assert.equal(parseUtcDateTimeInput(''), null);
 });
