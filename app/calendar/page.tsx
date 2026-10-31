@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useStudio } from '@/lib/studio-context';
 import { AppShell } from '@/components/layout/app-shell';
+import { formatUtcDate, formatUtcDateTime, parseUtcDateTimeInput } from '@/lib/date-display';
 import { Calendar as CalendarIcon, AlertTriangle, CheckCircle2 } from 'lucide-react';
 
 export default function PublishingCalendarPage() {
@@ -11,7 +12,7 @@ export default function PublishingCalendarPage() {
   const [selectedArticleId, setSelectedArticleId] = useState(
     articles.find((a) => a.status !== 'published')?.id || articles[0]?.id || ''
   );
-  const [scheduleDate, setScheduleDate] = useState('2026-11-06T10:00');
+  const [scheduleDate, setScheduleDate] = useState('');
   const [warning, setWarning] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -30,7 +31,11 @@ export default function PublishingCalendarPage() {
       return;
     }
 
-    const parsedDate = new Date(scheduleDate);
+    const parsedDate = parseUtcDateTimeInput(scheduleDate);
+    if (!parsedDate) {
+      setWarning('Choose a valid UTC date and time.');
+      return;
+    }
     if (parsedDate.getTime() < Date.now() - 60000) {
       setWarning(
         'Warning: Selected schedule date is in the past. Please choose an upcoming publication slot.'
@@ -43,7 +48,7 @@ export default function PublishingCalendarPage() {
       status: 'scheduled',
       scheduledAt: parsedDate.toISOString(),
     });
-    setSuccess(`Scheduled "${target.title}" for ${parsedDate.toLocaleString()} (Demo calendar).`);
+    setSuccess(`Scheduled "${target.title}" for ${formatUtcDateTime(parsedDate.toISOString())} (Demo calendar).`);
   };
 
   return (
@@ -83,11 +88,12 @@ export default function PublishingCalendarPage() {
 
           <div>
             <label htmlFor="cal-datetime-input" className="block font-semibold mb-1">
-              Target Publication Date &amp; Time
+              Target Publication Date &amp; Time (UTC)
             </label>
             <input
               id="cal-datetime-input"
               type="datetime-local"
+              required
               value={scheduleDate}
               onChange={(e) => setScheduleDate(e.target.value)}
               className="px-2.5 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 font-mono"
@@ -139,11 +145,11 @@ export default function PublishingCalendarPage() {
                 {art.scheduledAt ? (
                   <span className="text-[#087f83] dark:text-teal-400 font-semibold flex items-center gap-1.5">
                     <CalendarIcon className="w-3.5 h-3.5" />
-                    <span>Scheduled: {new Date(art.scheduledAt).toLocaleString()}</span>
+                    <span>Scheduled: {formatUtcDateTime(art.scheduledAt)}</span>
                   </span>
                 ) : art.publishedAt ? (
                   <span className="text-emerald-600 dark:text-emerald-400">
-                    Published (Demo): {new Date(art.publishedAt).toLocaleDateString()}
+                    Published (Demo): {formatUtcDate(art.publishedAt)}
                   </span>
                 ) : (
                   <span className="text-slate-400">Unscheduled ({art.status})</span>
