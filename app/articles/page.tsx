@@ -1,5 +1,7 @@
 'use client';
 
+import { formatUtcDate } from '@/lib/date-display';
+
 import React, { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useStudio } from '@/lib/studio-context';
@@ -356,7 +358,7 @@ export default function ArticlesListPage() {
                         )}
                       </td>
                       <td className="py-3 px-3 align-top whitespace-nowrap font-mono tabular-nums text-slate-500">
-                        {new Date(art.updatedAt).toLocaleDateString()}
+                        {formatUtcDate(art.updatedAt)}
                       </td>
                       <td className="py-3 px-3 align-top text-right whitespace-nowrap">
                         <div className="inline-flex items-center gap-1">
