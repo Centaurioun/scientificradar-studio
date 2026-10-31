@@ -155,7 +155,7 @@ export function CodexAssistantDrawer({
       <aside
         role="dialog"
         aria-modal="true"
-        aria-label="Prepare with Codex — Editorial Finishing & Local Checks"
+        aria-label="AI Assistant — Editorial Finishing & Local Checks"
         className="relative w-full max-w-xl bg-white dark:bg-[#111c22] h-full border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col z-10 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
@@ -165,7 +165,7 @@ export function CodexAssistantDrawer({
             <Sparkles className="w-5 h-5 text-[#087f83] dark:text-teal-400" />
             <div>
               <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                Prepare with Codex · Editorial Finishing
+                AI Assistant · Editorial Finishing
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
                 Finishes &amp; checks human-authored science · Never rewrites claims or invents DOIs
@@ -175,7 +175,7 @@ export function CodexAssistantDrawer({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close Codex Assistant drawer"
+            aria-label="Close AI Assistant drawer"
             className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
           >
             <X className="w-4 h-4" />
@@ -188,7 +188,7 @@ export function CodexAssistantDrawer({
             <Plug className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
             <div>
               <span className="font-semibold text-slate-800 dark:text-slate-200">
-                Codex Provider: Not Connected
+                AI Provider (Codex Adapter): Not Connected
               </span>
               <span className="text-slate-500 dark:text-slate-400 block text-[11px]">
                 Running deterministic <strong className="text-slate-700 dark:text-slate-300">Local checks (not Codex)</strong> on Snapshot v{article.version}

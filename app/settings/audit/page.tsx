@@ -3,6 +3,7 @@
 import React from 'react';
 import { useStudio } from '@/lib/studio-context';
 import { AppShell } from '@/components/layout/app-shell';
+import { LocalizedDate } from '@/components/datetime/localized-date';
 
 export default function AuditLogsPage() {
   const { auditEvents } = useStudio();
@@ -40,7 +41,7 @@ export default function AuditLogsPage() {
               {auditEvents.map((ev) => (
                 <tr key={ev.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
                   <td className="py-3 px-4 font-mono text-[11px] text-slate-500 whitespace-nowrap">
-                    {new Date(ev.timestamp).toLocaleString()}
+                    <LocalizedDate iso={ev.timestamp} mode="datetime" includeZoneName />
                   </td>
                   <td className="py-3 px-4 whitespace-nowrap">
                     <span className="font-medium text-slate-900 dark:text-slate-100">

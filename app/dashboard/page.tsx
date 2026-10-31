@@ -15,6 +15,7 @@ import {
   Eye,
   Edit3,
 } from 'lucide-react';
+import { LocalizedDate } from '@/components/datetime/localized-date';
 
 export default function DashboardPage() {
   const {
@@ -362,9 +363,11 @@ export default function DashboardPage() {
                       <div key={art.id} className="pt-2 first:pt-0 space-y-1">
                         <div className="flex items-center justify-between text-[11px] font-mono text-slate-500">
                           <span>
-                            {art.scheduledAt
-                              ? new Date(art.scheduledAt).toLocaleString()
-                              : 'Approved · Awaiting slot'}
+                            {art.scheduledAt ? (
+                              <LocalizedDate iso={art.scheduledAt} mode="datetime" />
+                            ) : (
+                              'Approved · Awaiting slot'
+                            )}
                           </span>
                           <span className="uppercase text-[#087f83] dark:text-teal-400 font-semibold">
                             {art.status}
@@ -405,10 +408,7 @@ export default function DashboardPage() {
                           {ev.actor}
                         </span>
                         <span className="font-mono">
-                          {new Date(ev.timestamp).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
+                          <LocalizedDate iso={ev.timestamp} mode="time" />
                         </span>
                       </div>
                       <div className="font-medium text-slate-900 dark:text-slate-100">

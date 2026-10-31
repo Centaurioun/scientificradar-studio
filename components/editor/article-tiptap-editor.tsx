@@ -27,20 +27,28 @@ import {
   Undo,
   Redo,
   AlertCircle,
-  Code,
 } from 'lucide-react';
+import { KnowledgeLink } from '@/lib/types';
 
 interface ArticleTiptapEditorProps {
-  initialHtml: string;
-  onChange: (html: string, json: Record<string, unknown>, demotedH1Alert?: number) => void;
+  initialHtml?: string;
+  contentHtml?: string;
+  knowledgeLinks?: KnowledgeLink[];
+  onChange?: (html: string, json: Record<string, unknown>, demotedH1Alert?: number) => void;
+  onChangeHtml?: (html: string) => void;
+  onDemotedH1?: (count: number) => void;
   onRequestMediaInsert?: () => void;
 }
 
 export function ArticleTiptapEditor({
   initialHtml,
+  contentHtml,
   onChange,
+  onChangeHtml,
+  onDemotedH1,
   onRequestMediaInsert,
 }: ArticleTiptapEditorProps) {
+  const effectiveHtml = contentHtml ?? initialHtml ?? '<p></p>';
   const [pasteNotice, setPasteNotice] = useState<string | null>(null);
   const [linkInputOpen, setLinkInputOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
@@ -67,7 +75,7 @@ export function ArticleTiptapEditor({
           'Write or paste your scientific manuscript here. Top-level # H1 headings pasted into the body are automatically proposed as H2 sections so the article title remains the single rendered H1...',
       }),
     ],
-    content: initialHtml,
+    content: effectiveHtml,
     immediatelyRender: false,
     editorProps: {
       attributes: {
@@ -87,6 +95,7 @@ export function ArticleTiptapEditor({
             setPasteNotice(
               `Converted ${converted.demotedH1Count} pasted Markdown "# H1" heading(s) into H2 so the Article Title remains the single rendered H1.`
             );
+            onDemotedH1?.(converted.demotedH1Count);
           }
           editor?.commands.insertContent(converted.html);
           return true;
@@ -101,6 +110,7 @@ export function ArticleTiptapEditor({
             notices.push(
               `Demoted ${sanitized.demotedH1Count} pasted <h1> heading(s) to <h2> (Title is the sole H1)`
             );
+            onDemotedH1?.(sanitized.demotedH1Count);
           }
           if (sanitized.removedUnsafeCount > 0) {
             notices.push(
@@ -120,20 +130,24 @@ export function ArticleTiptapEditor({
     onUpdate: ({ editor: ed }) => {
       const rawHtml = ed.getHTML();
       const sanitized = sanitizeAndDemoteBodyH1(rawHtml);
-      onChange(
+      onChange?.(
         sanitized.sanitizedHtml,
         ed.getJSON() as Record<string, unknown>,
         sanitized.demotedH1Count
       );
+      onChangeHtml?.(sanitized.sanitizedHtml);
+      if (sanitized.demotedH1Count > 0) {
+        onDemotedH1?.(sanitized.demotedH1Count);
+      }
     },
   });
 
   // Sync external updates (e.g., when version restored or local assistant check accepted)
   useEffect(() => {
-    if (editor && initialHtml !== editor.getHTML()) {
-      editor.commands.setContent(initialHtml, { emitUpdate: false });
+    if (editor && effectiveHtml !== editor.getHTML()) {
+      editor.commands.setContent(effectiveHtml, { emitUpdate: false });
     }
-  }, [initialHtml, editor]);
+  }, [effectiveHtml, editor]);
 
   const handleApplyLink = () => {
     if (!editor) return;
@@ -157,16 +171,6 @@ export function ArticleTiptapEditor({
     setLinkUrl('');
     setLinkError(null);
     setLinkInputOpen(false);
-  };
-
-  const handlePasteSampleMarkdownWithH1 = () => {
-    if (!editor) return;
-    const sampleMd = `# Observational Calibration Protocol\n\n## Cryogenic Detector Readout\n\n### Sub-Kelvin Noise Floor\n\nDark current measurements across the **1.4 to 5.2 micrometer** channel remained below 0.012 electrons/second.`;
-    const converted = convertMarkdownPasteToSafeHtml(sampleMd);
-    setPasteNotice(
-      `Pasted Markdown with '# Heading' (H1): Automatically demoted ${converted.demotedH1Count} body H1 to H2 to preserve single-H1 document structure.`
-    );
-    editor.chain().focus().insertContent(converted.html).run();
   };
 
   if (!editor) {
@@ -388,16 +392,7 @@ export function ArticleTiptapEditor({
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handlePasteSampleMarkdownWithH1}
-            className="px-2 py-1 rounded border border-slate-200 dark:border-slate-700 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
-            title="Test AT-05: Paste Markdown containing # H1, ## H2, ### H3"
-          >
-            <Code className="w-3 h-3" />
-            <span>Test Markdown # H1 Paste</span>
-          </button>
-          <span className="text-[11px] text-slate-400 dark:text-slate-500 hidden xl:inline">
+          <span className="text-[11px] text-slate-400 dark:text-slate-500 hidden sm:inline">
             Title = Sole H1 · Body = H2/H3
           </span>
         </div>

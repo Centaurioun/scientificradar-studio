@@ -4,15 +4,21 @@ import React, { useState } from 'react';
 import { useStudio } from '@/lib/studio-context';
 import { AppShell } from '@/components/layout/app-shell';
 import { Plug, AlertCircle, ShieldCheck } from 'lucide-react';
+import { formatLocalizedInstant, resolveEffectiveDatePrefs } from '@/lib/datetime/format';
 
 export default function IntegrationsSettingsPage() {
-  const { integrations } = useStudio();
+  const { integrations, dateTimePreferences } = useStudio();
   const [testedIds, setTestedIds] = useState<Record<string, string>>({});
 
   const handleTruthfulHealthCheck = (id: string, name: string) => {
+    const formattedTime = formatLocalizedInstant(
+      new Date().toISOString(),
+      resolveEffectiveDatePrefs(dateTimePreferences),
+      { mode: 'time' }
+    );
     setTestedIds((prev) => ({
       ...prev,
-      [id]: `Checked at ${new Date().toLocaleTimeString()}: Not connected yet — no credentials or external endpoints configured in P0 isolated prototype.`,
+      [id]: `Checked at ${formattedTime}: Not connected yet — no credentials or external endpoints configured in P0 isolated prototype.`,
     }));
     void name;
   };

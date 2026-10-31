@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useStudio } from '@/lib/studio-context';
 import { AppShell } from '@/components/layout/app-shell';
 import { History, RotateCcw } from 'lucide-react';
+import { LocalizedDate } from '@/components/datetime/localized-date';
 
 export default function RevisionHistoryPage() {
   const { revisions, articles, restoreArticleRevision } = useStudio();
@@ -45,7 +46,7 @@ export default function RevisionHistoryPage() {
                     <span>·</span>
                     <span className="uppercase">{rev.source}</span>
                     <span>·</span>
-                    <span>{new Date(rev.createdAt).toLocaleString()}</span>
+                    <LocalizedDate iso={rev.createdAt} mode="datetime" includeZoneName />
                   </div>
                   <Link
                     href={`/articles/${rev.articleId}/edit`}

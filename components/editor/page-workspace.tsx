@@ -37,7 +37,8 @@ export function PageWorkspace({ pageId }: { pageId?: string }) {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    if (existing) {
+    if (!existing) return;
+    const timer = window.setTimeout(() => {
       setTitle(existing.title);
       setSlug(existing.slug);
       setLocale(existing.locale);
@@ -46,8 +47,9 @@ export function PageWorkspace({ pageId }: { pageId?: string }) {
       setTemplate(existing.template);
       setStatus(existing.status);
       setNavigationVisibility(existing.navigationVisibility);
-    }
-  }, [existing?.id]);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [existing]);
 
   const handleSave = () => {
     if (!title.trim()) {

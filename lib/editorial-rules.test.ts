@@ -8,12 +8,31 @@ import {
   sanitizeAndDemoteBodyH1,
   convertMarkdownPasteToSafeHtml,
   canTransitionStatus,
+  getAllowedNextStatuses,
   normalizeAndDedupeTags,
+  MAX_EDITORIAL_TAGS,
+  tagCountIsValid,
+  normalizeArticleTagIds,
   getMediaDisplayPolicy,
   runDeterministicLocalChecks,
   getPresetVisibility,
 } from './editorial-rules';
-import { Article, KnowledgeLink, MediaAsset, ScientificSource, Tag } from './types';
+import {
+  formatDeterministicUtc,
+  formatLocalizedInstant,
+  DEFAULT_ADMIN_DATETIME_PREFS,
+} from './datetime/format';
+import {
+  interpretWallTime,
+  formatIsoToWallTimeInput,
+} from './datetime/parse';
+import {
+  runArticleAudit,
+  buildQuickFixProposal,
+  computeArticleFingerprint,
+} from './audit/run-article-audit';
+import { evaluatePublishGate } from './audit/publish-policy';
+import { Article, Category, KnowledgeLink, MediaAsset, ScientificSource, Tag } from './types';
 
 test('slugify handles English and Turkish characters cleanly', () => {
   assert.equal(
@@ -35,7 +54,6 @@ test('ensureUniqueSlug prevents collisions per locale', () => {
     ensureUniqueSlug('CRISPR Off-Target Effects', 'en', existing),
     'crispr-off-target-effects-3'
   );
-  // Same slug in Turkish locale does not collide
   assert.equal(
     ensureUniqueSlug('CRISPR Off-Target Effects', 'tr', existing),
     'crispr-off-target-effects'
@@ -81,12 +99,23 @@ test('convertMarkdownPasteToSafeHtml converts # H1 into H2 and preserves ## H2 /
   assert.ok(res.html.includes('<h3>Cryogenic Calibration</h3>'));
 });
 
-test('canTransitionStatus enforces editorial role permissions', () => {
+test('canTransitionStatus and getAllowedNextStatuses enforce strict state and role matrix (v5 Gate C)', () => {
   assert.equal(canTransitionStatus('draft', 'in_review', 'author').allowed, true);
   assert.equal(canTransitionStatus('draft', 'published', 'author').allowed, false);
   assert.equal(canTransitionStatus('in_review', 'approved', 'reviewer').allowed, true);
   assert.equal(canTransitionStatus('approved', 'published', 'reviewer').allowed, false);
   assert.equal(canTransitionStatus('approved', 'published', 'editor').allowed, true);
+  // Redundant self-transition or illegal jumps blocked
+  assert.equal(canTransitionStatus('approved', 'approved', 'editor').allowed, false);
+  assert.equal(canTransitionStatus('draft', 'approved', 'editor').allowed, false);
+
+  const reviewerFromApproved = getAllowedNextStatuses('approved', 'reviewer');
+  assert.deepEqual(reviewerFromApproved, ['draft']);
+
+  const editorFromApproved = getAllowedNextStatuses('approved', 'editor');
+  assert.ok(editorFromApproved.includes('published'));
+  assert.ok(editorFromApproved.includes('scheduled'));
+  assert.ok(!editorFromApproved.includes('approved'));
 });
 
 test('getMediaDisplayPolicy enforces non-destructive contain for scientific figures (AT-19)', () => {
@@ -99,9 +128,267 @@ test('getMediaDisplayPolicy enforces non-destructive contain for scientific figu
   assert.equal(photoPolicy.allowAssistantReflow, true);
 });
 
-test('normalizeAndDedupeTags deduplicates case-insensitively', () => {
+test('normalizeAndDedupeTags and 6-tag house limit work deterministically (v5 Gate A)', () => {
   const tags = normalizeAndDedupeTags(['CRISPR', 'crispr', '  Gene Editing ', 'GENE EDITING']);
   assert.deepEqual(tags, ['CRISPR', 'Gene Editing']);
+
+  assert.equal(MAX_EDITORIAL_TAGS, 6);
+  assert.equal(tagCountIsValid(['t1', 't2', 't3', 't4', 't5', 't6']), true);
+  assert.equal(tagCountIsValid(['t1', 't2', 't3', 't4', 't5', 't6', 't7']), false);
+  const norm = normalizeArticleTagIds(['t1', 't2', 't1', 't3', 't4', 't5', 't6', 't7']);
+  assert.deepEqual(norm.normalizedIds, ['t1', 't2', 't3', 't4', 't5', 't6']);
+  assert.equal(norm.dedupedCount, 1);
+  assert.equal(norm.rejectedOverflowCount, 1);
+});
+
+test('formatDeterministicUtc and formatLocalizedInstant format UTC and localized dates safely (v5 Gate A)', () => {
+  const iso = '2026-10-30T14:30:00.000Z';
+  assert.equal(formatDeterministicUtc(iso, 'date'), '2026-10-30 UTC');
+  assert.equal(formatDeterministicUtc(iso, 'datetime'), '2026-10-30 14:30 UTC');
+  assert.equal(formatDeterministicUtc('not-a-date', 'datetime'), 'Invalid date');
+
+  // Europe/Istanbul is UTC+3 -> 17:30 in 24h mode
+  const istanbulText = formatLocalizedInstant(iso, DEFAULT_ADMIN_DATETIME_PREFS, 'datetime');
+  assert.ok(istanbulText.includes('17:30'), `Expected 17:30 in Istanbul output, got: ${istanbulText}`);
+
+  // America/New_York in October (EDT, UTC-4) -> 10:30 AM in 12h mode
+  const nyText = formatLocalizedInstant(
+    iso,
+    {
+      locale: 'en-US',
+      timeZone: 'America/New_York',
+      hourCycle: '12',
+    },
+    'datetime'
+  );
+  assert.ok(nyText.includes('10:30'), `Expected 10:30 in New York output, got: ${nyText}`);
+});
+
+test('interpretWallTime handles timezone round-trip, invalid dates, DST spring-forward gap, and DST fall-back overlap (v5 Gate A)', () => {
+  // Valid wall time in Europe/Istanbul (UTC+3)
+  const ist = interpretWallTime('2026-11-12T09:00', 'Europe/Istanbul');
+  assert.equal(ist.ok, true);
+  if (ist.ok) {
+    assert.equal(ist.utcIso, '2026-11-12T06:00:00.000Z');
+    assert.equal(formatIsoToWallTimeInput(ist.utcIso, 'Europe/Istanbul'), '2026-11-12T09:00');
+  }
+
+  // Impossible calendar date
+  const badCal = interpretWallTime('2026-02-30T10:00', 'Europe/Istanbul');
+  assert.equal(badCal.ok, false);
+  if (!badCal.ok) {
+    assert.equal(badCal.reason, 'invalid');
+  }
+
+  // DST Spring-Forward Gap in America/New_York: 2026-03-08 at 02:30 does not exist
+  const springGap = interpretWallTime('2026-03-08T02:30', 'America/New_York');
+  assert.equal(springGap.ok, false);
+  if (!springGap.ok) {
+    assert.equal(springGap.reason, 'nonexistent');
+  }
+
+  // DST Fall-Back Overlap in America/New_York: 2026-11-01 at 01:30 occurs twice (EDT UTC-4 and EST UTC-5)
+  const fallUndisambiguated = interpretWallTime('2026-11-01T01:30', 'America/New_York');
+  assert.equal(fallUndisambiguated.ok, false);
+  if (!fallUndisambiguated.ok) {
+    assert.equal(fallUndisambiguated.reason, 'ambiguous');
+    assert.equal(fallUndisambiguated.earlierUtcIso, '2026-11-01T05:30:00.000Z');
+    assert.equal(fallUndisambiguated.laterUtcIso, '2026-11-01T06:30:00.000Z');
+  }
+
+  const fallEarlier = interpretWallTime('2026-11-01T01:30', 'America/New_York', 'earlier');
+  const fallLater = interpretWallTime('2026-11-01T01:30', 'America/New_York', 'later');
+  assert.equal(fallEarlier.ok, true);
+  assert.equal(fallLater.ok, true);
+  if (fallEarlier.ok && fallLater.ok) {
+    assert.equal(fallEarlier.utcIso, '2026-11-01T05:30:00.000Z');
+    assert.equal(fallLater.utcIso, '2026-11-01T06:30:00.000Z');
+  }
+});
+
+test('runArticleAudit and evaluatePublishGate enforce v5 Scenario A (73/65 SEO title warning + 116/160 description pass), tag counts, subcategory mismatch, and unverified external checks (v5 Gates B & C)', () => {
+  const categories: Category[] = [
+    { id: 'cat-bio', name: 'Biotechnology & Genetics', slug: 'biotechnology-genetics', description: 'Bio', locale: 'en' },
+    { id: 'sub-crispr', name: 'CRISPR & Gene Therapy', slug: 'crispr-gene-therapy', parentId: 'cat-bio', description: 'CRISPR', locale: 'en' },
+    { id: 'cat-physics', name: 'Quantum & Condensed Matter Physics', slug: 'quantum-physics', description: 'Physics', locale: 'en' },
+    { id: 'sub-optics', name: 'Quantum Optics', slug: 'quantum-optics', parentId: 'cat-physics', description: 'Optics', locale: 'en' },
+  ];
+
+  const tags: Tag[] = [
+    { id: 't1', name: 'CRISPR', slug: 'crispr' },
+    { id: 't2', name: 'Prime Editing', slug: 'prime-editing' },
+    { id: 't3', name: 'Gene Therapy', slug: 'gene-therapy' },
+    { id: 't4', name: 'Cardiology', slug: 'cardiology' },
+    { id: 't5', name: 'Delivery Vectors', slug: 'delivery-vectors' },
+    { id: 't6', name: 'Transcriptomics', slug: 'transcriptomics' },
+    { id: 't7', name: 'Extra Seventh Tag', slug: 'extra-seventh-tag' },
+  ];
+
+  // 73-char SEO title & 113-char Meta description
+  const seoTitle73 = 'Sub-Millisecond Prime Editing Fidelity Across Primary Cardiomyocyte Loci!';
+  assert.equal(seoTitle73.length, 73);
+  const metaDesc113 = 'High-depth duplex sequencing reveals how engineered pegRNA motifs suppress indels in human cardiac tissue models.';
+  assert.equal(metaDesc113.length, 113);
+
+  const baseArticle: Article = {
+    id: 'art-v5-audit',
+    locale: 'en',
+    title: 'Prime Editing Fidelity in Human Cardiomyocytes',
+    slug: 'prime-editing-fidelity-human-cardiomyocytes',
+    summary: 'Distinct editorial deck summarizing prime editing fidelity experiments in human cardiac tissue.',
+    body: {},
+    bodyHtml:
+      '<h2>Experimental Design</h2><p>Detailed telemetry across 48 donor lines using <a href="/articles/jwst-exoplanet-spectra">internal reference</a> and <a href="https://en.wikipedia.org/wiki/Prime_editing" data-knowledge-id="kl-1">prime editing</a>. In this study we analyze prime editing efficiency across cardiac loci with repeated duplex sequencing runs across multiple donor cohorts to establish statistical confidence and low off-target indel rates in human cardiomyocytes.</p><h3>Sequencing Protocol</h3><p>Duplex sequencing readouts confirmed low off-target activity across all tested loci in repeat trials, demonstrating reproducible editing fidelity without double-strand breaks.</p>',
+    status: 'approved',
+    primaryCategoryId: 'cat-bio',
+    categoryIds: ['cat-bio', 'sub-crispr'],
+    tagIds: ['t1', 't2', 't3', 't4'],
+    authorId: 'usr-editor',
+    featuredMediaId: 'm-lead',
+    sourceIds: ['src-valid'],
+    seo: {
+      title: seoTitle73,
+      description: metaDesc113,
+      canonical: 'https://scientificradar.example/en/articles/prime-editing-fidelity-human-cardiomyocytes',
+      noindex: true,
+    },
+    createdAt: '2026-10-30T10:00:00Z',
+    updatedAt: '2026-10-30T12:00:00Z',
+    version: 3,
+  };
+
+  const media: MediaAsset[] = [
+    {
+      id: 'm-lead',
+      filename: 'cardiac-prime-editing.svg',
+      title: 'Prime Editing Efficiency Plot',
+      kind: 'scientific_figure',
+      src: '/demo-figure.svg',
+      mime: 'image/svg+xml',
+      width: 1200,
+      height: 675,
+      byteSize: 28400,
+      altText: 'Bar chart comparing pegRNA prime editing efficiency vs Cas9 nuclease indels across 12 cardiac loci',
+      caption: 'Figure 1: Prime editing efficiency.',
+      credit: 'ScientificRadar Lab',
+      licence: 'CC BY 4.0',
+      layout: 'locked',
+      humanReviewedAlt: true,
+      createdAt: '2026-10-30T10:00:00Z',
+    },
+  ];
+
+  const sources: ScientificSource[] = [
+    {
+      id: 'src-valid',
+      title: 'Engineered pegRNAs enhance prime editing in human cardiomyocytes',
+      authors: 'Anzalone et al.',
+      journal: 'Nature Biotechnology',
+      year: 2026,
+      doi: '10.1038/s41587-026-01928-z',
+      url: 'https://doi.org/10.1038/s41587-026-01928-z',
+      sourceType: 'peer_reviewed',
+      accessDate: '2026-10-30',
+      verificationStatus: 'syntax_checked_only',
+      humanClaimVerified: true,
+    },
+  ];
+
+  const report = runArticleAudit({
+    article: baseArticle,
+    allArticles: [baseArticle],
+    categories,
+    tags,
+    media,
+    sources,
+  });
+
+  // 73/65 SEO Title -> warning (truncation risk), NOT unconditional pass
+  const titleLenFinding = report.findings.find((f) => f.id === 'metadata.seo_title.length');
+  assert.equal(titleLenFinding?.status, 'warning');
+
+  // 113/160 Meta description -> pass
+  const descLenFinding = report.findings.find((f) => f.id === 'metadata.description.length');
+  assert.equal(descLenFinding?.status, 'pass');
+
+  // External checks are honestly marked unverified, never pass
+  const gscFinding = report.findings.find((f) => f.id === 'search_console.indexed');
+  assert.equal(gscFinding?.status, 'unverified');
+
+  // Publish gate allows warning-only publish with override confirmation
+  const gate = evaluatePublishGate({
+    report,
+    currentStatus: 'approved',
+    targetStatus: 'published',
+    activeRole: 'editor',
+    isDirtyOrFailedSave: false,
+  });
+  assert.equal(gate.isBlocked, false);
+  assert.equal(gate.canPublishWithWarningOverride, true);
+  assert.equal(gate.blockers.length, 0);
+  assert.ok(gate.warnings.length >= 1);
+
+  // Now test 7 tags -> error blocker, plus mismatched subcategory -> error blocker
+  const invalidTaxArticle: Article = {
+    ...baseArticle,
+    categoryIds: ['cat-bio', 'sub-optics'], // sub-optics belongs to cat-physics!
+    tagIds: ['t1', 't2', 't3', 't4', 't5', 't6', 't7'], // 7 tags > 6 limit
+  };
+
+  const invalidReport = runArticleAudit({
+    article: invalidTaxArticle,
+    allArticles: [invalidTaxArticle],
+    categories,
+    tags,
+    media,
+    sources,
+  });
+
+  const subcatFinding = invalidReport.findings.find((f) => f.id === 'taxonomy.subcategory.valid');
+  assert.equal(subcatFinding?.status, 'error');
+
+  const tagCountFinding = invalidReport.findings.find((f) => f.id === 'taxonomy.tags.count');
+  assert.equal(tagCountFinding?.status, 'error');
+
+  const blockedGate = evaluatePublishGate({
+    report: invalidReport,
+    currentStatus: 'approved',
+    targetStatus: 'published',
+    activeRole: 'editor',
+    isDirtyOrFailedSave: false,
+  });
+  assert.equal(blockedGate.isBlocked, true);
+  assert.ok(blockedGate.blockers.length >= 2);
+
+  // Verify deterministic Quick Fix proposals for subcategory mismatch and >6 tags
+  const subcatFix = buildQuickFixProposal({
+    findingId: 'taxonomy.subcategory.valid',
+    article: invalidTaxArticle,
+    allArticles: [invalidTaxArticle],
+    categories,
+    tags,
+    media,
+    sources,
+  });
+  assert.ok(subcatFix);
+  assert.equal(subcatFix!.after, 'cat-bio');
+
+  const tagFix = buildQuickFixProposal({
+    findingId: 'taxonomy.tags.count',
+    article: invalidTaxArticle,
+    allArticles: [invalidTaxArticle],
+    categories,
+    tags,
+    media,
+    sources,
+  });
+  assert.ok(tagFix);
+  assert.equal(tagFix!.after.split(', ').length, 6);
+
+  // Fingerprint changes when article content changes
+  const fp1 = computeArticleFingerprint(baseArticle, media, sources);
+  const fp2 = computeArticleFingerprint(invalidTaxArticle, media, sources);
+  assert.notEqual(fp1, fp2);
 });
 
 test('runDeterministicLocalChecks flags body H1, missing alt text, and knowledge link opportunities without fabricating content (AT-20)', () => {

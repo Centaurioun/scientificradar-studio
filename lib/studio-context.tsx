@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { openDB, IDBPDatabase } from 'idb';
 import {
   Article,
@@ -19,6 +19,7 @@ import {
   NavigationPreference,
   NavItemId,
   NavPreset,
+  SaveReceipt,
   ScientificSource,
   Series,
   Tag,
@@ -45,9 +46,16 @@ import {
   ensureUniqueSlug,
   getDefaultNavigationPreference,
   getPresetVisibility,
+  normalizeArticleTagIds,
   sanitizeAndDemoteBodyH1,
   slugify,
 } from './editorial-rules';
+import {
+  DateTimePreferences,
+  DEFAULT_ADMIN_DATETIME_PREFS,
+} from './datetime/format';
+import { AuditReport, FixProposal } from './audit/types';
+import { computeArticleFingerprint, runArticleAudit } from './audit/run-article-audit';
 
 const DB_NAME = 'scientificradar-studio-p0-db';
 const DB_VERSION = 1;
@@ -72,6 +80,8 @@ export interface StudioDatabaseSnapshot {
   integrations: IntegrationConnection[];
   activeRole: UserRole;
   theme: 'light' | 'dark';
+  dateTimePreferences: DateTimePreferences;
+  auditReportsByArticleId: Record<string, AuditReport>;
 }
 
 function getInitialSeedSnapshot(): StudioDatabaseSnapshot {
@@ -93,6 +103,8 @@ function getInitialSeedSnapshot(): StudioDatabaseSnapshot {
     integrations: SEED_INTEGRATIONS,
     activeRole: 'editor',
     theme: 'light',
+    dateTimePreferences: DEFAULT_ADMIN_DATETIME_PREFS,
+    auditReportsByArticleId: {},
   };
 }
 
@@ -116,9 +128,12 @@ async function getDb(): Promise<IDBPDatabase | null> {
 interface StudioContextValue extends StudioDatabaseSnapshot {
   isHydrated: boolean;
   persistenceMode: 'indexeddb' | 'memory_fallback';
-  // Theme & Role
+  simulateSaveFailure: boolean;
+  setSimulateSaveFailure: (val: boolean) => void;
+  // Theme, Role & Date/Time Preferences
   setTheme: (theme: 'light' | 'dark') => void;
   setActiveRole: (role: UserRole) => void;
+  setDateTimePreferences: (prefs: Partial<DateTimePreferences>) => void;
   // Navigation customization
   setNavPreset: (preset: NavPreset) => void;
   toggleNavItemVisibility: (id: NavItemId) => void;
@@ -126,11 +141,20 @@ interface StudioContextValue extends StudioDatabaseSnapshot {
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleDashboardWidget: (widget: keyof NavigationPreference['dashboardWidgets']) => void;
   resetNavigationToBalanced: () => void;
-  // Articles CRUD
+  // Articles CRUD & Verified Persistence
   saveArticle: (
     articleInput: Partial<Article> & { id?: string; title: string },
     options?: { createRevision?: boolean; revisionSource?: ArticleRevision['source']; revisionSummary?: string }
   ) => { article: Article; demotedH1Count: number };
+  persistArticleDraft: (
+    articleInput: Partial<Article> & { id?: string; title: string },
+    options?: {
+      expectedVersion?: number;
+      createRevision?: boolean;
+      revisionSource?: ArticleRevision['source'];
+      revisionSummary?: string;
+    }
+  ) => Promise<SaveReceipt>;
   duplicateArticle: (articleId: string) => Article | null;
   transitionArticleStatus: (
     articleId: string,
@@ -140,6 +164,9 @@ interface StudioContextValue extends StudioDatabaseSnapshot {
   deleteArticle: (articleId: string) => void;
   restoreArticleRevision: (revisionId: string) => Article | null;
   applyAssistantChanges: (articleId: string, acceptedChanges: EditorialChange[]) => { ok: boolean; error?: string; updatedArticle?: Article };
+  // SEO & Quality Audit
+  runAndStoreArticleAudit: (articleId: string, draftOverride?: Article) => AuditReport | null;
+  applyQuickFixProposal: (proposal: FixProposal) => { ok: boolean; error?: string; updatedArticle?: Article };
   // Pages CRUD
   savePage: (pageInput: Partial<EditorialPage> & { id?: string; title: string }) => EditorialPage;
   deletePage: (pageId: string) => void;
@@ -152,6 +179,7 @@ interface StudioContextValue extends StudioDatabaseSnapshot {
   saveAuthor: (authorInput: Partial<AuthorProfile> & { displayName: string }) => AuthorProfile;
   // Sources & Knowledge Links
   saveSource: (sourceInput: Partial<ScientificSource> & { title: string; url: string }) => ScientificSource;
+  updateSource: (sourceId: string, patch: Partial<ScientificSource>) => void;
   deleteSource: (sourceId: string) => void;
   saveKnowledgeLink: (klInput: Partial<KnowledgeLink> & { term: string; targetUrl: string }) => KnowledgeLink;
   // Media Library
@@ -173,6 +201,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<StudioDatabaseSnapshot>(() => getInitialSeedSnapshot());
   const [isHydrated, setIsHydrated] = useState(false);
   const [persistenceMode, setPersistenceMode] = useState<'indexeddb' | 'memory_fallback'>('indexeddb');
+  const [simulateSaveFailure, setSimulateSaveFailure] = useState(false);
+  const stateRef = useRef<StudioDatabaseSnapshot>(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   // Load persisted state from IndexedDB (with localStorage backup sync for instant read)
   useEffect(() => {
@@ -183,9 +216,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         if (db) {
           const saved = (await db.get(STORE_NAME, STATE_KEY)) as StudioDatabaseSnapshot | undefined;
           if (saved && saved.articles && saved.articles.length > 0) {
+            const migrated: StudioDatabaseSnapshot = {
+              ...saved,
+              dateTimePreferences: saved.dateTimePreferences || DEFAULT_ADMIN_DATETIME_PREFS,
+              auditReportsByArticleId: saved.auditReportsByArticleId || {},
+            };
             if (!cancelled) {
-              setState(saved);
-              document.documentElement.classList.toggle('dark', saved.theme === 'dark');
+              setState(migrated);
+              document.documentElement.classList.toggle('dark', migrated.theme === 'dark');
               setIsHydrated(true);
             }
             return;
@@ -215,18 +253,35 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const persistState = useCallback(async (nextState: StudioDatabaseSnapshot) => {
-    try {
-      const db = await getDb();
-      if (db) {
-        await db.put(STORE_NAME, nextState, STATE_KEY);
-      } else {
-        setPersistenceMode('memory_fallback');
+  const persistState = useCallback(
+    async (nextState: StudioDatabaseSnapshot): Promise<{ ok: boolean; volatileMemoryOnly: boolean; error?: string }> => {
+      if (simulateSaveFailure) {
+        return {
+          ok: false,
+          volatileMemoryOnly: persistenceMode === 'memory_fallback',
+          error: 'Simulated storage write failure (QA test mode enabled in Settings). Changes remain unsaved.',
+        };
       }
-    } catch {
-      setPersistenceMode('memory_fallback');
-    }
-  }, []);
+      try {
+        const db = await getDb();
+        if (db) {
+          await db.put(STORE_NAME, nextState, STATE_KEY);
+          return { ok: true, volatileMemoryOnly: false };
+        } else {
+          setPersistenceMode('memory_fallback');
+          return { ok: true, volatileMemoryOnly: true };
+        }
+      } catch (err) {
+        setPersistenceMode('memory_fallback');
+        return {
+          ok: false,
+          volatileMemoryOnly: true,
+          error: err instanceof Error ? err.message : 'IndexedDB write failed',
+        };
+      }
+    },
+    [simulateSaveFailure, persistenceMode]
+  );
 
   const updateState = useCallback(
     (updater: (prev: StudioDatabaseSnapshot) => StudioDatabaseSnapshot) => {
@@ -291,6 +346,29 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           'Simulated editorial permission profile changed'
         ),
       }));
+    },
+    [updateState, appendAudit]
+  );
+
+  const setDateTimePreferences = useCallback(
+    (prefs: Partial<DateTimePreferences>) => {
+      updateState((prev) => {
+        const nextPrefs: DateTimePreferences = {
+          ...(prev.dateTimePreferences || DEFAULT_ADMIN_DATETIME_PREFS),
+          ...prefs,
+        };
+        return {
+          ...prev,
+          dateTimePreferences: nextPrefs,
+          auditEvents: appendAudit(
+            prev,
+            'Updated Date & Time localization preferences',
+            'system',
+            'Date & Time Settings',
+            `Locale: ${nextPrefs.locale} · Time Zone: ${nextPrefs.timeZone} · Clock: ${nextPrefs.hourCycle}`
+          ),
+        };
+      });
     },
     [updateState, appendAudit]
   );
@@ -402,6 +480,117 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     }));
   }, [updateState, appendAudit]);
 
+  const buildUpdatedArticleSnapshot = useCallback(
+    (
+      prev: StudioDatabaseSnapshot,
+      articleInput: Partial<Article> & { id?: string; title: string },
+      options?: {
+        createRevision?: boolean;
+        revisionSource?: ArticleRevision['source'];
+        revisionSummary?: string;
+      }
+    ): { nextState: StudioDatabaseSnapshot; updatedArticle: Article; demotedH1Count: number } => {
+      const now = new Date().toISOString();
+      const existing = articleInput.id
+        ? prev.articles.find((a) => a.id === articleInput.id)
+        : undefined;
+
+      const locale = articleInput.locale || existing?.locale || 'en';
+      const rawHtml =
+        articleInput.bodyHtml !== undefined
+          ? articleInput.bodyHtml
+          : existing?.bodyHtml || '<p></p>';
+      const sanitized = sanitizeAndDemoteBodyH1(rawHtml);
+
+      const desiredSlug = articleInput.slug || existing?.slug || articleInput.title;
+      const uniqueSlug = ensureUniqueSlug(
+        desiredSlug,
+        locale,
+        prev.articles,
+        existing?.id
+      );
+
+      const nextVersion = existing
+        ? options?.createRevision
+          ? existing.version + 1
+          : existing.version
+        : 1;
+
+      const normalizedTags = normalizeArticleTagIds(articleInput.tagIds ?? existing?.tagIds ?? []);
+
+      const updatedArticle: Article = {
+        id: existing?.id || articleInput.id || `art-${Date.now()}`,
+        locale,
+        title: articleInput.title.trim() || 'Untitled Scientific Article',
+        slug: uniqueSlug,
+        summary: articleInput.summary ?? existing?.summary ?? '',
+        body: articleInput.body ?? existing?.body ?? { type: 'doc', content: [] },
+        bodyHtml: sanitized.sanitizedHtml,
+        status: articleInput.status ?? existing?.status ?? 'draft',
+        primaryCategoryId: articleInput.primaryCategoryId ?? existing?.primaryCategoryId ?? 'cat-physics',
+        categoryIds: articleInput.categoryIds ?? existing?.categoryIds ?? ['cat-physics'],
+        tagIds: normalizedTags.tagIds,
+        seriesId: articleInput.seriesId !== undefined ? articleInput.seriesId : existing?.seriesId,
+        authorId: articleInput.authorId ?? existing?.authorId ?? 'auth-elena',
+        sourceIds: articleInput.sourceIds ?? existing?.sourceIds ?? [],
+        featuredMediaId:
+          articleInput.featuredMediaId !== undefined
+            ? articleInput.featuredMediaId
+            : existing?.featuredMediaId,
+        seo: {
+          title: articleInput.seo?.title ?? existing?.seo?.title ?? '',
+          description: articleInput.seo?.description ?? existing?.seo?.description ?? '',
+          canonical: articleInput.seo?.canonical ?? existing?.seo?.canonical ?? '',
+          noindex: true,
+        },
+        scheduledAt:
+          articleInput.scheduledAt !== undefined ? articleInput.scheduledAt : existing?.scheduledAt,
+        publishedAt:
+          articleInput.publishedAt !== undefined ? articleInput.publishedAt : existing?.publishedAt,
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+        version: nextVersion,
+        reviewNotes: articleInput.reviewNotes ?? existing?.reviewNotes ?? [],
+      };
+
+      const nextArticles = existing
+        ? prev.articles.map((a) => (a.id === existing.id ? updatedArticle : a))
+        : [updatedArticle, ...prev.articles];
+
+      let nextRevisions = prev.revisions;
+      if (options?.createRevision || !existing) {
+        const rev: ArticleRevision = {
+          id: `rev-${updatedArticle.id}-v${updatedArticle.version}-${Date.now()}`,
+          articleId: updatedArticle.id,
+          version: updatedArticle.version,
+          snapshot: updatedArticle,
+          source: options?.revisionSource || 'editor',
+          createdAt: now,
+          summary:
+            options?.revisionSummary ||
+            (existing ? `Saved snapshot v${updatedArticle.version}` : 'Created initial draft v1'),
+        };
+        nextRevisions = [rev, ...prev.revisions];
+      }
+
+      const nextState: StudioDatabaseSnapshot = {
+        ...prev,
+        articles: nextArticles,
+        revisions: nextRevisions,
+        auditEvents: appendAudit(
+          prev,
+          existing ? 'Updated article' : 'Created new article',
+          'article',
+          updatedArticle.title,
+          `Slug: /${updatedArticle.slug} · Status: ${updatedArticle.status} · v${updatedArticle.version}`
+        ),
+      };
+
+      return { nextState, updatedArticle, demotedH1Count: sanitized.demotedH1Count };
+    },
+    [appendAudit]
+  );
+
   const saveArticle = useCallback(
     (
       articleInput: Partial<Article> & { id?: string; title: string },
@@ -415,105 +604,205 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       let demotedCount = 0;
 
       updateState((prev) => {
-        const now = new Date().toISOString();
-        const existing = articleInput.id
-          ? prev.articles.find((a) => a.id === articleInput.id)
-          : undefined;
+        const built = buildUpdatedArticleSnapshot(prev, articleInput, options);
+        savedResult = built.updatedArticle;
+        demotedCount = built.demotedH1Count;
+        return built.nextState;
+      });
 
-        const locale = articleInput.locale || existing?.locale || 'en';
-        const rawHtml =
-          articleInput.bodyHtml !== undefined
-            ? articleInput.bodyHtml
-            : existing?.bodyHtml || '<p></p>';
-        const sanitized = sanitizeAndDemoteBodyH1(rawHtml);
-        demotedCount = sanitized.demotedH1Count;
+      return { article: savedResult, demotedH1Count: demotedCount };
+    },
+    [updateState, buildUpdatedArticleSnapshot]
+  );
 
-        const desiredSlug = articleInput.slug || existing?.slug || articleInput.title;
-        const uniqueSlug = ensureUniqueSlug(
-          desiredSlug,
-          locale,
-          prev.articles,
-          existing?.id
-        );
+  const persistArticleDraft = useCallback(
+    async (
+      articleInput: Partial<Article> & { id?: string; title: string },
+      options?: {
+        expectedVersion?: number;
+        createRevision?: boolean;
+        revisionSource?: ArticleRevision['source'];
+        revisionSummary?: string;
+      }
+    ): Promise<SaveReceipt> => {
+      const currentSnapshot = stateRef.current;
+      const existing = articleInput.id
+        ? currentSnapshot.articles.find((a) => a.id === articleInput.id)
+        : undefined;
 
-        const nextVersion = existing
-          ? options?.createRevision
-            ? existing.version + 1
-            : existing.version
-          : 1;
+      if (
+        existing &&
+        options?.expectedVersion !== undefined &&
+        existing.version > options.expectedVersion
+      ) {
+        return {
+          ok: false,
+          savedAt: existing.updatedAt,
+          version: existing.version,
+          demotedH1Count: 0,
+          volatileMemoryOnly: persistenceMode === 'memory_fallback',
+          error: `Version conflict: stored article is v${existing.version} while editor base was v${options.expectedVersion}.`,
+        };
+      }
 
-        const updatedArticle: Article = {
-          id: existing?.id || articleInput.id || `art-${Date.now()}`,
-          locale,
-          title: articleInput.title.trim() || 'Untitled Scientific Article',
-          slug: uniqueSlug,
-          summary: articleInput.summary ?? existing?.summary ?? '',
-          body: articleInput.body ?? existing?.body ?? { type: 'doc', content: [] },
-          bodyHtml: sanitized.sanitizedHtml,
-          status: articleInput.status ?? existing?.status ?? 'draft',
-          primaryCategoryId: articleInput.primaryCategoryId ?? existing?.primaryCategoryId ?? 'cat-physics',
-          categoryIds: articleInput.categoryIds ?? existing?.categoryIds ?? ['cat-physics'],
-          tagIds: articleInput.tagIds ?? existing?.tagIds ?? [],
-          seriesId: articleInput.seriesId !== undefined ? articleInput.seriesId : existing?.seriesId,
-          authorId: articleInput.authorId ?? existing?.authorId ?? 'auth-elena',
-          sourceIds: articleInput.sourceIds ?? existing?.sourceIds ?? [],
-          featuredMediaId:
-            articleInput.featuredMediaId !== undefined
-              ? articleInput.featuredMediaId
-              : existing?.featuredMediaId,
-          seo: {
-            title: articleInput.seo?.title ?? existing?.seo?.title ?? '',
-            description: articleInput.seo?.description ?? existing?.seo?.description ?? '',
-            canonical: articleInput.seo?.canonical ?? existing?.seo?.canonical ?? '',
-            noindex: true,
+      const built = buildUpdatedArticleSnapshot(currentSnapshot, articleInput, options);
+      const writeResult = await persistState(built.nextState);
+      if (!writeResult.ok) {
+        return {
+          ok: false,
+          savedAt: existing?.updatedAt || new Date().toISOString(),
+          version: existing?.version || 1,
+          demotedH1Count: built.demotedH1Count,
+          volatileMemoryOnly: writeResult.volatileMemoryOnly,
+          error: writeResult.error || 'Repository write failed.',
+        };
+      }
+
+      setState(built.nextState);
+      return {
+        ok: true,
+        savedAt: built.updatedArticle.updatedAt,
+        version: built.updatedArticle.version,
+        demotedH1Count: built.demotedH1Count,
+        volatileMemoryOnly: writeResult.volatileMemoryOnly,
+      };
+    },
+    [buildUpdatedArticleSnapshot, persistState, persistenceMode]
+  );
+
+  const runAndStoreArticleAudit = useCallback(
+    (articleId: string, draftOverride?: Article): AuditReport | null => {
+      let generatedReport: AuditReport | null = null;
+      updateState((prev) => {
+        const target = draftOverride || prev.articles.find((a) => a.id === articleId);
+        if (!target) return prev;
+        const report = runArticleAudit({
+          article: target,
+          allArticles: prev.articles.map((a) => (a.id === target.id ? target : a)),
+          categories: prev.categories,
+          tags: prev.tags,
+          sources: prev.sources,
+          media: prev.media,
+          knowledgeLinks: prev.knowledgeLinks,
+          integrations: prev.integrations,
+          executedAt: new Date().toISOString(),
+        });
+        generatedReport = report;
+        return {
+          ...prev,
+          auditReportsByArticleId: {
+            ...(prev.auditReportsByArticleId || {}),
+            [target.id]: report,
           },
-          scheduledAt:
-            articleInput.scheduledAt !== undefined ? articleInput.scheduledAt : existing?.scheduledAt,
-          publishedAt:
-            articleInput.publishedAt !== undefined ? articleInput.publishedAt : existing?.publishedAt,
-          createdAt: existing?.createdAt || now,
-          updatedAt: now,
+          auditEvents: appendAudit(
+            prev,
+            'Executed SEO & Editorial Quality Audit',
+            'article',
+            target.title,
+            `Pass: ${report.counts.pass} · Warn: ${report.counts.warning} · Error: ${report.counts.error} · Unverified: ${report.counts.unverified}`
+          ),
+        };
+      });
+      return generatedReport;
+    },
+    [updateState, appendAudit]
+  );
+
+  const applyQuickFixProposal = useCallback(
+    (proposal: FixProposal): { ok: boolean; error?: string; updatedArticle?: Article } => {
+      let outcome: { ok: boolean; error?: string; updatedArticle?: Article } = { ok: false };
+      updateState((prev) => {
+        const article = prev.articles.find((a) => a.id === proposal.articleId);
+        if (!article) {
+          outcome = { ok: false, error: 'Article not found' };
+          return prev;
+        }
+        const currentFp = computeArticleFingerprint(article);
+        if (proposal.baseFingerprint && proposal.baseFingerprint !== currentFp) {
+          outcome = {
+            ok: false,
+            error: 'Article changed since this Quick Fix was generated. Re-run SEO Audit first.',
+          };
+          return prev;
+        }
+
+        const now = new Date().toISOString();
+        const nextVersion = article.version + 1;
+        let nextArticle: Article = {
+          ...article,
+          seo: { ...article.seo },
+          categoryIds: [...article.categoryIds],
+          tagIds: [...article.tagIds],
           version: nextVersion,
-          reviewNotes: articleInput.reviewNotes ?? existing?.reviewNotes ?? [],
+          updatedAt: now,
         };
 
-        savedResult = updatedArticle;
-
-        const nextArticles = existing
-          ? prev.articles.map((a) => (a.id === existing.id ? updatedArticle : a))
-          : [updatedArticle, ...prev.articles];
-
-        let nextRevisions = prev.revisions;
-        if (options?.createRevision || !existing) {
-          const rev: ArticleRevision = {
-            id: `rev-${updatedArticle.id}-v${updatedArticle.version}-${Date.now()}`,
-            articleId: updatedArticle.id,
-            version: updatedArticle.version,
-            snapshot: updatedArticle,
-            source: options?.revisionSource || 'editor',
-            createdAt: now,
-            summary:
-              options?.revisionSummary ||
-              (existing ? `Saved snapshot v${updatedArticle.version}` : 'Created initial draft v1'),
-          };
-          nextRevisions = [rev, ...prev.revisions];
+        if (proposal.targetPath === 'seo.title') {
+          nextArticle.seo.title = proposal.after;
+        } else if (proposal.targetPath === 'seo.description') {
+          nextArticle.seo.description = proposal.after;
+        } else if (proposal.targetPath === 'seo.canonical') {
+          nextArticle.seo.canonical = proposal.after;
+        } else if (proposal.targetPath === 'slug') {
+          nextArticle.slug = ensureUniqueSlug(proposal.after, nextArticle.locale, prev.articles, nextArticle.id);
+        } else if (proposal.targetPath === 'bodyHtml') {
+          nextArticle.bodyHtml = sanitizeAndDemoteBodyH1(proposal.after).sanitizedHtml;
+        } else if (proposal.targetPath === 'categoryIds') {
+          const validSubIds = new Set(
+            prev.categories.filter((c) => c.parentId === nextArticle.primaryCategoryId).map((c) => c.id)
+          );
+          nextArticle.categoryIds = Array.from(
+            new Set([
+              ...(nextArticle.primaryCategoryId ? [nextArticle.primaryCategoryId] : []),
+              ...nextArticle.categoryIds.filter((id) => validSubIds.has(id)),
+            ])
+          );
+        } else if (proposal.targetPath === 'tagIds') {
+          nextArticle.tagIds = normalizeArticleTagIds(nextArticle.tagIds).normalizedIds;
         }
+
+        const rev: ArticleRevision = {
+          id: `rev-${nextArticle.id}-v${nextVersion}-${Date.now()}`,
+          articleId: nextArticle.id,
+          version: nextVersion,
+          snapshot: nextArticle,
+          source: 'assistant_review',
+          createdAt: now,
+          summary: `Quick Fix applied (${proposal.ruleId}): ${proposal.label}`,
+        };
+
+        const nextArticles = prev.articles.map((a) => (a.id === nextArticle.id ? nextArticle : a));
+        const updatedReport = runArticleAudit({
+          article: nextArticle,
+          allArticles: nextArticles,
+          categories: prev.categories,
+          tags: prev.tags,
+          sources: prev.sources,
+          media: prev.media,
+          knowledgeLinks: prev.knowledgeLinks,
+          integrations: prev.integrations,
+        });
+
+        outcome = { ok: true, updatedArticle: nextArticle };
 
         return {
           ...prev,
           articles: nextArticles,
-          revisions: nextRevisions,
+          revisions: [rev, ...prev.revisions],
+          auditReportsByArticleId: {
+            ...(prev.auditReportsByArticleId || {}),
+            [nextArticle.id]: updatedReport,
+          },
           auditEvents: appendAudit(
             prev,
-            existing ? 'Updated article' : 'Created new article',
+            `Applied deterministic Quick Fix (${proposal.ruleId})`,
             'article',
-            updatedArticle.title,
-            `Slug: /${updatedArticle.slug} · Status: ${updatedArticle.status} · v${updatedArticle.version}`
+            nextArticle.title,
+            `${proposal.label} -> saved as v${nextVersion}`
           ),
         };
       });
-
-      return { article: savedResult, demotedH1Count: demotedCount };
+      return outcome;
     },
     [updateState, appendAudit]
   );
@@ -749,7 +1038,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             const matchedIds = prev.tags
               .filter((t) => desiredNames.includes(t.name.toLowerCase()))
               .map((t) => t.id);
-            nextArticle.tagIds = Array.from(new Set([...nextArticle.tagIds, ...matchedIds]));
+            nextArticle.tagIds = normalizeArticleTagIds([...nextArticle.tagIds, ...matchedIds]).tagIds;
           } else if (chg.targetPath === 'media.altText') {
             nextMedia = nextMedia.map((m) =>
               m.id === nextArticle.featuredMediaId || chg.id.endsWith(m.id)
@@ -1041,6 +1330,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           verificationStatus: sourceInput.verificationStatus ?? existing?.verificationStatus ?? 'unverified',
           notes: sourceInput.notes ?? existing?.notes ?? 'External verification not run (Offline P0 demo)',
           linkedClaim: sourceInput.linkedClaim ?? existing?.linkedClaim ?? '',
+          humanClaimVerified: sourceInput.humanClaimVerified ?? existing?.humanClaimVerified ?? false,
         };
         saved = item;
         return {
@@ -1051,6 +1341,16 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         };
       });
       return saved;
+    },
+    [updateState]
+  );
+
+  const updateSource = useCallback(
+    (sourceId: string, patch: Partial<ScientificSource>) => {
+      updateState((prev) => ({
+        ...prev,
+        sources: prev.sources.map((s) => (s.id === sourceId ? { ...s, ...patch } : s)),
+      }));
     },
     [updateState]
   );
@@ -1131,6 +1431,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           layout: assetInput.layout || (isFigure ? 'locked' : 'auto'),
           focalPoint: assetInput.focalPoint || { x: 0.5, y: 0.5 },
           createdAt: new Date().toISOString(),
+          humanReviewedAlt: assetInput.humanReviewedAlt ?? false,
         };
         created = item;
         return {
@@ -1215,7 +1516,16 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         if (!parsed || !Array.isArray(parsed.articles) || !Array.isArray(parsed.categories)) {
           return { ok: false, error: 'Invalid backup JSON structure' };
         }
-        updateState(() => parsed);
+        const normalizedArticles = parsed.articles.map((art) => ({
+          ...art,
+          tagIds: normalizeArticleTagIds(art.tagIds || []).tagIds,
+        }));
+        updateState(() => ({
+          ...parsed,
+          articles: normalizedArticles,
+          dateTimePreferences: parsed.dateTimePreferences || DEFAULT_ADMIN_DATETIME_PREFS,
+          auditReportsByArticleId: parsed.auditReportsByArticleId || {},
+        }));
         return { ok: true };
       } catch (e) {
         return { ok: false, error: (e as Error).message };
@@ -1234,8 +1544,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     ...state,
     isHydrated,
     persistenceMode,
+    simulateSaveFailure,
+    setSimulateSaveFailure,
     setTheme,
     setActiveRole,
+    setDateTimePreferences,
     setNavPreset,
     toggleNavItemVisibility,
     toggleNavGroupCollapsed,
@@ -1243,11 +1556,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     toggleDashboardWidget,
     resetNavigationToBalanced,
     saveArticle,
+    persistArticleDraft,
     duplicateArticle,
     transitionArticleStatus,
     deleteArticle,
     restoreArticleRevision,
     applyAssistantChanges,
+    runAndStoreArticleAudit,
+    applyQuickFixProposal,
     savePage,
     deletePage,
     addCategory,
@@ -1257,6 +1573,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     saveSeries,
     saveAuthor,
     saveSource,
+    updateSource,
     deleteSource,
     saveKnowledgeLink,
     addMediaAsset,

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useStudio } from '@/lib/studio-context';
 import { AppShell } from '@/components/layout/app-shell';
 import { Plus, Eye, Edit3, Trash2 } from 'lucide-react';
+import { LocalizedDate } from '@/components/datetime/localized-date';
 
 export default function PagesListPage() {
   const { pages, deletePage } = useStudio();
@@ -67,7 +68,7 @@ export default function PagesListPage() {
                     {pg.status}
                   </td>
                   <td className="py-3.5 px-4 font-mono text-slate-500">
-                    {new Date(pg.updatedAt).toLocaleDateString()}
+                    <LocalizedDate iso={pg.updatedAt} mode="date" />
                   </td>
                   <td className="py-3.5 px-4 text-right whitespace-nowrap">
                     <div className="inline-flex items-center gap-1">

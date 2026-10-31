@@ -27,9 +27,15 @@ export default function HomepageAndMenusPage() {
   const [newMenuHref, setNewMenuHref] = useState('');
   const [menuError, setMenuError] = useState<string | null>(null);
   const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
+  const [previewVisibilityMode, setPreviewVisibilityMode] = useState<
+    'public_published_only' | 'internal_editorial'
+  >('public_published_only');
 
   const sortedBlocks = [...homepageBlocks].sort((a, b) => a.order - b.order);
   const primaryMenu = menus.find((m) => m.location === 'primary') || menus[0];
+  const publishedArticles = articles.filter((a) => a.status === 'published');
+  const visiblePreviewArticles =
+    previewVisibilityMode === 'public_published_only' ? publishedArticles : articles;
 
   const handleMoveBlock = (index: number, direction: -1 | 1) => {
     const targetIdx = index + direction;
@@ -80,8 +86,13 @@ export default function HomepageAndMenusPage() {
   };
 
   const heroBlock = sortedBlocks.find((b) => b.type === 'hero');
+  const configuredHero = articles.find((a) => a.id === heroBlock?.articleIds[0]);
   const heroArticle =
-    articles.find((a) => a.id === heroBlock?.articleIds[0]) || articles[0];
+    previewVisibilityMode === 'public_published_only'
+      ? configuredHero?.status === 'published'
+        ? configuredHero
+        : publishedArticles[0]
+      : configuredHero || articles[0];
 
   return (
     <AppShell title="Homepage & Menus" breadcrumbs={[{ label: 'Homepage & Menus' }]}>
@@ -220,14 +231,35 @@ export default function HomepageAndMenusPage() {
 
           {/* Right 6 Columns: Live Representative Homepage & Menu Preview */}
           <div className="lg:col-span-6 bg-white dark:bg-[#111c22] border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-            <div className="px-4 py-2.5 bg-slate-900 text-white text-xs flex items-center justify-between">
+            <div className="px-4 py-2.5 bg-slate-900 text-white text-xs flex flex-wrap items-center justify-between gap-2">
               <span className="font-semibold flex items-center gap-1.5">
                 <Globe className="w-3.5 h-3.5 text-teal-400" />
                 <span>Representative Front-Page &amp; Menu Preview</span>
               </span>
-              <span className="font-mono text-[10px] text-slate-400">
-                Isolated Local Preview
-              </span>
+              <div className="flex items-center gap-1 bg-slate-800 p-0.5 rounded border border-slate-700 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setPreviewVisibilityMode('public_published_only')}
+                  className={`px-2 py-0.5 rounded font-semibold transition-colors ${
+                    previewVisibilityMode === 'public_published_only'
+                      ? 'bg-[#087f83] text-white'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Simulated Public (Published Only)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewVisibilityMode('internal_editorial')}
+                  className={`px-2 py-0.5 rounded font-semibold transition-colors ${
+                    previewVisibilityMode === 'internal_editorial'
+                      ? 'bg-amber-600 text-white'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Internal Preview (All Statuses)
+                </button>
+              </div>
             </div>
 
             {/* Interactive Preview Header with Hover + Click Dropdown */}
@@ -298,8 +330,15 @@ export default function HomepageAndMenusPage() {
                         key={block.id}
                         className="p-5 rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 space-y-2"
                       >
-                        <div className="text-[10px] font-mono uppercase tracking-wider text-[#087f83] dark:text-teal-400 font-semibold">
-                          Lead Science Story
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-[#087f83] dark:text-teal-400 font-semibold">
+                            Lead Science Story
+                          </span>
+                          {heroArticle.status !== 'published' && (
+                            <span className="rounded bg-amber-100 px-2 py-0.5 font-mono text-[10px] font-bold uppercase text-amber-900 dark:bg-amber-950 dark:text-amber-300">
+                              Internal Preview — Status: {heroArticle.status.replace('_', ' ')}
+                            </span>
+                          )}
                         </div>
                         <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 leading-snug">
                           {heroArticle.title}
@@ -334,22 +373,30 @@ export default function HomepageAndMenusPage() {
                         {block.title}
                       </h4>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {articles.slice(1, 3).map((art) => (
-                          <div
-                            key={art.id}
-                            className="p-3 rounded border border-slate-200 dark:border-slate-800 space-y-1"
-                          >
-                            <Link
-                              href={`/articles/${art.id}/preview`}
-                              className="font-semibold text-slate-900 dark:text-slate-100 hover:text-[#087f83] block"
+                        {visiblePreviewArticles
+                          .filter((a) => a.id !== heroArticle?.id)
+                          .slice(0, 2)
+                          .map((art) => (
+                            <div
+                              key={art.id}
+                              className="p-3 rounded border border-slate-200 dark:border-slate-800 space-y-1"
                             >
-                              {art.title}
-                            </Link>
-                            <div className="text-[11px] text-slate-500 font-mono">
-                              {art.locale.toUpperCase()} · {art.status}
+                              {art.status !== 'published' && (
+                                <span className="inline-block rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase text-amber-900 dark:bg-amber-950 dark:text-amber-300">
+                                  Internal Preview — {art.status.replace('_', ' ')}
+                                </span>
+                              )}
+                              <Link
+                                href={`/articles/${art.id}/preview`}
+                                className="font-semibold text-slate-900 dark:text-slate-100 hover:text-[#087f83] block"
+                              >
+                                {art.title}
+                              </Link>
+                              <div className="text-[11px] text-slate-500 font-mono">
+                                {art.locale.toUpperCase()} · {art.status}
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          ))}
                       </div>
                     </div>
                   );

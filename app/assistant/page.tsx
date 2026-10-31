@@ -15,17 +15,17 @@ export default function AssistantOverviewPage() {
   const selectedArticle = articles.find((a) => a.id === selectedArticleId) || articles[0];
 
   return (
-    <AppShell title="Codex Assistant" breadcrumbs={[{ label: 'Codex Assistant' }]}>
+    <AppShell title="AI Assistant" breadcrumbs={[{ label: 'AI Assistant' }]}>
       <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
         <div className="p-5 rounded-lg bg-white dark:bg-[#111c22] border border-slate-200 dark:border-slate-800 space-y-3">
           <div className="flex items-center justify-between">
             <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-[#087f83]" />
-              <span>Codex Editorial Finishing Assistant</span>
+              <span>AI Assistant · Editorial Finishing</span>
             </h1>
             <span className="inline-flex items-center gap-1.5 text-xs font-mono text-amber-700 dark:text-amber-400">
               <Plug className="w-4 h-4" />
-              <span>Codex Provider: Not Connected (P0 Prototype)</span>
+              <span>Codex Adapter: Not Connected (P0 Prototype)</span>
             </span>
           </div>
           <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">

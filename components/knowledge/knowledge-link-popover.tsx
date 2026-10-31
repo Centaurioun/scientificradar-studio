@@ -19,8 +19,10 @@ export function KnowledgeLinkPopover({
   knowledgeItem: KnowledgeLink;
 }) {
   const [open, setOpen] = useState(false);
+  const [alignRight, setAlignRight] = useState(false);
   const closeTimerRef = useRef<NodeJS.Timeout | null>(null);
   const containerRef = useRef<HTMLSpanElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const clearTimer = () => {
     if (closeTimerRef.current) {
@@ -29,8 +31,16 @@ export function KnowledgeLinkPopover({
     }
   };
 
+  const computeAlignment = () => {
+    if (typeof window === 'undefined' || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const spaceRight = window.innerWidth - rect.left;
+    setAlignRight(spaceRight < 340 && rect.right > 280);
+  };
+
   const handleMouseEnter = () => {
     clearTimer();
+    computeAlignment();
     setOpen(true);
   };
 
@@ -46,6 +56,7 @@ export function KnowledgeLinkPopover({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setOpen(false);
+        triggerRef.current?.focus();
       }
     };
     const handleClickOutside = (e: MouseEvent) => {
@@ -71,11 +82,16 @@ export function KnowledgeLinkPopover({
       onMouseLeave={handleMouseLeave}
     >
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => {
+          computeAlignment();
+          setOpen((prev) => !prev);
+        }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
+            computeAlignment();
             setOpen((prev) => !prev);
           }
         }}
@@ -90,7 +106,9 @@ export function KnowledgeLinkPopover({
         <span
           role="dialog"
           aria-label={`Concept summary: ${knowledgeItem.previewTitle}`}
-          className="absolute left-0 bottom-full mb-2 w-80 sm:w-96 p-4 rounded-lg bg-white dark:bg-[#15222a] border border-slate-200 dark:border-slate-700 shadow-xl z-50 text-left block font-sans"
+          className={`absolute ${
+            alignRight ? 'right-0' : 'left-0'
+          } bottom-full mb-2 w-72 sm:w-96 max-w-[calc(100vw-2rem)] p-4 rounded-lg bg-white dark:bg-[#15222a] border border-slate-200 dark:border-slate-700 shadow-xl z-50 text-left block font-sans`}
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
@@ -103,7 +121,10 @@ export function KnowledgeLinkPopover({
             </span>
             <button
               type="button"
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                setOpen(false);
+                triggerRef.current?.focus();
+              }}
               aria-label="Close concept preview"
               className="p-1 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
             >

@@ -261,41 +261,141 @@ function formatInlineMarkdown(text: string): string {
   return safe;
 }
 
+export const MAX_EDITORIAL_TAGS = 6;
+
+export function tagCountIsValid(ids: string[]): boolean {
+  return new Set(ids).size <= MAX_EDITORIAL_TAGS;
+}
+
 /**
- * Validates editorial workflow transition based on user role.
+ * Deduplicates tag IDs (including case/alias collisions when tags list is provided)
+ * and enforces MAX_EDITORIAL_TAGS (6).
+ */
+export function normalizeArticleTagIds(
+  tagIds: string[],
+  allTags?: Tag[]
+): {
+  tagIds: string[];
+  normalizedIds: string[];
+  rejectedOverflowCount: number;
+  dedupedCount: number;
+} {
+  const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
+  const unique: string[] = [];
+  let dedupedCount = 0;
+
+  for (const rawId of tagIds) {
+    const id = rawId.trim();
+    if (!id) continue;
+    if (seenIds.has(id)) {
+      dedupedCount += 1;
+      continue;
+    }
+    if (allTags) {
+      const tagObj = allTags.find((t) => t.id === id);
+      if (tagObj) {
+        const canonicalKey = tagObj.name.trim().toLowerCase();
+        if (seenNames.has(canonicalKey)) {
+          dedupedCount += 1;
+          continue;
+        }
+        seenNames.add(canonicalKey);
+        for (const alias of tagObj.aliases || []) {
+          seenNames.add(alias.trim().toLowerCase());
+        }
+      }
+    }
+    seenIds.add(id);
+    unique.push(id);
+  }
+
+  const normalizedIds = unique.slice(0, MAX_EDITORIAL_TAGS);
+  const rejectedOverflowCount = Math.max(0, unique.length - MAX_EDITORIAL_TAGS);
+
+  return {
+    tagIds: normalizedIds,
+    normalizedIds,
+    rejectedOverflowCount,
+    dedupedCount,
+  };
+}
+
+/**
+ * Explicit state transition table per Spec v5 §10.1.
+ */
+const ALLOWED_STATE_TRANSITIONS: Record<ArticleStatus, ArticleStatus[]> = {
+  idea: ['draft', 'archived'],
+  draft: ['in_review', 'archived'],
+  in_review: ['approved', 'revision_requested', 'draft'],
+  revision_requested: ['draft', 'in_review', 'archived'],
+  approved: ['scheduled', 'published', 'in_review', 'draft'],
+  scheduled: ['published', 'approved', 'draft'],
+  published: ['archived'],
+  archived: ['draft'],
+};
+
+/**
+ * Validates editorial workflow transition based on current state AND user role (Spec v5 §10.1).
+ * Notice: An already `approved` article cannot be transitioned to `approved` again as a meaningful review action.
  */
 export function canTransitionStatus(
   from: ArticleStatus,
   to: ArticleStatus,
   role: UserRole
 ): { allowed: boolean; reason?: string } {
-  if (from === to) return { allowed: true };
+  if (from === to) {
+    return {
+      allowed: false,
+      reason: `Article is already in ${from.replace('_', ' ')} state.`,
+    };
+  }
 
-  // Authors can create ideas/drafts and submit to in_review, but cannot approve or publish
+  const validNextStates = ALLOWED_STATE_TRANSITIONS[from] || [];
+  if (!validNextStates.includes(to)) {
+    return {
+      allowed: false,
+      reason: `Transition from "${from.replace('_', ' ')}" directly to "${to.replace('_', ' ')}" is not permitted by editorial workflow policy.`,
+    };
+  }
+
+  // Authors can create ideas/drafts and submit to in_review, but cannot approve, schedule, or publish
   if (role === 'author') {
     const allowedTargets: ArticleStatus[] = ['idea', 'draft', 'in_review'];
     if (!allowedTargets.includes(to)) {
       return {
         allowed: false,
-        reason: 'Authors can submit drafts for review, but only Editors/Owners can approve or publish.',
+        reason: 'Authors can submit drafts for review, but only Reviewers/Editors/Owners can approve or publish.',
       };
     }
     return { allowed: true };
   }
 
-  // Reviewers can move in_review -> approved, revision_requested, or draft
+  // Reviewers can move in_review -> approved, revision_requested, or draft, but cannot schedule or publish
   if (role === 'reviewer') {
-    if (to === 'published' || to === 'scheduled') {
+    const reviewerTargets: ArticleStatus[] = ['approved', 'revision_requested', 'draft'];
+    if (!reviewerTargets.includes(to)) {
       return {
         allowed: false,
-        reason: 'Reviewers can approve or request revisions, but only Editors/Owners can schedule or publish.',
+        reason: 'Reviewers can approve or request revisions on manuscripts in review, but only Editors/Owners can schedule or publish.',
       };
     }
     return { allowed: true };
   }
 
-  // Editors and Owners can transition across all editorial states
+  // Editors and Owners can execute any valid state transition in the transition table
   return { allowed: true };
+}
+
+/**
+ * Returns the list of allowed next statuses for a given current status and role.
+ */
+export function getAllowedNextStatuses(
+  from: ArticleStatus,
+  role: UserRole
+): ArticleStatus[] {
+  const candidates = ALLOWED_STATE_TRANSITIONS[from] || [];
+  return candidates.filter((target) => canTransitionStatus(from, target, role).allowed);
 }
 
 /**
@@ -314,7 +414,7 @@ export function normalizeAndDedupeTags(tagNames: string[]): string[] {
       result.push(cleaned);
     }
   }
-  return result;
+  return result.slice(0, MAX_EDITORIAL_TAGS);
 }
 
 /**
@@ -675,3 +775,64 @@ export function getDefaultNavigationPreference(): NavigationPreference {
     },
   };
 }
+
+/**
+ * Counts words in an HTML string after stripping tags.
+ */
+export function countWordsFromHtml(html: string): number {
+  const plain = (html || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .trim();
+  if (!plain) return 0;
+  return plain.split(/\s+/).filter(Boolean).length;
+}
+
+/**
+ * Calculates estimated reading time in minutes (at 200 words/minute, minimum 1 min).
+ */
+export function calculateReadingTimeMinutes(wordCount: number): number {
+  return Math.max(1, Math.ceil((wordCount || 0) / 200));
+}
+
+/**
+ * Checks whether a string is a safe HTTP/HTTPS or relative URL.
+ */
+export function isValidHttpUrl(url: string): boolean {
+  return validateSafeUrl(url).valid;
+}
+
+/**
+ * Validates primary category, subcategory list, and editorial tag count (3–6 house guideline).
+ */
+export function validateCategoriesAndTags(
+  primaryCategoryId: string,
+  categoryIds: string[],
+  tagIds: string[]
+): {
+  valid: boolean;
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  if (!primaryCategoryId) {
+    warnings.push('Select a Primary Scientific Discipline category.');
+  }
+  const uniqueTagCount = new Set(tagIds).size;
+  if (uniqueTagCount === 0) {
+    warnings.push('Assign at least 1 taxonomy tag (3–6 tags recommended).');
+  } else if (uniqueTagCount < 3) {
+    warnings.push(`Only ${uniqueTagCount} tag(s) assigned; 3–6 tags recommended for discovery.`);
+  } else if (uniqueTagCount > MAX_EDITORIAL_TAGS) {
+    warnings.push(
+      `Assigned ${uniqueTagCount} tags, which exceeds the ${MAX_EDITORIAL_TAGS}-tag maximum.`
+    );
+  }
+  if (!categoryIds.includes(primaryCategoryId) && primaryCategoryId) {
+    warnings.push('Primary category should be included in the article category list.');
+  }
+  return {
+    valid: warnings.length === 0,
+    warnings,
+  };
+}
+

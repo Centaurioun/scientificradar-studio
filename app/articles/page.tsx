@@ -15,7 +15,9 @@ import {
   Archive,
   CheckCircle2,
   AlertTriangle,
+  SearchCheck,
 } from 'lucide-react';
+import { LocalizedDate } from '@/components/datetime/localized-date';
 
 type SavedFilter = 'all' | 'drafts' | 'in_review' | 'scheduled' | 'published' | 'needs_attention';
 
@@ -356,7 +358,7 @@ export default function ArticlesListPage() {
                         )}
                       </td>
                       <td className="py-3 px-3 align-top whitespace-nowrap font-mono tabular-nums text-slate-500">
-                        {new Date(art.updatedAt).toLocaleDateString()}
+                        <LocalizedDate iso={art.updatedAt} mode="date" />
                       </td>
                       <td className="py-3 px-3 align-top text-right whitespace-nowrap">
                         <div className="inline-flex items-center gap-1">
@@ -367,6 +369,14 @@ export default function ArticlesListPage() {
                             className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
+                          </Link>
+                          <Link
+                            href={`/articles/${art.id}/seo`}
+                            title={`SEO & Quality Audit for ${art.title}`}
+                            aria-label={`SEO & Quality Audit for ${art.title}`}
+                            className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-[#087f83] dark:text-teal-400"
+                          >
+                            <SearchCheck className="w-3.5 h-3.5" />
                           </Link>
                           <Link
                             href={`/articles/${art.id}/preview`}

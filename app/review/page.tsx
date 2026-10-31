@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { useStudio } from '@/lib/studio-context';
 import { ArticleStatus } from '@/lib/types';
 import { AppShell } from '@/components/layout/app-shell';
-import { CheckCircle2, RotateCcw, Eye, Edit3, AlertCircle } from 'lucide-react';
+import { CheckCircle2, RotateCcw, Eye, Edit3, AlertCircle, Send } from 'lucide-react';
+import { getAllowedNextStatuses } from '@/lib/editorial-rules';
 
 export default function ReviewQueuePage() {
   const { articles, authors, activeRole, transitionArticleStatus } = useStudio();
@@ -67,6 +68,7 @@ export default function ReviewQueuePage() {
         <div className="space-y-4">
           {reviewItems.map((art) => {
             const author = authors.find((a) => a.id === art.authorId);
+            const allowedStatuses = getAllowedNextStatuses(art.status, activeRole);
             return (
               <div
                 key={art.id}
@@ -142,30 +144,60 @@ export default function ReviewQueuePage() {
                     className="flex-1 px-3 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900"
                   />
                   <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => handleAction(art.id, 'approved')}
-                      className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-semibold flex items-center gap-1"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Approve</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAction(art.id, 'revision_requested')}
-                      className="px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-700 text-white font-semibold flex items-center gap-1"
-                    >
-                      <AlertCircle className="w-3.5 h-3.5" />
-                      <span>Request Revision</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAction(art.id, 'draft')}
-                      className="px-3 py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium flex items-center gap-1"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Return to Draft</span>
-                    </button>
+                    {allowedStatuses.includes('in_review') && (
+                      <button
+                        type="button"
+                        onClick={() => handleAction(art.id, 'in_review')}
+                        className="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-semibold flex items-center gap-1"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>Submit for Review</span>
+                      </button>
+                    )}
+                    {allowedStatuses.includes('approved') && (
+                      <button
+                        type="button"
+                        onClick={() => handleAction(art.id, 'approved')}
+                        className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-semibold flex items-center gap-1"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Approve</span>
+                      </button>
+                    )}
+                    {allowedStatuses.includes('revision_requested') && (
+                      <button
+                        type="button"
+                        onClick={() => handleAction(art.id, 'revision_requested')}
+                        className="px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-700 text-white font-semibold flex items-center gap-1"
+                      >
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        <span>Request Revision</span>
+                      </button>
+                    )}
+                    {allowedStatuses.includes('draft') && (
+                      <button
+                        type="button"
+                        onClick={() => handleAction(art.id, 'draft')}
+                        className="px-3 py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium flex items-center gap-1"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Return to Draft</span>
+                      </button>
+                    )}
+                    {allowedStatuses.includes('published') && (
+                      <Link
+                        href={`/articles/${art.id}/seo`}
+                        className="px-3 py-1.5 rounded bg-[#087f83] hover:bg-[#086b70] text-white font-semibold flex items-center gap-1"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Pre-Publish Gate</span>
+                      </Link>
+                    )}
+                    {allowedStatuses.length === 0 && (
+                      <span className="px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 text-[11px] font-medium text-slate-500">
+                        No transitions available for {activeRole.toUpperCase()} on {art.status.replace('_', ' ')}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>

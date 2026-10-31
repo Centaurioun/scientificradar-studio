@@ -24,6 +24,8 @@ export type MediaLayout = 'auto' | 'manual' | 'locked';
 
 export type SourceVerificationStatus =
   | 'unverified'
+  | 'syntax_checked_only'
+  | 'human_checked'
   | 'verified_metadata'
   | 'url_checked'
   | 'needs_review'
@@ -137,9 +139,10 @@ export interface ScientificSource {
   year: number;
   doi?: string;
   url: string;
-  sourceType: 'peer_reviewed' | 'preprint' | 'dataset' | 'institutional_report' | 'book';
+  sourceType: 'peer_reviewed' | 'preprint' | 'dataset' | 'institutional' | 'institutional_report' | 'book';
   accessDate: string;
   verificationStatus: SourceVerificationStatus;
+  humanClaimVerified?: boolean;
   notes?: string;
   linkedClaim?: string;
 }
@@ -169,6 +172,7 @@ export interface MediaAsset {
   height: number;
   byteSize: number;
   altText: string;
+  humanReviewedAlt?: boolean;
   caption?: string;
   credit?: string;
   licence?: string;
@@ -296,3 +300,16 @@ export interface IntegrationConnection {
   statusDetail: string;
   requiredEnvVars: string[];
 }
+
+export type SaveState = 'clean' | 'dirty' | 'saving' | 'failed';
+
+export interface SaveReceipt {
+  ok: boolean;
+  savedAt: string;
+  version: number;
+  demotedH1Count: number;
+  volatileMemoryOnly: boolean;
+  error?: string;
+}
+
+

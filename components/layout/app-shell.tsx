@@ -66,7 +66,7 @@ export const ALL_NAV_ITEMS: NavItemDefinition[] = [
   { id: 'authors', label: 'Authors & Editors', href: '/authors', group: 'EDITORIAL', icon: Users },
   { id: 'revisions', label: 'Revision History', href: '/revisions', group: 'EDITORIAL', icon: History },
   // TOOLS
-  { id: 'assistant', label: 'Codex Assistant', href: '/assistant', group: 'TOOLS', icon: Sparkles, badgeText: 'Local' },
+  { id: 'assistant', label: 'AI Assistant', href: '/assistant', group: 'TOOLS', icon: Sparkles, badgeText: 'Local' },
   { id: 'seo', label: 'SEO & Quality Center', href: '/seo', group: 'TOOLS', icon: SearchCheck },
   { id: 'knowledge_links', label: 'Smart Knowledge Links', href: '/knowledge-links', group: 'TOOLS', icon: Link2 },
   { id: 'search_performance', label: 'Search Performance', href: '/search-performance', group: 'TOOLS', icon: BarChart3 },

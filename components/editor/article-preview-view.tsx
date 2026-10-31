@@ -15,11 +15,16 @@ import {
   BookOpen,
 } from 'lucide-react';
 
+import { Article } from '@/lib/types';
+import { LocalizedDate } from '@/components/datetime/localized-date';
+
 export function ArticlePreviewView({
   articleId,
+  article: directArticle,
   standalonePublicPreview = false,
 }: {
-  articleId: string;
+  articleId?: string;
+  article?: Article;
   standalonePublicPreview?: boolean;
 }) {
   const { articles, categories, tags, authors, media, sources, knowledgeLinks, series } =
@@ -27,7 +32,7 @@ export function ArticlePreviewView({
 
   const [viewportMode, setViewportMode] = useState<'desktop' | 'mobile'>('desktop');
 
-  const article = articles.find((a) => a.id === articleId);
+  const article = directArticle || articles.find((a) => a.id === articleId);
   if (!article) {
     return (
       <div className="p-8 text-center space-y-3">
@@ -132,7 +137,12 @@ export function ArticlePreviewView({
             <span>Locale: {article.locale.toUpperCase()}</span>
             <span aria-hidden="true">·</span>
             <span className="font-mono">
-              Updated {new Date(article.updatedAt).toLocaleDateString()}
+              Updated{' '}
+              <LocalizedDate
+                iso={article.publishedAt || article.updatedAt}
+                mode="date"
+                useReaderLocale
+              />
             </span>
             <span aria-hidden="true">·</span>
             <span className="font-mono uppercase">{article.status}</span>
