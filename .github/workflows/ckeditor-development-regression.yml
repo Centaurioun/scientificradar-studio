@@ -1,0 +1,47 @@
+name: CKEditor development mount regression
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ckeditor-dev-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.13.0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Install locked packages
+        run: bun install --frozen-lockfile
+      - name: Install browser
+        run: bun run test:e2e:install:ci
+      - name: Verify clean CKEditor dev mount in browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun run dev -- --hostname 127.0.0.1 --port 4186 > /tmp/sr-ckeditor-dev-server.log 2>&1 &
+          PID=$!
+          trap 'kill "$PID" 2>/dev/null || true' EXIT
+          READY=0
+          for i in $(seq 1 120); do
+            CODE=$(curl --max-time 3 --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:4186/articles/art-quantum-repeater/edit?editor=ckeditor || true)
+            if [ "$CODE" = '200' ]; then READY=1; break; fi
+            if ! kill -0 "$PID" 2>/dev/null; then break; fi
+            sleep 2
+          done
+          if [ "$READY" != '1' ]; then cat /tmp/sr-ckeditor-dev-server.log; exit 1; fi
+          node tests/runtime/ckeditor-dev-mount.mjs || {
+            tail -100 /tmp/sr-ckeditor-dev-server.log
+            exit 1
+          }
