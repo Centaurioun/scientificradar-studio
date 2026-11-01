@@ -1,0 +1,122 @@
+# TEMPORARY: prune only inactive vendor-staging source copies.
+# This workflow is removed before PR merge. Source repos are NEVER modified.
+name: TEMP slim CKEditor vendor source snapshots
+on:
+  push:
+    branches:
+      - chore/slim-ckeditor-vendor-staging-2026-11-02
+permissions:
+  contents: read
+jobs:
+  prune:
+    if: github.repository == 'Centaurioun/scientificradar-studio' && github.ref == 'refs/heads/chore/slim-ckeditor-vendor-staging-2026-11-02'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chore/slim-ckeditor-vendor-staging-2026-11-02
+          persist-credentials: true
+          fetch-depth: 1
+      - name: Preserve runtime source references and remove test/fixture/docs bloat
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "chore/slim-ckeditor-vendor-staging-2026-11-02"
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          base = Path('vendor-staging')
+          core = base / 'ckeditor5'
+          math = base / 'ckeditor5-math'
+          assert (core / 'COPYING.GPL').is_file()
+          assert (math / 'LICENSE').is_file()
+          assert (base / 'SOURCE_MANIFEST.md').is_file()
+
+          core_keep = {
+              'COPYING.GPL', 'LICENSE.md', 'README.md', 'package.json',
+              'packages/ckeditor5/LICENSE.md',
+              'packages/ckeditor5/package.json',
+              'packages/ckeditor5/src/index.ts',
+              'packages/ckeditor5-core/src/plugin.ts',
+              'packages/ckeditor5-core/src/command.ts',
+              'packages/ckeditor5-core/src/index.ts',
+              'packages/ckeditor5-engine/src/model/model.ts',
+              'packages/ckeditor5-engine/src/model/writer.ts',
+              'packages/ckeditor5-engine/src/conversion/conversion.ts',
+              'packages/ckeditor5-engine/src/conversion/upcasthelpers.ts',
+              'packages/ckeditor5-engine/src/conversion/downcasthelpers.ts',
+              'packages/ckeditor5-widget/src/widget.ts',
+              'packages/ckeditor5-widget/src/utils.ts',
+              'packages/ckeditor5-ui/src/componentfactory.ts',
+              'packages/ckeditor5-ui/src/view.ts',
+              'packages/ckeditor5-ui/src/panel/balloon/contextualballoon.ts',
+              'packages/ckeditor5-clipboard/src/clipboardpipeline.ts',
+              'packages/ckeditor5-table/src/tableediting.ts',
+              'packages/ckeditor5-table/src/tablecaption.ts',
+              'packages/ckeditor5-table/src/tableui.ts',
+              'packages/ckeditor5-table/src/tableutils.ts',
+              'packages/ckeditor5-html-support/src/generalhtmlsupport.ts',
+              'packages/ckeditor5-html-support/src/datafilter.ts',
+              'packages/ckeditor5-html-support/src/converters.ts',
+              'packages/ckeditor5-source-editing/src/sourceediting.ts',
+              'packages/ckeditor5-editor-classic/src/classiceditor.ts',
+              'packages/ckeditor5-image/src/index.ts',
+          }
+
+          math_root_keep = {
+              'LICENSE', 'README.md', 'UPGRADE_49.md',
+              'package.json', 'ckeditor5-metadata.json',
+          }
+
+          tracked = subprocess.check_output(
+              ['git', 'ls-files', '-z', '--', str(core), str(math)]
+          ).split(b'\0')
+          tracked = [Path(t.decode()) for t in tracked if t]
+          assert len(tracked) > 7000, f'Unexpected source tree count {len(tracked)}'
+          all_keep = {core / p for p in core_keep}
+          assert all(p.is_file() for p in all_keep), 'Expected curated core file missing'
+          math_required = [math / p for p in ['src/math.ts', 'src/mathediting.ts', 'src/mathui.ts', 'src/ui/mainformview.ts', 'theme/mathform.css', 'theme/icons/math.svg', 'typings/svg.d.ts']]
+          assert all(p.is_file() for p in math_required), 'Expected Math runtime source missing'
+
+          retained = []
+          removed = 0
+          for p in tracked:
+              if p.is_relative_to(core):
+                  keep = p in all_keep
+              else:
+                  rel = p.relative_to(math)
+                  keep = (rel.as_posix() in math_root_keep
+                          or (rel.parts and rel.parts[0] in ('src','theme','typings')))
+              if keep:
+                  retained.append(p)
+              else:
+                  p.unlink()
+                  removed += 1
+
+          assert len([x for x in retained if x.is_relative_to(core)]) == len(core_keep)
+          assert removed > 7000, f'Unexpected removal count {removed}'
+          assert len(retained) < 100, f'Retained too many files: {len(retained)}'
+          kept_bytes = sum(x.stat().st_size for x in retained)
+          assert kept_bytes < 2_500_000, f'Kept more than 2.5 MB: {kept_bytes}'
+          print(f'VENDOR_BEFORE_FILES={len(tracked)}')
+          print(f'VENDOR_REMOVED_FILES={removed}')
+          print(f'VENDOR_RETAINED_FILES={len(retained)}')
+          print(f'VENDOR_RETAINED_BYTES={kept_bytes}')
+          print(f'CORE_RETAINED_FILES={len(core_keep)}')
+          print(f'MATH_RETAINED_FILES={len(retained) - len(core_keep)}')
+          PY
+          git add --all -- vendor-staging/ckeditor5 vendor-staging/ckeditor5-math
+          git diff --cached --stat | tail -3
+      - name: Commit and push only deletions in the isolated branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --cached --quiet && { echo 'Nothing to prune'; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore(vendor): trim CKEditor snapshot to curated runtime source references'
+          git push origin "HEAD:refs/heads/chore/slim-ckeditor-vendor-staging-2026-11-02"
