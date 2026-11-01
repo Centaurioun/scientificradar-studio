@@ -1,0 +1,47 @@
+# Temporary, non-deploying test of the Next.js 16 development server.
+name: ONE-TIME Next16 dev server smoke
+on:
+  push:
+    branches: [experiment/dependency-upgrade-2026-11-01]
+permissions:
+  contents: read
+jobs:
+  isolated-dev-server:
+    if: github.repository == 'Centaurioun/scientificradar-studio' && github.ref == 'refs/heads/experiment/dependency-upgrade-2026-11-01'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      CI: 'true'
+      NEXT_TELEMETRY_DISABLED: '1'
+      DISABLE_HMR: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: experiment/dependency-upgrade-2026-11-01
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 26.13.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.0
+      - name: Install locked dependency graph
+        run: bun install --frozen-lockfile
+      - name: Boot isolated Next16 Webpack dev and GET /dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun run dev -- --hostname 127.0.0.1 --port 4182 > /tmp/scientificradar-next16-dev.log 2>&1 &
+          PID=$!
+          trap 'kill "$PID" 2>/dev/null || true' EXIT
+          OK=0
+          for i in $(seq 1 90); do
+            CODE=$(curl --silent --max-time 3 --output /tmp/dashboard-response --write-out '%{http_code}' http://127.0.0.1:4182/dashboard || true)
+            if [ "$CODE" = "200" ]; then OK=1; break; fi
+            if ! kill -0 "$PID" 2>/dev/null; then break; fi
+            sleep 2
+          done
+          cat /tmp/scientificradar-next16-dev.log
+          test "$OK" = "1"
+          grep -Eq 'ScientificRadar|Dashboard|Studio' /tmp/dashboard-response
+          echo 'NEXT16_WEBPACK_DEV_SMOKE_PASS'
