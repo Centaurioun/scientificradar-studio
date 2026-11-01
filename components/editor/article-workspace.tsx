@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import {
   Save,
@@ -1678,10 +1679,16 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                     {featuredMedia && (
                       <div className="space-y-3 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
                         <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-950 p-2 dark:border-slate-800">
-                          <img
+                          <Image
                             src={featuredMedia.src}
                             alt={featuredMedia.altText || featuredMedia.title}
-                            className="mx-auto max-h-40 w-auto object-contain"
+                            width={640}
+                            height={360}
+                            // Local data URLs and editorial previews should bypass the
+                            // Next optimization proxy. Public article images use their
+                            // own separately configured optimized delivery path.
+                            unoptimized
+                            className="mx-auto h-auto max-h-40 w-auto object-contain"
                           />
                         </div>
 
