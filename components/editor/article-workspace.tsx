@@ -380,14 +380,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
     [persistArticleDraft, currentDraftArticle]
   );
 
-  // Debounced verified autosave when dirty
+  // Debounced verified autosave when dirty (paused while inspecting/restoring revision history)
   useEffect(() => {
-    if (saveState !== 'dirty') return;
+    if (saveState !== 'dirty' || restoringRevisionId !== null || inspectorTab === 'revisions') return;
     const timer = setTimeout(() => {
       void performSave(false);
     }, 950);
     return () => clearTimeout(timer);
-  }, [saveState, performSave]);
+  }, [saveState, performSave, restoringRevisionId, inspectorTab]);
 
   const handleManualSave = async (createRevision: boolean) => {
     await performSave(

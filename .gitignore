@@ -7,3 +7,7 @@ test-results/
 *.log
 .env*
 !.env.example
+.aistudio/
+.playwright-cli/
+*.tsbuildinfo
+

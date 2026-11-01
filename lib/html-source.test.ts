@@ -70,10 +70,23 @@ test('validateAndRenderLatex validates balanced LaTeX and rejects unbalanced bra
 });
 
 test('formatEditorialHtmlSource indents block tags while preserving preformatted blocks intact (SRS-HTML-002)', () => {
-  const input = '<h2>Section</h2><p>First paragraph</p><pre><code>const x = 1;\n  const y = 2;</code></pre>';
+  const input =
+    '<h2>Section</h2><p>First paragraph</p><pre><code>function decodeSyndrome(matrix) {\n  if (!matrix) {\n    return [];\n  }\n  return matrix.map((row) => row.join(" "));\n}</code></pre><p>After code</p>';
   const formatted = formatEditorialHtmlSource(input);
   assert.match(formatted, /<h2>Section<\/h2>\n<p>First paragraph<\/p>/);
-  assert.match(formatted, /const x = 1;\n  const y = 2;/);
+  assert.match(
+    formatted,
+    /<pre><code>function decodeSyndrome\(matrix\) \{\n  if \(!matrix\) \{\n    return \[\];\n  \}\n  return matrix\.map\(\(row\) => row\.join\(" "\)\);\n\}<\/code><\/pre>/
+  );
+});
+
+test('validateAndAnalyzeHtmlSource warns on stripped scientific constructs with SCIENTIFIC_NODE_LOSS', () => {
+  const untrustedFigureImg =
+    '<figure data-media-id="med-1"><img src="https://evil.example/untrusted.png" alt="Untrusted" /><figcaption>Caption</figcaption></figure>';
+  const res = validateAndAnalyzeHtmlSource(untrustedFigureImg, new Set(['/figures/trusted.svg']));
+  assert.equal(res.validSyntax, true);
+  assert.equal(res.requiresNormalizationConfirm, true);
+  assert.equal(res.diagnostics.some((d) => d.code === 'SCIENTIFIC_NODE_LOSS'), true);
 });
 
 test('cleanClipboardPasteHtml normalizes Google Docs wrapper, vertical-align super/sub spans, and text-align styles (SRS-ED-008)', () => {
@@ -86,3 +99,4 @@ test('cleanClipboardPasteHtml normalizes Google Docs wrapper, vertical-align sup
   assert.match(cleaned.html, /10<sup>-6<\/sup>/);
   assert.doesNotMatch(cleaned.html, /style=|docs-internal-guid/i);
 });
+

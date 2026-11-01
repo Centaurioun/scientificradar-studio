@@ -1,7 +1,9 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
+import { Extension } from '@tiptap/core';
+import { TextSelection } from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
 import LinkExtension from '@tiptap/extension-link';
 import Underline from '@tiptap/extension-underline';
@@ -37,6 +39,8 @@ import {
   Superscript as SuperscriptIcon,
   Subscript as SubscriptIcon,
   Omega,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import {
   convertMarkdownPasteToSafeHtml,
@@ -54,6 +58,7 @@ import {
   ScientificMathInlineNode,
   ScientificMathBlockNode,
   ScientificFigureNode,
+  ScientificTableCaptionNode,
   ScientificTableNode,
   ScientificTableRowNode,
   ScientificTableHeaderNode,
@@ -64,15 +69,41 @@ import {
   addTableRowToActiveTable,
   addTableColumnToActiveTable,
   deleteActiveTableRow,
+  deleteActiveTableColumn,
+  toggleTableHeaderRow,
+  getActiveTableCaption,
+  setActiveTableCaption,
   deleteActiveTable,
   isSelectionInsideTable,
+  exitBlockAtDocumentEnd,
   TextAlignValue,
 } from '@/lib/editor-extensions';
 import {
   formatEditorialHtmlSource,
   validateAndRenderLatex,
 } from '@/lib/html-source';
+import { analyzeManuscriptCitations } from '@/lib/citations';
 import { HtmlSourcePanel } from './html-source-panel';
+
+const CodeBlockKeyboardExtension = Extension.create({
+  name: 'codeBlockKeyboard',
+  addKeyboardShortcuts() {
+    return {
+      Tab: () => {
+        if (this.editor.isActive('codeBlock')) {
+          return this.editor.commands.insertContent('  ');
+        }
+        return false;
+      },
+      ArrowDown: () => {
+        if (this.editor.isActive('codeBlock')) {
+          return exitBlockAtDocumentEnd(this.editor, 'codeBlock');
+        }
+        return false;
+      },
+    };
+  },
+});
 
 const SCIENTIFIC_SYMBOLS: Array<{ symbol: string; name: string }> = [
   { symbol: '±', name: 'Plus-minus (±)' },
@@ -147,20 +178,28 @@ export function ArticleTiptapEditor({
   const [rawHtmlBuffer, setRawHtmlBuffer] = useState<string>(() =>
     formatEditorialHtmlSource(effectiveHtml)
   );
+  // Selection/transaction tick ensures contextual toolbar state (e.g. inTable, active marks) updates immediately
+  const [selectionTick, setSelectionTick] = useState(0);
+  const lastEmittedHtmlRef = useRef<string>('');
 
   const [linkBarOpen, setLinkBarOpen] = useState(false);
   const [linkUrlInput, setLinkUrlInput] = useState('');
   const [linkError, setLinkError] = useState<string | null>(null);
   const [pasteNotice, setPasteNotice] = useState<string | null>(null);
 
+  // Table caption editing state
+  const [tableCaptionOpen, setTableCaptionOpen] = useState(false);
+  const [tableCaptionInput, setTableCaptionInput] = useState('');
+
   // Special character popover state
   const [symbolMenuOpen, setSymbolMenuOpen] = useState(false);
 
-  // LaTeX Equation bar state
+  // LaTeX Equation bar state (supports both new insertion and clicking an existing equation to edit)
   const [equationBarOpen, setEquationBarOpen] = useState(false);
   const [equationTex, setEquationTex] = useState('\\mathcal{L}_{\\text{eff}} = \\frac{1}{2} \\partial_\\mu \\phi \\partial^\\mu \\phi');
   const [equationDisplay, setEquationDisplay] = useState<'inline' | 'block'>('inline');
   const [equationError, setEquationError] = useState<string | null>(null);
+  const [editingMathPos, setEditingMathPos] = useState<number | null>(null);
 
   // Citation popover state
   const [citationMenuOpen, setCitationMenuOpen] = useState(false);
@@ -169,6 +208,8 @@ export function ArticleTiptapEditor({
   const [findBarOpen, setFindBarOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
   const [replaceQuery, setReplaceQuery] = useState('');
+  const [findCaseSensitive, setFindCaseSensitive] = useState(false);
+  const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const [findStatus, setFindStatus] = useState<string | null>(null);
 
   const editor = useEditor({
@@ -182,6 +223,7 @@ export function ArticleTiptapEditor({
         link: false,
         underline: false,
       }),
+      CodeBlockKeyboardExtension,
       Underline,
       SuperscriptMark,
       SubscriptMark,
@@ -190,6 +232,7 @@ export function ArticleTiptapEditor({
       ScientificMathInlineNode,
       ScientificMathBlockNode,
       ScientificFigureNode,
+      ScientificTableCaptionNode,
       ScientificTableNode,
       ScientificTableRowNode,
       ScientificTableHeaderNode,
@@ -215,6 +258,22 @@ export function ArticleTiptapEditor({
         class:
           'prose prose-slate dark:prose-invert max-w-none min-h-[520px] px-6 py-5 focus:outline-none text-slate-800 dark:text-slate-100 leading-relaxed',
         'aria-label': 'Article body editor',
+      },
+      handleClickOn: (_view, _pos, node, nodePos) => {
+        if (
+          node.type.name === 'scientificMathInline' ||
+          node.type.name === 'scientificMathBlock'
+        ) {
+          setEditingMathPos(nodePos);
+          setEquationTex(String(node.attrs.tex || ''));
+          setEquationDisplay(
+            node.type.name === 'scientificMathBlock' ? 'block' : 'inline'
+          );
+          setEquationError(null);
+          setEquationBarOpen(true);
+          return true;
+        }
+        return false;
       },
       handlePaste: (_view, event) => {
         const htmlData = event.clipboardData?.getData('text/html') || '';
@@ -255,6 +314,12 @@ export function ArticleTiptapEditor({
         return false;
       },
     },
+    onSelectionUpdate: () => {
+      setSelectionTick((t) => t + 1);
+    },
+    onTransaction: () => {
+      setSelectionTick((t) => t + 1);
+    },
     onUpdate: ({ editor: ed }) => {
       const rawHtml = ed.getHTML();
       const sanitized = sanitizeAndDemoteBodyH1(rawHtml, trustedSources);
@@ -264,6 +329,7 @@ export function ArticleTiptapEditor({
         );
         onDemotedH1?.(sanitized.demotedH1Count);
       }
+      lastEmittedHtmlRef.current = sanitized.sanitizedHtml;
       onChange?.(
         sanitized.sanitizedHtml,
         ed.getJSON() as Record<string, unknown>,
@@ -273,19 +339,67 @@ export function ArticleTiptapEditor({
     },
   });
 
-  // Sync external content changes (e.g., version restore or assistant apply)
+  // Sync external content changes (e.g., version restore, quick-fix, or assistant apply) without length heuristics
   useEffect(() => {
     if (!editor) return;
-    const current = editor.getHTML();
+    const current = sanitizeAndDemoteBodyH1(editor.getHTML(), trustedSources).sanitizedHtml;
     const cleaned = sanitizeAndDemoteBodyH1(effectiveHtml, trustedSources).sanitizedHtml;
-    if (cleaned !== current && Math.abs(cleaned.length - current.length) > 4) {
+    if (cleaned !== lastEmittedHtmlRef.current && cleaned !== current) {
+      lastEmittedHtmlRef.current = cleaned;
       editor.commands.setContent(cleaned, { emitUpdate: false });
+      setSelectionTick((t) => t + 1);
     }
   }, [effectiveHtml, editor, trustedSources]);
 
-  // Insert figure queued by parent ArticleWorkspace Media Picker (`SRS-ED-007`)
+  // Synchronize inline citation numbering ([1], [2], [!1]) in document appearance order (SRS-SCI-001/002)
+  const citationAnalysis = React.useMemo(() => {
+    void selectionTick;
+    const html = editor ? editor.getHTML() : effectiveHtml;
+    return analyzeManuscriptCitations(html, availableSources);
+  }, [editor, effectiveHtml, availableSources, selectionTick]);
+
+  useEffect(() => {
+    if (!editor) return;
+    const { state, view } = editor;
+    const { tr } = state;
+    let mutated = false;
+    state.doc.descendants((node, pos) => {
+      if (node.type.name === 'scientificCitation') {
+        const sourceId = String(node.attrs.sourceId || '');
+        const resolved = citationAnalysis.occurrences.find((o) => o.sourceId === sourceId);
+        const expectedLabel = resolved
+          ? resolved.isOrphaned
+            ? `[!${resolved.number}]`
+            : `[${resolved.number}]`
+          : '[!1]';
+        if (node.attrs.label !== expectedLabel) {
+          tr.setNodeMarkup(pos, undefined, {
+            ...node.attrs,
+            label: expectedLabel,
+          });
+          mutated = true;
+        }
+      }
+      return true;
+    });
+    if (mutated) {
+      view.dispatch(tr);
+    }
+  }, [editor, citationAnalysis]);
+
+  // Insert figure queued by parent ArticleWorkspace Media Picker (`SRS-ED-007`, `SRS-MED-001/002`)
   useEffect(() => {
     if (!editor || !pendingFigureInsert) return;
+    const rightsSuffixParts = [
+      pendingFigureInsert.credit?.trim(),
+      pendingFigureInsert.licence?.trim(),
+    ].filter(Boolean);
+    const defaultCaption =
+      pendingFigureInsert.caption?.trim() ||
+      (rightsSuffixParts.length > 0
+        ? `${pendingFigureInsert.title} (${rightsSuffixParts.join(' · ')})`
+        : pendingFigureInsert.title);
+
     editor
       .chain()
       .focus()
@@ -294,13 +408,12 @@ export function ArticleTiptapEditor({
         attrs: {
           mediaId: pendingFigureInsert.id,
           layout: pendingFigureInsert.layout || 'locked',
+          credit: pendingFigureInsert.credit?.trim() || '',
+          licence: pendingFigureInsert.licence?.trim() || '',
+          sourceUrl: pendingFigureInsert.sourceUrl?.trim() || '',
           src: pendingFigureInsert.src,
           alt: pendingFigureInsert.altText || pendingFigureInsert.title,
-          caption:
-            pendingFigureInsert.caption ||
-            `${pendingFigureInsert.title} (${pendingFigureInsert.credit || 'ScientificRadar'} · ${
-              pendingFigureInsert.licence || 'CC BY 4.0'
-            })`,
+          caption: defaultCaption,
         },
       })
       .run();
@@ -350,31 +463,45 @@ export function ArticleTiptapEditor({
       setEquationError(check.error || 'Invalid LaTeX syntax.');
       return;
     }
-    if (equationDisplay === 'block') {
+    const cleanTex = equationTex.trim();
+    const targetType =
+      equationDisplay === 'block' ? 'scientificMathBlock' : 'scientificMathInline';
+
+    if (editingMathPos !== null) {
       editor
         .chain()
         .focus()
-        .insertContent({
-          type: 'scientificMathBlock',
-          attrs: { tex: equationTex.trim() },
+        .command(({ state, tr, dispatch }) => {
+          const existing = state.doc.nodeAt(editingMathPos);
+          const nodeType = state.schema.nodes[targetType];
+          if (!existing || !nodeType) return false;
+          const replacementNode = nodeType.create({ tex: cleanTex });
+          tr.replaceWith(editingMathPos, editingMathPos + existing.nodeSize, replacementNode);
+          if (dispatch) dispatch(tr.scrollIntoView());
+          return true;
         })
         .run();
-    } else {
-      editor
-        .chain()
-        .focus()
-        .insertContent({
-          type: 'scientificMathInline',
-          attrs: { tex: equationTex.trim() },
-        })
-        .run();
+      setEditingMathPos(null);
+      setEquationBarOpen(false);
+      return;
     }
+
+    editor
+      .chain()
+      .focus()
+      .insertContent({
+        type: targetType,
+        attrs: { tex: cleanTex },
+      })
+      .run();
     setEquationBarOpen(false);
-  }, [editor, equationTex, equationDisplay]);
+  }, [editor, equationTex, equationDisplay, editingMathPos]);
 
   const handleInsertCitation = useCallback(
-    (source: ScientificSource, index: number) => {
+    (source: ScientificSource) => {
       if (!editor) return;
+      const existingNum = citationAnalysis.numberBySourceId.get(source.id);
+      const nextNum = existingNum ?? citationAnalysis.orderedCitations.length + 1;
       editor
         .chain()
         .focus()
@@ -382,35 +509,62 @@ export function ArticleTiptapEditor({
           type: 'scientificCitation',
           attrs: {
             sourceId: source.id,
-            label: `[${index + 1}]`,
+            label: `[${nextNum}]`,
           },
         })
         .run();
       setCitationMenuOpen(false);
     },
-    [editor]
+    [editor, citationAnalysis]
   );
 
-  // Count matches in manuscript text nodes for Find & Replace (`SRS-ED-009`)
-  const findMatchesCount = React.useMemo(() => {
-    if (!editor || !findQuery.trim()) return 0;
-    const needle = findQuery;
-    let count = 0;
-    editor.state.doc.descendants((node) => {
+  // Compute all matches in manuscript text nodes for Find & Replace (`SRS-ED-009`)
+  const findMatches = React.useMemo(() => {
+    void selectionTick;
+    if (!editor || !findQuery) return [] as Array<{ from: number; to: number }>;
+    const needle = findCaseSensitive ? findQuery : findQuery.toLowerCase();
+    if (!needle) return [] as Array<{ from: number; to: number }>;
+    const matches: Array<{ from: number; to: number }> = [];
+    editor.state.doc.descendants((node, pos) => {
       if (node.isText && node.text) {
-        let idx = node.text.indexOf(needle);
+        const haystack = findCaseSensitive ? node.text : node.text.toLowerCase();
+        let idx = haystack.indexOf(needle);
         while (idx !== -1) {
-          count += 1;
-          idx = node.text.indexOf(needle, idx + needle.length);
+          matches.push({
+            from: pos + idx,
+            to: pos + idx + needle.length,
+          });
+          idx = haystack.indexOf(needle, idx + needle.length);
         }
       }
+      return true;
     });
-    return count;
-  }, [editor, findQuery]);
+    return matches;
+  }, [editor, findQuery, findCaseSensitive, selectionTick]);
+
+  const findMatchesCount = findMatches.length;
+  const safeMatchIndex =
+    findMatchesCount > 0 ? ((activeMatchIndex % findMatchesCount) + findMatchesCount) % findMatchesCount : 0;
+
+  const focusMatchAtIndex = useCallback(
+    (targetIdx: number) => {
+      if (!editor || findMatches.length === 0) return;
+      const normalized =
+        ((targetIdx % findMatches.length) + findMatches.length) % findMatches.length;
+      const match = findMatches[normalized];
+      setActiveMatchIndex(normalized);
+      const { state, view } = editor;
+      const tr = state.tr.setSelection(
+        TextSelection.create(state.doc, match.from, match.to)
+      );
+      view.dispatch(tr.scrollIntoView());
+    },
+    [editor, findMatches]
+  );
 
   const handleReplaceMatches = useCallback(
     (replaceAll: boolean) => {
-      if (!editor || !findQuery) return;
+      if (!editor || !findQuery || findMatches.length === 0) return;
       const needle = findQuery;
       const replacement = replaceQuery;
       let replacedCount = 0;
@@ -418,25 +572,10 @@ export function ArticleTiptapEditor({
       editor
         .chain()
         .focus()
-        .command(({ state, tr, dispatch }) => {
-          const matches: Array<{ from: number; to: number }> = [];
-          state.doc.descendants((node, pos) => {
-            if (node.isText && node.text) {
-              let idx = node.text.indexOf(needle);
-              while (idx !== -1) {
-                matches.push({
-                  from: pos + idx,
-                  to: pos + idx + needle.length,
-                });
-                if (!replaceAll) return false;
-                idx = node.text.indexOf(needle, idx + needle.length);
-              }
-            }
-            return true;
-          });
-
-          if (matches.length === 0) return false;
-          const targets = replaceAll ? [...matches].reverse() : [matches[0]];
+        .command(({ tr, dispatch }) => {
+          const targets = replaceAll
+            ? [...findMatches].reverse()
+            : [findMatches[safeMatchIndex]];
           for (const m of targets) {
             if (replacement) {
               tr.insertText(replacement, m.from, m.to);
@@ -445,7 +584,7 @@ export function ArticleTiptapEditor({
             }
             replacedCount += 1;
           }
-          if (dispatch) dispatch(tr);
+          if (dispatch) dispatch(tr.scrollIntoView());
           return true;
         })
         .run();
@@ -456,7 +595,7 @@ export function ArticleTiptapEditor({
           : `No occurrences of "${needle}" found.`
       );
     },
-    [editor, findQuery, replaceQuery]
+    [editor, findQuery, replaceQuery, findMatches, safeMatchIndex]
   );
 
   if (!editor) {
@@ -523,6 +662,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
             aria-label="Heading 2"
             aria-pressed={editor.isActive('heading', { level: 2 })}
@@ -538,6 +678,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
             aria-label="Heading 3"
             aria-pressed={editor.isActive('heading', { level: 3 })}
@@ -556,6 +697,7 @@ export function ArticleTiptapEditor({
           {/* Inline Marks: Bold, Italic, Underline, Strikethrough, Superscript, Subscript, Inline Code */}
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleBold().run()}
             aria-label="Bold"
             aria-pressed={editor.isActive('bold')}
@@ -571,6 +713,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleItalic().run()}
             aria-label="Italic"
             aria-pressed={editor.isActive('italic')}
@@ -586,6 +729,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleUnderline().run()}
             aria-label="Underline"
             aria-pressed={editor.isActive('underline')}
@@ -601,6 +745,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleStrike().run()}
             aria-label="Strikethrough"
             aria-pressed={editor.isActive('strike')}
@@ -616,6 +761,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleMark('superscript').run()}
             aria-label="Superscript"
             aria-pressed={editor.isActive('superscript')}
@@ -631,6 +777,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleMark('subscript').run()}
             aria-label="Subscript"
             aria-pressed={editor.isActive('subscript')}
@@ -646,6 +793,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleCode().run()}
             aria-label="Inline Code"
             aria-pressed={editor.isActive('code')}
@@ -661,6 +809,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().unsetAllMarks().run()}
             aria-label="Clear Formatting"
             title="Clear inline formatting on selection"
@@ -683,6 +832,7 @@ export function ArticleTiptapEditor({
             <button
               key={align}
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => setBlockTextAlign(editor, align)}
               aria-label={label}
               aria-pressed={activeAlign === align}
@@ -702,6 +852,7 @@ export function ArticleTiptapEditor({
           {/* Lists, Blockquote, Code Block, Horizontal Rule */}
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleBulletList().run()}
             aria-label="Bullet List"
             aria-pressed={editor.isActive('bulletList')}
@@ -717,6 +868,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleOrderedList().run()}
             aria-label="Numbered List"
             aria-pressed={editor.isActive('orderedList')}
@@ -732,6 +884,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleBlockquote().run()}
             aria-label="Blockquote"
             aria-pressed={editor.isActive('blockquote')}
@@ -747,6 +900,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleCodeBlock().run()}
             aria-label="Code Block"
             aria-pressed={editor.isActive('codeBlock')}
@@ -762,6 +916,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().setHorizontalRule().run()}
             aria-label="Insert Horizontal Rule"
             title="Insert Section Divider (<hr>)"
@@ -775,6 +930,7 @@ export function ArticleTiptapEditor({
           {/* Link, Symbol, Table, Equation, Citation, Figure */}
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               const prev = editor.getAttributes('link').href || '';
               setLinkUrlInput(prev);
@@ -795,6 +951,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => setSymbolMenuOpen((v) => !v)}
             aria-label="Insert Scientific Symbol"
             aria-pressed={symbolMenuOpen}
@@ -811,9 +968,10 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => insertScientificTable(editor, 3, 3)}
             aria-label="Insert Scientific Table"
-            title="Insert 3×3 Scientific Data Table"
+            title="Insert 3×3 Empty Scientific Data Table"
             className="px-2 py-1 rounded text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800 flex items-center gap-1"
           >
             <TableIcon className="w-3.5 h-3.5" />
@@ -822,13 +980,35 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               setEquationError(null);
-              setEquationBarOpen((v) => !v);
+              if (equationBarOpen) {
+                setEquationBarOpen(false);
+                setEditingMathPos(null);
+              } else {
+                // Check if selection is currently on an existing math node
+                const { from } = editor.state.selection;
+                const selectedNode = editor.state.doc.nodeAt(from);
+                if (
+                  selectedNode &&
+                  (selectedNode.type.name === 'scientificMathInline' ||
+                    selectedNode.type.name === 'scientificMathBlock')
+                ) {
+                  setEditingMathPos(from);
+                  setEquationTex(String(selectedNode.attrs.tex || ''));
+                  setEquationDisplay(
+                    selectedNode.type.name === 'scientificMathBlock' ? 'block' : 'inline'
+                  );
+                } else {
+                  setEditingMathPos(null);
+                }
+                setEquationBarOpen(true);
+              }
             }}
             aria-label="Insert LaTeX Equation"
             aria-pressed={equationBarOpen}
-            title="Insert Inline or Block LaTeX Equation"
+            title="Insert or Edit Inline/Block LaTeX Equation"
             className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 transition-colors ${
               equationBarOpen
                 ? 'bg-[#087f83] text-white'
@@ -841,6 +1021,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => setCitationMenuOpen((v) => !v)}
             aria-label="Insert Citation"
             aria-pressed={citationMenuOpen}
@@ -858,6 +1039,7 @@ export function ArticleTiptapEditor({
           {onRequestMediaInsert && (
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={onRequestMediaInsert}
               aria-label="Insert Scientific Figure"
               title="Insert Scientific Figure from Media Library (Default Locked Contain)"
@@ -870,6 +1052,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => setFindBarOpen((v) => !v)}
             aria-label="Find and Replace"
             aria-pressed={findBarOpen}
@@ -887,6 +1070,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().undo().run()}
             disabled={!editor.can().undo()}
             aria-label="Undo"
@@ -898,6 +1082,7 @@ export function ArticleTiptapEditor({
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().redo().run()}
             disabled={!editor.can().redo()}
             aria-label="Redo"
@@ -959,41 +1144,124 @@ export function ArticleTiptapEditor({
         <div
           role="region"
           aria-label="Table structure controls"
-          className="px-4 py-1.5 bg-indigo-50/80 dark:bg-indigo-950/30 border-b border-indigo-200 dark:border-indigo-900/60 flex flex-wrap items-center justify-between gap-2 text-xs"
+          className="px-4 py-1.5 bg-indigo-50/80 dark:bg-indigo-950/30 border-b border-indigo-200 dark:border-indigo-900/60 flex flex-col gap-2 text-xs"
         >
-          <span className="font-semibold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
-            <TableIcon className="w-3.5 h-3.5" />
-            <span>Scientific Table Active</span>
-          </span>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => addTableRowToActiveTable(editor)}
-              className="px-2 py-0.5 rounded border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-indigo-800 dark:text-indigo-200 font-medium"
-            >
-              + Add Row
-            </button>
-            <button
-              type="button"
-              onClick={() => addTableColumnToActiveTable(editor)}
-              className="px-2 py-0.5 rounded border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-indigo-800 dark:text-indigo-200 font-medium"
-            >
-              + Add Column
-            </button>
-            <button
-              type="button"
-              onClick={() => deleteActiveTableRow(editor)}
-              className="px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300"
-            >
-              Delete Row
-            </button>
-            <button
-              type="button"
-              onClick={() => deleteActiveTable(editor)}
-              className="px-2 py-0.5 rounded border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300"
-            >
-              Delete Table
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-semibold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+              <TableIcon className="w-3.5 h-3.5" />
+              <span>Scientific Table Active</span>
+            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => addTableRowToActiveTable(editor)}
+                className="px-2 py-0.5 rounded border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-indigo-800 dark:text-indigo-200 font-medium"
+              >
+                + Add Row
+              </button>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => addTableColumnToActiveTable(editor)}
+                className="px-2 py-0.5 rounded border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-indigo-800 dark:text-indigo-200 font-medium"
+              >
+                + Add Column
+              </button>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => deleteActiveTableRow(editor)}
+                className="px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300"
+              >
+                Delete Row
+              </button>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => deleteActiveTableColumn(editor)}
+                className="px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300"
+              >
+                Delete Column
+              </button>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => toggleTableHeaderRow(editor)}
+                className="px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300"
+              >
+                Toggle Header Row
+              </button>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setTableCaptionInput(getActiveTableCaption(editor));
+                  setTableCaptionOpen((v) => !v);
+                }}
+                className="px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300"
+              >
+                Table Caption
+              </button>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => deleteActiveTable(editor)}
+                className="px-2 py-0.5 rounded border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300"
+              >
+                Delete Table
+              </button>
+            </div>
+          </div>
+          {tableCaptionOpen && (
+            <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-indigo-200/70 dark:border-indigo-900/50">
+              <input
+                type="text"
+                aria-label="Table caption text"
+                value={tableCaptionInput}
+                onChange={(e) => setTableCaptionInput(e.target.value)}
+                placeholder="Table 1: Experimental measurements and confidence intervals..."
+                className="flex-1 min-w-[220px] px-2.5 py-1 rounded border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-950 text-xs"
+              />
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setActiveTableCaption(editor, tableCaptionInput);
+                  setTableCaptionOpen(false);
+                }}
+                className="px-2.5 py-1 rounded bg-[#087f83] text-white font-semibold"
+              >
+                Apply Caption
+              </button>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setTableCaptionOpen(false)}
+                className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Orphaned Citation Warning Banner (SRS-SCI-001/002) */}
+      {editorMode === 'visual' && citationAnalysis.orphanedSourceIds.length > 0 && (
+        <div
+          role="alert"
+          data-testid="orphaned-citation-warning"
+          className="px-4 py-2 bg-rose-50 dark:bg-rose-950/40 border-b border-rose-200 dark:border-rose-800/70 flex items-center justify-between gap-2 text-xs text-rose-900 dark:text-rose-200"
+        >
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+            <span>
+              <strong>Orphaned inline citation(s) detected:</strong>{' '}
+              {citationAnalysis.orphanedSourceIds.map((id) => `"${id}"`).join(', ')} is cited in the
+              manuscript body but is no longer attached in the Article Sources list. Re-attach the
+              source or remove the <code className="font-mono">[!N]</code> marker before publishing.
+            </span>
           </div>
         </div>
       )}
@@ -1022,6 +1290,7 @@ export function ArticleTiptapEditor({
               <button
                 key={item.symbol}
                 type="button"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => handleInsertSymbol(item.symbol)}
                 title={item.name}
                 aria-label={`Insert symbol ${item.name}`}
@@ -1044,7 +1313,11 @@ export function ArticleTiptapEditor({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
               <Sigma className="w-4 h-4 text-[#087f83]" />
-              <span>Insert Scientific LaTeX Equation (Canonical TeX Preserved)</span>
+              <span>
+                {editingMathPos !== null
+                  ? 'Edit Scientific LaTeX Equation (Canonical TeX Preserved)'
+                  : 'Insert Scientific LaTeX Equation (Canonical TeX Preserved)'}
+              </span>
             </span>
             <div className="flex items-center gap-2">
               <label className="inline-flex items-center gap-1 cursor-pointer">
@@ -1083,29 +1356,32 @@ export function ArticleTiptapEditor({
             <button
               type="button"
               onClick={handleInsertEquation}
-              aria-label="Insert Equation"
+              aria-label={editingMathPos !== null ? 'Update Equation' : 'Insert Equation'}
               className="px-3 py-1.5 rounded bg-[#087f83] hover:bg-[#086b70] text-white font-semibold"
             >
-              Insert Equation
+              {editingMathPos !== null ? 'Update Equation' : 'Insert Equation'}
             </button>
             <button
               type="button"
-              onClick={() => setEquationBarOpen(false)}
+              onClick={() => {
+                setEditingMathPos(null);
+                setEquationError(null);
+                setEquationBarOpen(false);
+              }}
               className="px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700"
             >
               Cancel
             </button>
           </div>
 
-          <div className="p-2 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
-            <span className="text-[11px] text-slate-500">Rendered Preview:</span>
+          <div className="p-2.5 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 overflow-x-auto">
+            <span className="text-[11px] text-slate-500 shrink-0">Rendered 2D Preview:</span>
             {latexPreview.valid ? (
               <span
                 className="font-serif text-sm text-slate-900 dark:text-slate-100"
                 data-testid="latex-live-preview"
-              >
-                {latexPreview.renderedText}
-              </span>
+                dangerouslySetInnerHTML={{ __html: latexPreview.renderedHtml }}
+              />
             ) : (
               <span className="text-red-600 dark:text-red-400 font-medium">
                 {latexPreview.error}
@@ -1130,7 +1406,7 @@ export function ArticleTiptapEditor({
         >
           <div className="flex items-center justify-between">
             <span className="font-semibold text-slate-700 dark:text-slate-200">
-              Insert Inline Citation Linked to Article Sources
+              Insert Inline Citation Linked to Article Sources (Numbered by Appearance Order)
             </span>
             <button
               type="button"
@@ -1147,31 +1423,35 @@ export function ArticleTiptapEditor({
             </p>
           ) : (
             <div className="flex flex-col gap-1.5">
-              {availableSources.map((src, idx) => (
-                <button
-                  key={src.id}
-                  type="button"
-                  onClick={() => handleInsertCitation(src, idx)}
-                  className="text-left px-2.5 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-[#087f83] flex items-center justify-between gap-2"
-                >
-                  <span className="truncate">
-                    <strong className="font-mono text-[#087f83] dark:text-teal-400 mr-1.5">
-                      [{idx + 1}]
-                    </strong>
-                    <span className="font-medium text-slate-900 dark:text-slate-100">
-                      {src.title}
-                    </span>{' '}
-                    <span className="text-slate-500">
-                      ({src.authors}, {src.year})
+              {availableSources.map((src, idx) => {
+                const assignedNum = citationAnalysis.numberBySourceId.get(src.id);
+                return (
+                  <button
+                    key={src.id}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => handleInsertCitation(src)}
+                    className="text-left px-2.5 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-[#087f83] flex items-center justify-between gap-2"
+                  >
+                    <span className="truncate">
+                      <strong className="font-mono text-[#087f83] dark:text-teal-400 mr-1.5">
+                        {assignedNum ? `[${assignedNum}]` : `[Ref ${idx + 1}]`}
+                      </strong>
+                      <span className="font-medium text-slate-900 dark:text-slate-100">
+                        {src.title}
+                      </span>{' '}
+                      <span className="text-slate-500">
+                        ({src.authors}, {src.year})
+                      </span>
                     </span>
-                  </span>
-                  {src.doi && (
-                    <span className="font-mono text-[10px] text-slate-500 shrink-0">
-                      DOI: {src.doi}
-                    </span>
-                  )}
-                </button>
-              ))}
+                    {src.doi && (
+                      <span className="font-mono text-[10px] text-slate-500 shrink-0">
+                        DOI: {src.doi}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
@@ -1190,6 +1470,7 @@ export function ArticleTiptapEditor({
             value={findQuery}
             onChange={(e) => {
               setFindQuery(e.target.value);
+              setActiveMatchIndex(0);
               setFindStatus(null);
             }}
             placeholder="Find in manuscript..."
@@ -1203,9 +1484,47 @@ export function ArticleTiptapEditor({
             placeholder="Replace with..."
             className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
           />
-          <span className="font-mono text-[11px] text-slate-600 dark:text-slate-400">
-            {findQuery ? `${findMatchesCount} match(es)` : 'Enter search term'}
+          <label className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={findCaseSensitive}
+              onChange={(e) => {
+                setFindCaseSensitive(e.target.checked);
+                setActiveMatchIndex(0);
+              }}
+            />
+            <span>Match case</span>
+          </label>
+          <span
+            data-testid="find-match-counter"
+            className="font-mono text-[11px] text-slate-600 dark:text-slate-400"
+          >
+            {findQuery
+              ? findMatchesCount > 0
+                ? `${safeMatchIndex + 1} of ${findMatchesCount} match(es)`
+                : '0 matches'
+              : 'Enter search term'}
           </span>
+          <button
+            type="button"
+            disabled={findMatchesCount === 0}
+            aria-label="Find Previous"
+            onClick={() => focusMatchAtIndex(safeMatchIndex - 1)}
+            className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-medium disabled:opacity-40 flex items-center gap-0.5"
+          >
+            <ChevronUp className="w-3.5 h-3.5" />
+            <span>Prev</span>
+          </button>
+          <button
+            type="button"
+            disabled={findMatchesCount === 0}
+            aria-label="Find Next"
+            onClick={() => focusMatchAtIndex(safeMatchIndex + 1)}
+            className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-medium disabled:opacity-40 flex items-center gap-0.5"
+          >
+            <ChevronDown className="w-3.5 h-3.5" />
+            <span>Next</span>
+          </button>
           <button
             type="button"
             disabled={findMatchesCount === 0}
@@ -1316,6 +1635,7 @@ export function ArticleTiptapEditor({
           rawBuffer={rawHtmlBuffer}
           onChangeRawBuffer={setRawHtmlBuffer}
           onApplyValidatedHtml={(sanitizedHtml, demotedH1Count, summaryNote) => {
+            lastEmittedHtmlRef.current = sanitizedHtml;
             editor.commands.setContent(sanitizedHtml, { emitUpdate: false });
             setRawHtmlBuffer(formatEditorialHtmlSource(sanitizedHtml));
             if (demotedH1Count > 0) {
@@ -1343,3 +1663,4 @@ export function ArticleTiptapEditor({
     </div>
   );
 }
+

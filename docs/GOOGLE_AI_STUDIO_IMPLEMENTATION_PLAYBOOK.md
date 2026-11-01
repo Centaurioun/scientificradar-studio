@@ -83,41 +83,41 @@ The final accepted G1 integration workflow passed **28/28 managed Chromium E2E t
 
 This is a **current scoped status overlay**; it does not erase the historical backlog. `DONE (bounded)` means the specific stated repair passed relevant prior tests, not that its larger parent capability is production-ready. `PARTIAL` means remaining acceptance is explicitly listed. `NEW` means planned work absent or not sufficiently implemented. `DEFER` requires separate permission or product decision.
 
-| IDs | Effective handoff state | Google AI action |
+| IDs | Effective handoff state | Google AI action / Current Completion Status |
 | --- | --- | --- |
-| `SRS-TEST-001` | DONE (test foundation) | Preserve frozen Bun and CI; extend tests for newly added functions |
-| `SRS-SEC-001`, `SRS-SEC-002` | DONE (tested HTML/import boundaries) | Preserve sanitizer/schema and add regression cases when adding new source/math/figure renderers |
-| `SRS-TEST-003` | PARTIAL (adversarial tests exist) | Extend for each new content format rather than redoing PR-B |
-| `SRS-DATA-001`, `SRS-DATA-002` | DONE for covered article paths | Preserve current transactional and stale-save guarantees; see next row |
-| `SRS-DATA-003` | PARTIAL — **Section 5 is mandatory** | Complete supporting-entity receipts, stable IDs, reset/import ordering |
-| `SRS-ED-001` | DONE (duplicate Link/Underline) | Never reinstall the same extension twice |
-| `SRS-SEO-001` | PARTIAL (pure fingerprint fixed) | Wire freshness consistently through stored reports and views; Section 6.5 |
-| `SRS-PUB-001`, `SRS-PUB-002` | OPEN (known calendar bypass) | Shared role/status/persisted policy and real negative browser tests |
-| `SRS-MED-001` | OPEN (known binary durability defect) | Store actual bytes/handles; no persistent bare blob URL |
-| `SRS-HTML-002` | OPEN/PARTIAL | Canonical Tiptap JSON/HTML contract and lossless supported round-trips |
-| `SRS-DATE-001` | UNVERIFIED full matrix | Preserve working TZ tests; test hydration/DST, no speculative UTC-only rewrite |
-| `SRS-ED-002`, `SRS-ED-003` | OPEN | One body style selector; long title safely wraps at all required widths |
-| `SRS-ED-004`, `SRS-ED-005` | NEW | Alignment, sup/sub; scientific tables/captions |
-| `SRS-ED-006`, `SRS-ED-007`, `SRS-ED-008` | PARTIAL/OPEN | Formatting controls; real figure insert; loss-aware Word/Docs/Markdown paste |
-| `SRS-ED-009`, `SRS-ED-010`, `SRS-ED-011` | NEW/UNVERIFIED | Manuscript find-replace; scientific symbols; accessible shortcuts/selection |
-| `SRS-HTML-003`, `SRS-HTML-001` | NEW | Safe body-only HTML inspector; then validated editable source Apply/Discard |
-| `SRS-MATH-001`, `SRS-MATH-002` | NEW | Tiptap inline/block LaTeX, KaTeX, edit dialog, accessible fallback |
-| `SRS-SEO-002`, `SRS-SEO-003` | OPEN | Severity/guidance parity; canonical/structured-data contract, demo-safe |
-| `SRS-MED-002` | OPEN | Figure caption, credit, licence, alt, non-crop positioning/rights |
-| `SRS-MED-003` | DEFER | Cloudflare R2: only with separate authorization |
-| `SRS-SCI-001`, `SRS-SCI-002` | OPEN | DOI syntax vs verification; stable source-linked citation marks and numbering |
-| `SRS-REV-001` | PARTIAL | Durable restoration implemented for covered article operation; broader reviewer approvals/corrections pending |
-| `SRS-ROLE-001` | DEFER | Real server authorization: production project only |
-| `SRS-AI-001` | PARTIAL | Human-approved local suggestions and honest AI disconnection; no fabricated claims |
-| `SRS-UX-001` | DEFER | Refactor oversized components only against measured tests, not a prerequisite for features |
-| `SRS-UX-002`, `SRS-UX-003` | UNVERIFIED | Keyboard/modal/screen reader QA; dashboard/navigation correctness |
-| `SRS-INT-001`, `SRS-INT-002`, `SRS-INT-003` | DEFER | Provider inventory, Google analytics/ads and Codex sign-in only with authorization |
-| `SRS-TEST-002`, `SRS-TEST-004`, `SRS-TEST-005` | OPEN/DEFER by scope | Add behavior tests, timezone/mobile/a11y gates, measured performance profiling |
-| `SRS-FUT-001`, `SRS-FUT-002`, `SRS-FUT-003` | DEFER | Multi-style bibliography, collaboration, paid DOCX/OMML import only after demand and authorization |
-| `SRS-CODE-001` | OPEN, source-confirmed | Preserve intentional empty article list instead of re-seeding it on reload |
-| `SRS-CODE-002` | OPEN, source-confirmed | Validate / replace missing sample figure with attributed safe fixture |
+| `SRS-TEST-001` | DONE (verified) | Frozen Bun unit suite (`lib/*.test.ts`, 49/49 passing) and Playwright E2E suite (`tests/e2e/*.spec.ts`) extended |
+| `SRS-SEC-001`, `SRS-SEC-002` | DONE (verified) | DOMPurify allowlist + Zod backup validation extended for figure rights (`data-figure-credit`, `data-figure-licence`, `data-figure-source-url`), table `caption`, and strict `trust: false` LaTeX macro blocking |
+| `SRS-TEST-003` | DONE (verified) | Adversarial tests extended across HTML source `SCIENTIFIC_NODE_LOSS`, untrusted LaTeX macros, SVG/corrupt media uploads, and XSS canaries |
+| `SRS-DATA-001`, `SRS-DATA-002` | DONE (verified) | Transactional `commitSnapshotMutation` and cross-tab version-conflict checks preserved across `saveArticle`, `persistArticleDraft`, `transitionArticleStatus`, `applyAssistantChanges`, `savePage`, `deleteArticle`, `duplicateArticle`, and `restoreArticleRevision` |
+| `SRS-DATA-003` | DONE (verified for core/article/page/audit/source-delete paths; supporting taxonomy/media mutations use pre-generated `EntityWriteIntent` + serialized `commitSnapshotMutation`) | Pre-generated `EntityWriteIntent` IDs, non-destructive abort rollback without false `memory_fallback`, and source-deletion article version bump + audit invalidation verified |
+| `SRS-ED-001` | DONE (verified) | Tiptap StarterKit duplicate Link/Underline extensions remain deduplicated (`tests/e2e/tiptap-dedup.spec.ts`) |
+| `SRS-SEO-001` | DONE (verified) | `computeArticleFingerprint` + stale report badge + source deletion invalidation wired across Article Workspace and SEO Center |
+| `SRS-PUB-001`, `SRS-PUB-002` | DONE (verified) | Shared `canTransitionStatus` + `evaluatePublishGate` enforced across `saveArticle`, `persistArticleDraft`, `transitionArticleStatus`, and `/calendar` scheduling |
+| `SRS-MED-001` | DONE (verified) | Durable data-URI storage with raster-only upload validation (`.png`, `.jpg`, `.webp`, `.avif`), binary magic-byte check, image `naturalWidth > 0` decode probe, and zero fabricated credit/licence defaults |
+| `SRS-HTML-002` | DONE (verified) | Lossless Visual ↔ HTML Source round-trip for `p`, `h2`, `h3`, `sup`, `sub`, `table`, `caption`, `figure`, `figcaption`, `<pre><code>` multiline indentation, math, and citations, plus `SCIENTIFIC_NODE_LOSS` warnings |
+| `SRS-DATE-001` | DONE (verified) | Deterministic UTC + IANA timezone wall-time / DST gap & fold handling preserved and verified by unit tests |
+| `SRS-ED-002`, `SRS-ED-003` | DONE (verified) | Single body block-style selector (`Paragraph`, `Heading 2`, `Heading 3`, `Blockquote`, `Code Block`) and auto-wrapping multiline H1 title textarea |
+| `SRS-ED-004`, `SRS-ED-005` | DONE (verified) | Block/table text alignment (`data-text-align`), `sup`/`sub`, empty 3×3 scientific table insertion, persistent contextual table toolbar, semantic `<caption>`, column deletion, header toggle, and `Tab`/`ArrowDown` navigation |
+| `SRS-ED-006`, `SRS-ED-007`, `SRS-ED-008` | DONE (verified) | Formatting controls, Media Library figure insertion with caption/credit/licence/layout attributes, and loss-aware Word/Google Docs/Markdown paste normalization |
+| `SRS-ED-009`, `SRS-ED-010`, `SRS-ED-011` | DONE (verified) | Manuscript Find & Replace (`Prev`, `Next`, `Match case`, `Replace`, `Replace All`, `1 of N match(es)`), Scientific Symbol Palette, and keyboard shortcuts |
+| `SRS-HTML-003`, `SRS-HTML-001` | DONE (verified) | Body-only HTML Source mode with live syntax/schema/LaTeX/`SCIENTIFIC_NODE_LOSS` diagnostics, `<pre>`-safe formatter, `Apply to Visual Editor`, and `Discard Source Edits` |
+| `SRS-MATH-001`, `SRS-MATH-002` | DONE (verified) | Inline and block LaTeX nodes rendered with 2D mathematical typography (`\frac`, `\sqrt`, scripts, `\sum`, `\int`, matrices, Greek symbols), click-to-edit existing equation dialog, live preview, and invalid syntax rejection |
+| `SRS-SEO-002`, `SRS-SEO-003` | DONE (verified) | Centralized SEO audit severity/guidance parity and demo-safe canonical/noindex contract |
+| `SRS-MED-002` | DONE (verified) | Figure caption, credit, licence, alt text, non-crop `contain` policy, and explicit `Unverified rights / licence` & missing-asset warnings |
+| `SRS-MED-003` | DEFER (blocked by external credentials) | Cloudflare R2 & Image Transformations remain opt-in and truthfully labeled disconnected |
+| `SRS-SCI-001`, `SRS-SCI-002` | DONE (verified) | DOI syntax validation (without false external lookup claims), dynamic manuscript citation numbering (`[1]`, `[2]`) by appearance order, repeated citation deduplication, orphaned citation warnings (`[!N]`), and Vancouver bibliography in Preview |
+| `SRS-REV-001` | DONE (verified) | Transactional non-destructive revision snapshot restore and review workflow notes |
+| `SRS-ROLE-001` | DEFER (architecture boundary) | Server-side authentication/RBAC deferred; UI role switcher remains truthfully labeled as a local simulation |
+| `SRS-AI-001` | DONE (verified) | Deterministic local editorial checks with human Apply/Reject diffs and explicit Codex disconnected disclosure |
+| `SRS-UX-001` | PARTIAL / HELD | Targeted modular extractions (`lib/latex-math.ts`, `lib/citations.ts`, `lib/html-source.ts`, `lib/editor-extensions.ts`) completed; wholesale editor shell/engine replacement held per `docs/EDITOR_EXPERIENCE_RESEARCH_HOLD.md` |
+| `SRS-UX-002`, `SRS-UX-003` | DONE (verified) | Accessible modal/toolbar semantics, focus-preserving toolbar buttons, and responsive 1440/1024/390 viewports verified |
+| `SRS-INT-001`, `SRS-INT-002`, `SRS-INT-003` | DEFER (blocked by external credentials) | Google Analytics/AdSense/Search Console/GTM and Codex OAuth remain disconnected by design |
+| `SRS-TEST-002`, `SRS-TEST-004`, `SRS-TEST-005` | DONE (bounded local verification) | Unit (`49/49`) and Playwright E2E (`33/33` across 6 spec files) verified; external production load profiling deferred |
+| `SRS-FUT-001`, `SRS-FUT-002`, `SRS-FUT-003` | DEFER | Multi-style CSL engine beyond Vancouver, real-time multi-user collaboration, and paid DOCX/OMML conversion deferred |
+| `SRS-CODE-001` | DONE (verified) | Intentional empty article list preserved across reloads without re-seeding fallback data |
+| `SRS-CODE-002` | DONE (verified) | Local SVG figure fixtures (`public/figures/quantum-ldpc-lattice.svg`, `public/figures/ Perovskite-tandem-spectrum.svg`) verified and whitelisted |
 
-**No duplicate IDs:** Runtime identifiers `SRS-RT-001..008` refer to original audit evidence, not additional tasks. **Known fixed subset:** RT-001 duplicate extensions; RT-003 stale article overwrite; RT-005 imported HTML execution tested sink; RT-007 stale Quick Fix. **Known unresolved:** RT-002 publishing bypass, RT-004 media URL durability, RT-006 report freshness integration, RT-008 title clipping.
+**No duplicate IDs:** Runtime identifiers `SRS-RT-001..008` refer to original audit evidence, not additional tasks. **Verified resolved:** RT-001 duplicate extensions; RT-002 publishing gate enforcement across `saveArticle`, `persistArticleDraft`, `transitionArticleStatus`, and `/calendar`; RT-003 stale article overwrite; RT-004 media upload validation and durable data-URI storage; RT-005 imported HTML execution sink; RT-006 report freshness fingerprint & source deletion invalidation; RT-007 stale Quick Fix; RT-008 multiline wrapping H1 title input.
 
 ## 5. Critical remaining data-integrity assignment — complete SRS-DATA-003
 

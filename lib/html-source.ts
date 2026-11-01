@@ -1,4 +1,5 @@
 import { sanitizeEditorialHtml } from './html-security';
+import { parseAndRenderLatex } from './latex-math';
 
 export interface HtmlSourceDiagnostic {
   severity: 'error' | 'warning' | 'info';
@@ -8,7 +9,8 @@ export interface HtmlSourceDiagnostic {
     | 'UNSUPPORTED_ATTR'
     | 'UNSAFE_STRIPPED'
     | 'BODY_H1_DEMOTED'
-    | 'INVALID_LATEX';
+    | 'INVALID_LATEX'
+    | 'SCIENTIFIC_NODE_LOSS';
   message: string;
 }
 
@@ -103,6 +105,9 @@ const SUPPORTED_ATTRS = new Set([
   'data-citation-source-id',
   'data-media-id',
   'data-figure-layout',
+  'data-figure-credit',
+  'data-figure-licence',
+  'data-figure-source-url',
 ]);
 
 const VOID_TAGS = new Set(['br', 'hr', 'img']);
@@ -153,9 +158,46 @@ export function detectUnbalancedHtmlTags(rawHtml: string): string[] {
   return errors;
 }
 
+function countPatternMatches(html: string, regex: RegExp): number {
+  const matches = html.match(regex);
+  return matches ? matches.length : 0;
+}
+
+/**
+ * Detects whether any semantic scientific nodes or attributes were lost during sanitization/normalization.
+ */
+function detectScientificConstructLosses(rawHtml: string, sanitizedHtml: string): string[] {
+  const checks: Array<{ label: string; pattern: RegExp }> = [
+    { label: '<table>', pattern: /<table\b/gi },
+    { label: '<tr>', pattern: /<tr\b/gi },
+    { label: '<th>', pattern: /<th\b/gi },
+    { label: '<td>', pattern: /<td\b/gi },
+    { label: '<caption>', pattern: /<caption\b/gi },
+    { label: '<figure>', pattern: /<figure\b/gi },
+    { label: '<figcaption>', pattern: /<figcaption\b/gi },
+    { label: '<img>', pattern: /<img\b/gi },
+    { label: 'img[src]', pattern: /<img\b[^>]*\bsrc\s*=\s*["'][^"']+["']/gi },
+    { label: '<pre>', pattern: /<pre\b/gi },
+    { label: '<code>', pattern: /<code\b/gi },
+    { label: 'data-math-tex', pattern: /\bdata-math-tex\s*=\s*["'][^"']+["']/gi },
+    { label: 'data-citation-source-id', pattern: /\bdata-citation-source-id\s*=\s*["'][^"']+["']/gi },
+    { label: 'data-media-id', pattern: /\bdata-media-id\s*=\s*["'][^"']+["']/gi },
+  ];
+
+  const losses: string[] = [];
+  for (const check of checks) {
+    const beforeCount = countPatternMatches(rawHtml, check.pattern);
+    const afterCount = countPatternMatches(sanitizedHtml, check.pattern);
+    if (beforeCount > afterCount) {
+      losses.push(`${check.label} (${beforeCount} → ${afterCount})`);
+    }
+  }
+  return losses;
+}
+
 /**
  * Validates raw body HTML source against the shared editorial HTML contract and
- * detects any unsupported tags/attributes that would be lost on round-trip (SRS-HTML-001/002/003).
+ * detects any unsupported tags/attributes or scientific construct losses that would occur on round-trip (SRS-HTML-001/002/003).
  */
 export function validateAndAnalyzeHtmlSource(
   rawHtml: string,
@@ -236,6 +278,15 @@ export function validateAndAnalyzeHtmlSource(
     });
   }
 
+  const constructLosses = detectScientificConstructLosses(input, sanitized.html);
+  if (constructLosses.length > 0) {
+    diagnostics.push({
+      severity: 'warning',
+      code: 'SCIENTIFIC_NODE_LOSS',
+      message: `Applying this source would drop or strip scientific construct(s): ${constructLosses.join(', ')}. Confirm normalization or fix the attributes before applying.`,
+    });
+  }
+
   // Validate any embedded data-math-tex expressions
   const mathRegex = /\bdata-math-tex=["']([^"']*)["']/gi;
   let mathMatch: RegExpExecArray | null;
@@ -256,7 +307,8 @@ export function validateAndAnalyzeHtmlSource(
     !hasSyntaxError &&
     (unsupportedTags.length > 0 ||
       unsupportedAttrs.length > 0 ||
-      sanitized.removedUnsafeCount > 0);
+      sanitized.removedUnsafeCount > 0 ||
+      constructLosses.length > 0);
 
   return {
     validSyntax: !hasSyntaxError,
@@ -281,16 +333,25 @@ function decodeHtmlEntities(str: string): string {
 }
 
 /**
- * Formats body HTML source into readable multi-line indentation without altering inline text spacing.
+ * Formats body HTML source into readable multi-line indentation without altering inline text spacing
+ * or stripping whitespace/indentation inside <pre><code> blocks.
  */
 export function formatEditorialHtmlSource(rawHtml: string): string {
   const trimmed = (rawHtml || '').trim();
   if (!trimmed) return '<p></p>';
 
-  const blockBoundary =
-    /(<\/?(?:p|h1|h2|h3|h4|ul|ol|li|blockquote|pre|table|thead|tbody|tfoot|tr|th|td|caption|figure|figcaption|hr|div)\b[^>]*>)/gi;
+  // Protect <pre>...</pre> blocks so internal newlines and leading/trailing spaces are never altered
+  const preBlocks: string[] = [];
+  const protectedHtml = trimmed.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, (match) => {
+    const idx = preBlocks.length;
+    preBlocks.push(match);
+    return `<div data-pre-placeholder="${idx}"></div>`;
+  });
 
-  const tokens = trimmed
+  const blockBoundary =
+    /(<\/?(?:p|h1|h2|h3|h4|ul|ol|li|blockquote|table|thead|tbody|tfoot|tr|th|td|caption|figure|figcaption|hr|div)\b[^>]*>)/gi;
+
+  const tokens = protectedHtml
     .replace(/>\s+</g, '><')
     .split(blockBoundary)
     .map((t) => t.trim())
@@ -329,7 +390,7 @@ export function formatEditorialHtmlSource(rawHtml: string): string {
         lines.push(`${'  '.repeat(indent)}${token}`);
         indent += 1;
       } else {
-        // Leaf block like <p>, <h2>, <h3>, <li>, <th>, <td>, <figcaption>
+        // Leaf block like <p>, <h2>, <h3>, <li>, <th>, <td>, <caption>, <figcaption>
         const nextToken = tokens[i + 1];
         const nextClose = tokens[i + 2];
         if (
@@ -352,182 +413,35 @@ export function formatEditorialHtmlSource(rawHtml: string): string {
     }
   }
 
-  return lines.join('\n');
+  const joined = lines.join('\n');
+  return joined.replace(
+    /<div data-pre-placeholder="(\d+)"><\/div>/g,
+    (_, idxStr) => preBlocks[Number(idxStr)] || ''
+  );
 }
-
-const GREEK_AND_MATH_SYMBOLS: Record<string, string> = {
-  '\\alpha': 'α',
-  '\\beta': 'β',
-  '\\gamma': 'γ',
-  '\\delta': 'δ',
-  '\\epsilon': 'ϵ',
-  '\\varepsilon': 'ε',
-  '\\zeta': 'ζ',
-  '\\eta': 'η',
-  '\\theta': 'θ',
-  '\\iota': 'ι',
-  '\\kappa': 'κ',
-  '\\lambda': 'λ',
-  '\\mu': 'μ',
-  '\\nu': 'ν',
-  '\\xi': 'ξ',
-  '\\pi': 'π',
-  '\\rho': 'ρ',
-  '\\sigma': 'σ',
-  '\\tau': 'τ',
-  '\\upsilon': 'υ',
-  '\\phi': 'ϕ',
-  '\\varphi': 'φ',
-  '\\chi': 'χ',
-  '\\psi': 'ψ',
-  '\\omega': 'ω',
-  '\\Gamma': 'Γ',
-  '\\Delta': 'Δ',
-  '\\Theta': 'Θ',
-  '\\Lambda': 'Λ',
-  '\\Xi': 'Ξ',
-  '\\Pi': 'Π',
-  '\\Sigma': 'Σ',
-  '\\Phi': 'Φ',
-  '\\Psi': 'Ψ',
-  '\\Omega': 'Ω',
-  '\\pm': '±',
-  '\\mp': '∓',
-  '\\times': '×',
-  '\\cdot': '·',
-  '\\div': '÷',
-  '\\leq': '≤',
-  '\\le': '≤',
-  '\\geq': '≥',
-  '\\ge': '≥',
-  '\\neq': '≠',
-  '\\ne': '≠',
-  '\\approx': '≈',
-  '\\equiv': '≡',
-  '\\sim': '∼',
-  '\\propto': '∝',
-  '\\infty': '∞',
-  '\\partial': '∂',
-  '\\nabla': '∇',
-  '\\forall': '∀',
-  '\\exists': '∃',
-  '\\in': '∈',
-  '\\notin': '∉',
-  '\\subset': '⊂',
-  '\\subseteq': '⊆',
-  '\\cup': '∪',
-  '\\cap': '∩',
-  '\\rightarrow': '→',
-  '\\to': '→',
-  '\\leftarrow': '←',
-  '\\leftrightarrow': '↔',
-  '\\Rightarrow': '⇒',
-  '\\Leftrightarrow': '⇔',
-  '\\sum': '∑',
-  '\\prod': '∏',
-  '\\int': '∫',
-  '\\oint': '∮',
-  '\\hbar': 'ℏ',
-  '\\ell': 'ℓ',
-  '\\langle': '⟨',
-  '\\rangle': '⟩',
-  '\\perp': '⊥',
-  '\\parallel': '∥',
-  '\\otimes': '⊗',
-  '\\oplus': '⊕',
-  '\\dagger': '†',
-};
-
-const FORBIDDEN_LATEX_MACROS = /\\(?:href|url|input|include|write|openout|def|csdef|catcode|csname|makeatletter|htmlData|htmlId|htmlClass|htmlStyle)\b/i;
 
 export interface LatexRenderResult {
   valid: boolean;
   renderedText: string;
+  renderedHtml: string;
   error?: string;
 }
 
 /**
- * Validates a LaTeX expression and renders a safe, deterministic typographic string
- * without executing arbitrary HTML/JS or requiring external network fonts (SRS-MATH-001/002).
+ * Validates a LaTeX expression and renders both a safe 2D mathematical HTML layout (`renderedHtml`)
+ * and deterministic typographic text (`renderedText`) without executing arbitrary HTML/JS (`trust: false`)
+ * or requiring external network fonts (SRS-MATH-001/002).
  */
 export function validateAndRenderLatex(
   rawTex: string,
   displayMode: 'inline' | 'block' = 'inline'
 ): LatexRenderResult {
-  const tex = (rawTex || '').trim();
-  if (!tex) {
-    return { valid: false, renderedText: '', error: 'LaTeX expression cannot be empty.' };
-  }
-  if (tex.length > 2000) {
-    return { valid: false, renderedText: '', error: 'LaTeX expression exceeds 2,000 character limit.' };
-  }
-  if (FORBIDDEN_LATEX_MACROS.test(tex)) {
-    return {
-      valid: false,
-      renderedText: '',
-      error: 'Unsafe LaTeX macro detected (commands like \\href, \\input, \\def are prohibited).',
-    };
-  }
-
-  // Check balanced braces { }
-  let depth = 0;
-  for (let i = 0; i < tex.length; i += 1) {
-    const ch = tex[i];
-    if (ch === '\\') {
-      i += 1; // skip escaped char
-      continue;
-    }
-    if (ch === '{') depth += 1;
-    if (ch === '}') {
-      depth -= 1;
-      if (depth < 0) {
-        return {
-          valid: false,
-          renderedText: '',
-          error: `Unmatched closing brace "}" at position ${i + 1}.`,
-        };
-      }
-    }
-  }
-  if (depth !== 0) {
-    return {
-      valid: false,
-      renderedText: '',
-      error: `Unbalanced braces: ${depth} opening "{" brace(s) not closed.`,
-    };
-  }
-  if (/(?:^|[^\\])\\$/.test(tex)) {
-    return {
-      valid: false,
-      renderedText: '',
-      error: 'Trailing backslash "\\" at end of LaTeX expression.',
-    };
-  }
-
-  // Transform common LaTeX constructs into readable scientific notation
-  let out = tex;
-  out = out.replace(/\\left\s*/g, '').replace(/\\right\s*/g, '');
-  out = out.replace(/\\(?:text|mathrm|mathbf|mathcal|mathbb)\{([^{}]*)\}/g, '$1');
-  out = out.replace(/\\sqrt\{([^{}]*)\}/g, '√($1)');
-  out = out.replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, '($1)/($2)');
-  out = out.replace(/\\hat\{([^{}]*)\}/g, '$1̂');
-  out = out.replace(/\\bar\{([^{}]*)\}/g, '$1̄');
-  out = out.replace(/\\vec\{([^{}]*)\}/g, '$1⃗');
-
-  // Replace Greek letters and math operators (longest macro first)
-  const macros = Object.keys(GREEK_AND_MATH_SYMBOLS).sort((a, b) => b.length - a.length);
-  for (const macro of macros) {
-    const escaped = macro.replace(/\\/g, '\\\\');
-    out = out.replace(new RegExp(`${escaped}(?![a-zA-Z])`, 'g'), GREEK_AND_MATH_SYMBOLS[macro]);
-  }
-
-  // Clean simple superscript/subscript braces
-  out = out.replace(/\^\{([^{}]+)\}/g, '^($1)').replace(/_\{([^{}]+)\}/g, '_($1)');
-  out = out.replace(/\\[,;:!]/g, ' ').replace(/\\quad\b/g, '  ').replace(/\\qquad\b/g, '    ');
-
-  void displayMode;
+  const res = parseAndRenderLatex(rawTex, displayMode);
   return {
-    valid: true,
-    renderedText: out.trim(),
+    valid: res.valid,
+    renderedText: res.renderedText,
+    renderedHtml: res.renderedHtml,
+    error: res.error,
   };
 }
+

@@ -28,8 +28,8 @@ export default function MediaLibraryPage() {
   const [newKind, setNewKind] = useState<MediaKind>('scientific_figure');
   const [newAltText, setNewAltText] = useState('');
   const [newCaption, setNewCaption] = useState('');
-  const [newCredit, setNewCredit] = useState('ScientificRadar Lab Graphics');
-  const [newLicence, setNewLicence] = useState('CC BY 4.0');
+  const [newCredit, setNewCredit] = useState('');
+  const [newLicence, setNewLicence] = useState('');
 
   const selectedAsset: MediaAsset | undefined = media.find((m) => m.id === selectedAssetId) || media[0];
   const selectedPolicy = selectedAsset ? getMediaDisplayPolicy(selectedAsset) : null;
@@ -56,12 +56,50 @@ export default function MediaLibraryPage() {
     setNewFilename('');
     setNewAltText('');
     setNewCaption('');
+    setNewCredit('');
+    setNewLicence('');
     setUploadModalOpen(false);
   };
 
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const hasValidRasterMagicBytes = (bytes: Uint8Array, mime: string): boolean => {
+    if (bytes.length < 12) return false;
+    if (mime === 'image/png') {
+      return (
+        bytes[0] === 0x89 &&
+        bytes[1] === 0x50 &&
+        bytes[2] === 0x4e &&
+        bytes[3] === 0x47
+      );
+    }
+    if (mime === 'image/jpeg') {
+      return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    }
+    if (mime === 'image/webp') {
+      return (
+        bytes[0] === 0x52 &&
+        bytes[1] === 0x49 &&
+        bytes[2] === 0x46 &&
+        bytes[3] === 0x46 &&
+        bytes[8] === 0x57 &&
+        bytes[9] === 0x45 &&
+        bytes[10] === 0x42 &&
+        bytes[11] === 0x50
+      );
+    }
+    if (mime === 'image/avif') {
+      return (
+        bytes[4] === 0x66 &&
+        bytes[5] === 0x74 &&
+        bytes[6] === 0x79 &&
+        bytes[7] === 0x70
+      );
+    }
+    return false;
+  };
+
+  const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploadError(null);
@@ -70,18 +108,32 @@ export default function MediaLibraryPage() {
       'image/jpeg',
       'image/webp',
       'image/avif',
-      'image/svg+xml',
     ]);
-    const mime = file.type || 'image/png';
-    if (!allowedMimes.has(mime)) {
+    const lowerName = file.name.toLowerCase();
+    const mime = file.type || '';
+    if (lowerName.endsWith('.svg') || mime === 'image/svg+xml' || !allowedMimes.has(mime)) {
       setUploadError(
-        `Unsupported media format (${mime}). Allowed formats: PNG, JPEG, WebP, AVIF, SVG.`
+        `Unsupported or untrusted file format (${mime || file.name}). Only raster images (PNG, JPEG, WebP, AVIF) are accepted via direct file upload.`
       );
       e.target.value = '';
       return;
     }
     if (file.size > 8 * 1024 * 1024) {
       setUploadError('File exceeds 8 MB local IndexedDB media limit.');
+      e.target.value = '';
+      return;
+    }
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const header = new Uint8Array(buffer.slice(0, 16));
+      if (!hasValidRasterMagicBytes(header, mime)) {
+        setUploadError('Corrupt or undecodable image file rejected (invalid binary header signature).');
+        e.target.value = '';
+        return;
+      }
+    } catch {
+      setUploadError('Could not read binary header from selected file.');
       e.target.value = '';
       return;
     }
@@ -95,30 +147,27 @@ export default function MediaLibraryPage() {
       }
       const probe = new window.Image();
       probe.onload = () => {
+        if (!probe.naturalWidth || !probe.naturalHeight) {
+          setUploadError('Corrupt or undecodable image file rejected (zero dimensions).');
+          return;
+        }
         const created = addMediaAsset({
           filename: file.name,
           title: file.name.replace(/\.[^.]+$/, ''),
           kind: 'scientific_figure',
           src: dataUrl,
           mime,
-          width: probe.naturalWidth || 1200,
-          height: probe.naturalHeight || 675,
+          width: probe.naturalWidth,
+          height: probe.naturalHeight,
           byteSize: file.size,
-          altText: `Uploaded figure: ${file.name}`,
+          altText: '',
+          credit: '',
+          licence: '',
         });
         setSelectedAssetId(created.id);
       };
       probe.onerror = () => {
-        const created = addMediaAsset({
-          filename: file.name,
-          title: file.name.replace(/\.[^.]+$/, ''),
-          kind: 'scientific_figure',
-          src: dataUrl,
-          mime,
-          byteSize: file.size,
-          altText: `Uploaded figure: ${file.name}`,
-        });
-        setSelectedAssetId(created.id);
+        setUploadError('Corrupt or undecodable image file rejected.');
       };
       probe.src = dataUrl;
     };
@@ -139,7 +188,8 @@ export default function MediaLibraryPage() {
             <span>Upload Local File</span>
             <input
               type="file"
-              accept="image/png,image/jpeg,image/webp,image/avif,image/svg+xml"
+              data-testid="media-file-upload-input"
+              accept="image/png,image/jpeg,image/webp,image/avif"
               onChange={handleFileInput}
               className="hidden"
             />
@@ -224,7 +274,7 @@ export default function MediaLibraryPage() {
                       <span>{asset.kind}</span>
                       <span>Layout: {asset.layout}</span>
                     </div>
-                    <div className="flex items-center gap-1.5 text-[11px]">
+                    <div className="flex flex-wrap items-center gap-2 text-[11px]">
                       {missingAlt ? (
                         <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
                           <AlertTriangle className="w-3.5 h-3.5" />
@@ -234,6 +284,15 @@ export default function MediaLibraryPage() {
                         <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                           <CheckCircle2 className="w-3.5 h-3.5" />
                           <span>Alt text verified</span>
+                        </span>
+                      )}
+                      {(!asset.credit?.trim() || !asset.licence?.trim()) && (
+                        <span
+                          data-testid="unverified-media-rights-badge"
+                          className="text-amber-600 dark:text-amber-400 flex items-center gap-1"
+                        >
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          <span>Unverified rights / licence</span>
                         </span>
                       )}
                     </div>
@@ -485,6 +544,35 @@ export default function MediaLibraryPage() {
                   placeholder="Describe visible axes, curves, and units..."
                   className="w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900"
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="modal-fig-credit" className="block font-medium mb-1">
+                    Attribution / Credit
+                  </label>
+                  <input
+                    id="modal-fig-credit"
+                    type="text"
+                    value={newCredit}
+                    onChange={(e) => setNewCredit(e.target.value)}
+                    placeholder="Leave blank if unverified"
+                    className="w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="modal-fig-licence" className="block font-medium mb-1">
+                    Licence
+                  </label>
+                  <input
+                    id="modal-fig-licence"
+                    type="text"
+                    value={newLicence}
+                    onChange={(e) => setNewLicence(e.target.value)}
+                    placeholder="Leave blank if unverified"
+                    className="w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900"
+                  />
+                </div>
               </div>
 
               <div className="flex justify-end gap-2 pt-2">

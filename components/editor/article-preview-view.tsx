@@ -6,6 +6,7 @@ import { useStudio } from '@/lib/studio-context';
 import { getMediaDisplayPolicy } from '@/lib/editorial-rules';
 import { InteractiveArticleBodyRenderer } from '@/components/knowledge/knowledge-link-popover';
 import { trustedMediaSourceSet } from '@/lib/html-security';
+import { analyzeManuscriptCitations, formatVancouverReference } from '@/lib/citations';
 import {
   ArrowLeft,
   Edit3,
@@ -14,6 +15,7 @@ import {
   ShieldAlert,
   ExternalLink,
   BookOpen,
+  AlertTriangle,
 } from 'lucide-react';
 
 import { Article } from '@/lib/types';
@@ -48,10 +50,12 @@ export function ArticlePreviewView({
   const primaryCat = categories.find((c) => c.id === article.primaryCategoryId);
   const author = authors.find((a) => a.id === article.authorId);
   const featuredMedia = media.find((m) => m.id === article.featuredMediaId);
+  const isFeaturedMediaMissing = Boolean(article.featuredMediaId) && !featuredMedia;
   const mediaPolicy = featuredMedia ? getMediaDisplayPolicy(featuredMedia) : null;
   const articleTags = tags.filter((t) => article.tagIds.includes(t.id));
   const articleSources = sources.filter((s) => article.sourceIds.includes(s.id));
   const articleSeries = series.find((s) => s.id === article.seriesId);
+  const citationAnalysis = analyzeManuscriptCitations(article.bodyHtml, articleSources);
 
   return (
     <div className="min-h-screen bg-[#f7f9fa] dark:bg-[#0b1216] text-slate-900 dark:text-slate-100">
@@ -179,6 +183,21 @@ export function ArticlePreviewView({
           )}
 
           {/* Featured Scientific Figure / Media */}
+          {isFeaturedMediaMissing && (
+            <div
+              role="alert"
+              data-testid="missing-featured-media-warning"
+              className="mb-8 p-4 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 text-xs flex items-center gap-2.5"
+            >
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                <strong>Featured media asset missing:</strong> Asset{' '}
+                <code className="font-mono">{article.featuredMediaId}</code> was deleted from the
+                Media Library. Select a replacement featured image in the editor before publishing.
+              </span>
+            </div>
+          )}
+
           {featuredMedia && mediaPolicy && (
             <figure className="mb-8 rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden bg-slate-950">
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -195,18 +214,21 @@ export function ArticlePreviewView({
               <figcaption className="p-3.5 bg-slate-50 dark:bg-[#15222a] border-t border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300 space-y-1">
                 <div>{featuredMedia.caption || featuredMedia.title}</div>
                 <div className="text-[11px] text-slate-400">
-                  Credit: {featuredMedia.credit || 'ScientificRadar'} · Licence:{' '}
-                  {featuredMedia.licence || 'CC BY 4.0'} · Layout: {featuredMedia.layout}
+                  Credit: {featuredMedia.credit?.trim() || 'Unverified / Not specified'} · Licence:{' '}
+                  {featuredMedia.licence?.trim() || 'Unverified / Not specified'} · Layout:{' '}
+                  {featuredMedia.layout}
                 </div>
               </figcaption>
             </figure>
           )}
 
-          {/* Interactive Body with H2/H3 and Wikipedia/Internal Smart Knowledge Link Popovers */}
+          {/* Interactive Body with H2/H3, 2D Equations, Appearance-Ordered Citations, and Smart Knowledge Link Popovers */}
           <InteractiveArticleBodyRenderer
             html={article.bodyHtml}
             knowledgeLinks={knowledgeLinks}
             trustedImageSources={trustedMediaSourceSet(media.map((asset) => asset.src))}
+            sources={articleSources}
+            mediaAssets={media}
           />
 
           {/* Taxonomy Tags Footer */}
@@ -222,47 +244,129 @@ export function ArticlePreviewView({
             </div>
           )}
 
-          {/* Primary Scientific Sources & References Section */}
+          {/* Primary Scientific Sources & Vancouver Bibliography Section (SRS-SCI-001/002) */}
           <section
             aria-label="Primary Scientific References"
             className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-800 space-y-3"
           >
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
                 References &amp; Primary Sources ({articleSources.length})
               </h2>
               <span className="text-[11px] font-mono text-slate-400">
-                External verification not run (P0 offline demo)
+                Vancouver numbered by manuscript citation order · P0 local repository
               </span>
             </div>
 
-            {articleSources.length === 0 ? (
+            {citationAnalysis.orphanedSourceIds.length > 0 && (
+              <div
+                role="alert"
+                data-testid="preview-orphaned-citation-alert"
+                className="p-3 rounded-lg border border-rose-200 dark:border-rose-800/80 bg-rose-50 dark:bg-rose-950/40 text-xs text-rose-900 dark:text-rose-200 flex items-center gap-2"
+              >
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>
+                  <strong>Orphaned inline citation(s):</strong>{' '}
+                  {citationAnalysis.orphanedSourceIds.map((id) => `"${id}"`).join(', ')} is cited in
+                  the body text but is missing from this article&apos;s attached sources.
+                </span>
+              </div>
+            )}
+
+            {articleSources.length === 0 && citationAnalysis.orderedCitations.length === 0 ? (
               <p className="text-xs text-amber-700 dark:text-amber-400">
                 No primary sources linked yet. Attach peer-reviewed DOIs in the editor before final sign-off.
               </p>
             ) : (
-              <ol className="list-decimal pl-5 space-y-2.5 text-xs text-slate-700 dark:text-slate-300">
-                {articleSources.map((src) => (
-                  <li key={src.id} className="space-y-0.5">
-                    <div>
-                      <span className="font-semibold">{src.authors}</span> ({src.year}).{' '}
-                      {src.title}. <em>{src.journal}</em>.
-                    </div>
-                    <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
-                      {src.doi && <span className="font-mono">DOI: {src.doi}</span>}
-                      <a
-                        href={src.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-[#087f83] dark:text-teal-400 hover:underline font-medium"
-                      >
-                        <span>View Primary Source</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                  </li>
-                ))}
-              </ol>
+              <div className="space-y-4">
+                {citationAnalysis.orderedCitations.length > 0 && (
+                  <ol
+                    data-testid="vancouver-bibliography-list"
+                    className="space-y-2.5 text-xs text-slate-700 dark:text-slate-300"
+                  >
+                    {citationAnalysis.orderedCitations.map((entry) => {
+                      const src = entry.source;
+                      if (!src) {
+                        return (
+                          <li
+                            key={entry.sourceId}
+                            id={`ref-${entry.sourceId}`}
+                            className="p-2 rounded border border-rose-200 dark:border-rose-900 bg-rose-50/60 dark:bg-rose-950/30 text-rose-800 dark:text-rose-300 flex items-start gap-2"
+                          >
+                            <span className="font-mono font-bold">[!{entry.number}]</span>
+                            <span>
+                              Orphaned reference ID <code className="font-mono">{entry.sourceId}</code>{' '}
+                              (cited {entry.occurrenceCount}× in manuscript, source not attached).
+                            </span>
+                          </li>
+                        );
+                      }
+                      return (
+                        <li
+                          key={src.id}
+                          id={`ref-${src.id}`}
+                          className="flex items-start gap-2.5 leading-relaxed"
+                        >
+                          <span className="font-mono font-bold text-[#087f83] dark:text-teal-400 shrink-0">
+                            [{entry.number}]
+                          </span>
+                          <div className="space-y-0.5 flex-1">
+                            <div data-testid={`vancouver-ref-${entry.number}`}>
+                              {formatVancouverReference(src)}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+                              <span>Cited {entry.occurrenceCount}× in text</span>
+                              {src.doi && <span className="font-mono">DOI: {src.doi}</span>}
+                              {src.url && (
+                                <a
+                                  href={src.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-[#087f83] dark:text-teal-400 hover:underline font-medium"
+                                >
+                                  <span>View Primary Source</span>
+                                  <ExternalLink className="w-3 h-3" />
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                )}
+
+                {citationAnalysis.uncitedAttachedSources.length > 0 && (
+                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 space-y-2">
+                    {citationAnalysis.orderedCitations.length > 0 && (
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                        Additional Attached Primary Sources (Not Cited Inline)
+                      </div>
+                    )}
+                    <ol className="list-decimal pl-5 space-y-2 text-xs text-slate-700 dark:text-slate-300">
+                      {citationAnalysis.uncitedAttachedSources.map((src) => (
+                        <li key={src.id} id={`ref-${src.id}`} className="space-y-0.5">
+                          <div>{formatVancouverReference(src)}</div>
+                          <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+                            {src.doi && <span className="font-mono">DOI: {src.doi}</span>}
+                            {src.url && (
+                              <a
+                                href={src.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-[#087f83] dark:text-teal-400 hover:underline font-medium"
+                              >
+                                <span>View Primary Source</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+              </div>
             )}
           </section>
         </article>
@@ -270,3 +374,4 @@ export function ArticlePreviewView({
     </div>
   );
 }
+

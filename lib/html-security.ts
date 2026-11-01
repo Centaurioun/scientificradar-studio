@@ -21,6 +21,9 @@ const ALLOWED_ATTR = [
   'data-citation-source-id',
   'data-media-id',
   'data-figure-layout',
+  'data-figure-credit',
+  'data-figure-licence',
+  'data-figure-source-url',
 ];
 
 const COMMON_ATTRS = new Set(['id', 'title']);
@@ -31,8 +34,15 @@ const SAFE_ENTITY_ID_REGEX = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 const ELEMENT_ATTRS: Record<string, ReadonlySet<string>> = {
   a: new Set(['href', 'rel', 'target', 'data-knowledge-term']),
+  caption: new Set(['data-text-align']),
   div: new Set(['data-text-align', 'data-math-tex', 'data-math-display']),
-  figure: new Set(['data-media-id', 'data-figure-layout']),
+  figure: new Set([
+    'data-media-id',
+    'data-figure-layout',
+    'data-figure-credit',
+    'data-figure-licence',
+    'data-figure-source-url',
+  ]),
   h1: new Set(['data-text-align']),
   h2: new Set(['data-text-align']),
   h3: new Set(['data-text-align']),
@@ -127,7 +137,10 @@ export function sanitizeEditorialHtml(
         (name !== 'data-math-tex' || (attribute.value.trim().length > 0 && attribute.value.length <= 2000)) &&
         (name !== 'data-citation-source-id' || SAFE_ENTITY_ID_REGEX.test(attribute.value)) &&
         (name !== 'data-media-id' || SAFE_ENTITY_ID_REGEX.test(attribute.value)) &&
-        (name !== 'data-figure-layout' || SAFE_FIGURE_LAYOUT_VALUES.has(attribute.value.toLowerCase()));
+        (name !== 'data-figure-layout' || SAFE_FIGURE_LAYOUT_VALUES.has(attribute.value.toLowerCase())) &&
+        (name !== 'data-figure-credit' || attribute.value.length <= 500) &&
+        (name !== 'data-figure-licence' || attribute.value.length <= 500) &&
+        (name !== 'data-figure-source-url' || !attribute.value.trim() || isSafeHref(attribute.value));
       if (!keep) {
         element.removeAttribute(attribute.name);
         postFilterRemovedCount += 1;

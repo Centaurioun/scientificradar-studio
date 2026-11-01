@@ -2,9 +2,11 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
-import { KnowledgeLink } from '@/lib/types';
+import { KnowledgeLink, MediaAsset, ScientificSource } from '@/lib/types';
 import { sanitizeEditorialHtml } from '@/lib/html-security';
-import { ExternalLink, BookOpen, X } from 'lucide-react';
+import { parseAndRenderLatex } from '@/lib/latex-math';
+import { analyzeManuscriptCitations } from '@/lib/citations';
+import { ExternalLink, BookOpen, X, AlertTriangle } from 'lucide-react';
 
 /**
  * Interactive Wikipedia-style & Internal ScientificRadar Hover/Focus/Tap Popover Card (Section 10).
@@ -172,23 +174,73 @@ export function KnowledgeLinkPopover({
   );
 }
 
+function decodeHtmlAttr(val: string): string {
+  return val
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
 /**
- * Renders sanitized article HTML into valid React block elements (<p>, <h2>, <h3>, <blockquote>, <ul>, <ol>)
- * while enriching recognized Smart Knowledge Link terms into interactive hover/keyboard/mobile popovers
- * without breaking <p> tag nesting.
+ * Renders sanitized article HTML into valid React block elements (<p>, <h2>, <h3>, <blockquote>, <ul>, <ol>, <table>, <figure>, <pre>, <div>)
+ * while enriching:
+ * - Recognized Smart Knowledge Link terms into interactive hover/keyboard/mobile popovers
+ * - Inline and Block LaTeX equations into 2D mathematical typography
+ * - Inline citations (<sup data-citation-source-id>) into appearance-ordered links to the bibliography
+ * - Scientific figures with truthful rights metadata and missing-media warnings
  */
 export function InteractiveArticleBodyRenderer({
   html,
   knowledgeLinks,
   trustedImageSources = new Set<string>(),
+  sources = [],
+  mediaAssets = [],
 }: {
   html: string;
   knowledgeLinks: KnowledgeLink[];
   trustedImageSources?: ReadonlySet<string>;
+  sources?: ScientificSource[];
+  mediaAssets?: MediaAsset[];
 }) {
   const safeHtml = sanitizeEditorialHtml(html, { trustedImageSources }).html;
-  const safeFragment = (fragment: string) =>
-    sanitizeEditorialHtml(fragment, { trustedImageSources }).html;
+  const citationAnalysis = analyzeManuscriptCitations(safeHtml, sources);
+
+  const enrichInlineScientificMarkup = (fragment: string): string => {
+    const sanitized = sanitizeEditorialHtml(fragment, { trustedImageSources }).html;
+    // 1. Transform inline <span data-math-tex="...">...</span> into 2D math HTML
+    const withMath = sanitized.replace(
+      /<span\b([^>]*?\bdata-math-tex="([^"]+)"[^>]*)>[\s\S]*?<\/span>/gi,
+      (_match, attrs, rawTex) => {
+        const tex = decodeHtmlAttr(rawTex);
+        const rendered = parseAndRenderLatex(tex, 'inline');
+        if (!rendered.valid) {
+          return `<span ${attrs}>[LaTeX Error: ${rawTex}]</span>`;
+        }
+        return `<span ${attrs}>${rendered.renderedHtml}</span>`;
+      }
+    );
+
+    // 2. Transform inline <sup data-citation-source-id="...">...</sup> into appearance-ordered linked citations
+    return withMath.replace(
+      /<sup\b[^>]*?\bdata-citation-source-id="([^"]+)"[^>]*>([\s\S]*?)<\/sup>/gi,
+      (_match, sourceId, fallbackLabel) => {
+        const resolved = citationAnalysis.occurrences.find((o) => o.sourceId === sourceId);
+        if (!resolved) {
+          return `<sup data-citation-source-id="${sourceId}">${fallbackLabel}</sup>`;
+        }
+        if (resolved.isOrphaned) {
+          return `<sup data-citation-source-id="${sourceId}" data-citation-orphaned="true" title="Orphaned citation: source ${sourceId} is not attached to this article" class="inline-block font-mono text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/50 px-1 rounded mx-0.5">[!${resolved.number}]</sup>`;
+        }
+        const sourceTitle = resolved.source?.title
+          ? resolved.source.title.replace(/"/g, '&quot;')
+          : sourceId;
+        return `<sup data-citation-source-id="${sourceId}" class="inline-block font-mono text-xs font-bold mx-0.5"><a href="#ref-${sourceId}" title="${sourceTitle}" class="text-[#087f83] dark:text-teal-400 hover:underline px-1 py-0.5 rounded bg-teal-50/80 dark:bg-teal-950/50">[${resolved.number}]</a></sup>`;
+      }
+    );
+  };
+
   const renderInlineWithKnowledgeLinks = (inlineHtml: string, keyPrefix: string) => {
     const linkRegex = /<a\b[^>]*data-knowledge-term="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     const nodes: React.ReactNode[] = [];
@@ -203,7 +255,7 @@ export function InteractiveArticleBodyRenderer({
         nodes.push(
           <span
             key={`${keyPrefix}-txt-${lastIndex}`}
-            dangerouslySetInnerHTML={{ __html: safeFragment(slice) }}
+            dangerouslySetInnerHTML={{ __html: enrichInlineScientificMarkup(slice) }}
           />
         );
       }
@@ -224,7 +276,7 @@ export function InteractiveArticleBodyRenderer({
         nodes.push(
           <span
             key={`${keyPrefix}-raw-${matchStart}`}
-            dangerouslySetInnerHTML={{ __html: safeFragment(fullMatch) }}
+            dangerouslySetInnerHTML={{ __html: enrichInlineScientificMarkup(fullMatch) }}
           />
         );
       }
@@ -236,7 +288,9 @@ export function InteractiveArticleBodyRenderer({
       nodes.push(
         <span
           key={`${keyPrefix}-end-${lastIndex}`}
-          dangerouslySetInnerHTML={{ __html: safeFragment(inlineHtml.slice(lastIndex)) }}
+          dangerouslySetInnerHTML={{
+            __html: enrichInlineScientificMarkup(inlineHtml.slice(lastIndex)),
+          }}
         />
       );
     }
@@ -252,6 +306,12 @@ export function InteractiveArticleBodyRenderer({
     if (align === 'right') return ' text-right';
     if (align === 'justify') return ' text-justify';
     return '';
+  };
+
+  const getAttrValue = (attrSource: string, attrName: string): string => {
+    const regex = new RegExp(`\\b${attrName}="([^"]*)"`, 'i');
+    const m = attrSource.match(regex);
+    return m ? decodeHtmlAttr(m[1]) : '';
   };
 
   // Match top-level block elements (<p>, <h2>, <h3>, <h4>, <blockquote>, <ul>, <ol>, <pre>, <figure>, <table>, <div>, <hr>)
@@ -317,7 +377,7 @@ export function InteractiveArticleBodyRenderer({
         <ul
           key={key}
           className="list-disc pl-6 space-y-1 my-4"
-          dangerouslySetInnerHTML={{ __html: safeFragment(inner) }}
+          dangerouslySetInnerHTML={{ __html: enrichInlineScientificMarkup(inner) }}
         />
       );
     } else if (tagLower === 'ol') {
@@ -325,15 +385,17 @@ export function InteractiveArticleBodyRenderer({
         <ol
           key={key}
           className="list-decimal pl-6 space-y-1 my-4"
-          dangerouslySetInnerHTML={{ __html: safeFragment(inner) }}
+          dangerouslySetInnerHTML={{ __html: enrichInlineScientificMarkup(inner) }}
         />
       );
     } else if (tagLower === 'pre') {
       blocks.push(
         <pre
           key={key}
-          className="my-4 overflow-x-auto rounded-lg border border-slate-200 bg-slate-900 p-4 font-mono text-xs text-slate-100 dark:border-slate-800"
-          dangerouslySetInnerHTML={{ __html: safeFragment(inner) }}
+          className="my-4 overflow-x-auto rounded-lg border border-slate-200 bg-slate-900 p-4 font-mono text-xs leading-relaxed text-slate-100 dark:border-slate-800 whitespace-pre"
+          dangerouslySetInnerHTML={{
+            __html: sanitizeEditorialHtml(inner, { trustedImageSources }).html,
+          }}
         />
       );
     } else if (tagLower === 'table') {
@@ -343,27 +405,112 @@ export function InteractiveArticleBodyRenderer({
           className="my-5 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800"
         >
           <table
-            className="w-full border-collapse text-left text-sm [&_th]:border-b [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-3 [&_th]:py-2 [&_th]:font-semibold dark:[&_th]:border-slate-800 dark:[&_th]:bg-slate-900 [&_td]:border-b [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-2 dark:[&_td]:border-slate-800"
-            dangerouslySetInnerHTML={{ __html: safeFragment(inner) }}
+            className="w-full border-collapse text-left text-sm [&_caption]:caption-top [&_caption]:bg-slate-50 dark:[&_caption]:bg-slate-900/80 [&_caption]:px-3 [&_caption]:py-2 [&_caption]:text-xs [&_caption]:font-semibold [&_caption]:text-slate-600 dark:[&_caption]:text-slate-400 [&_caption]:border-b [&_caption]:border-slate-200 dark:[&_caption]:border-slate-800 [&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-3 [&_th]:py-2 [&_th]:font-semibold dark:[&_th]:border-slate-800 dark:[&_th]:bg-slate-900 [&_td]:border [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-2 dark:[&_td]:border-slate-800"
+            dangerouslySetInnerHTML={{ __html: enrichInlineScientificMarkup(inner) }}
           />
         </div>
       );
     } else if (tagLower === 'figure') {
+      const mediaId = getAttrValue(attrStr, 'data-media-id');
+      const layout = getAttrValue(attrStr, 'data-figure-layout') || 'locked';
+      const matchedAsset = mediaId ? mediaAssets.find((m) => m.id === mediaId) : undefined;
+      const imgMatch = inner.match(/<img\b([^>]*)>/i);
+      const imgAttrs = imgMatch ? imgMatch[1] : '';
+      const imgSrc = getAttrValue(imgAttrs, 'src') || matchedAsset?.src || '';
+      const imgAlt = getAttrValue(imgAttrs, 'alt') || matchedAsset?.altText || 'Scientific figure';
+      const captionMatch = inner.match(/<figcaption\b[^>]*>([\s\S]*?)<\/figcaption>/i);
+      const captionHtml = captionMatch ? captionMatch[1] : '';
+
+      const credit =
+        matchedAsset?.credit?.trim() || getAttrValue(attrStr, 'data-figure-credit').trim();
+      const licence =
+        matchedAsset?.licence?.trim() || getAttrValue(attrStr, 'data-figure-licence').trim();
+      const sourceUrl =
+        matchedAsset?.sourceUrl?.trim() || getAttrValue(attrStr, 'data-figure-source-url').trim();
+
+      const isMissingAsset = !imgSrc || (Boolean(mediaId) && mediaAssets.length > 0 && !matchedAsset && !imgAttrs.includes('src='));
+
       blocks.push(
         <figure
           key={key}
-          className="my-6 overflow-hidden rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-900/60 [&_img]:mx-auto [&_img]:max-h-96 [&_img]:w-auto [&_img]:object-contain [&_figcaption]:mt-2.5 [&_figcaption]:text-center [&_figcaption]:text-xs [&_figcaption]:text-slate-600 dark:[&_figcaption]:text-slate-400"
-          dangerouslySetInnerHTML={{ __html: safeFragment(inner) }}
-        />
+          data-media-id={mediaId || undefined}
+          data-figure-layout={layout}
+          className="my-6 overflow-hidden rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-900/60"
+        >
+          {isMissingAsset ? (
+            <div
+              role="alert"
+              data-testid="missing-figure-asset-warning"
+              className="p-4 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 text-xs flex items-center gap-2.5"
+            >
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                <strong>Referenced figure asset unavailable:</strong> Media asset{' '}
+                <code className="font-mono">{mediaId || 'unknown'}</code> was removed from the
+                Media Library or its image source is missing. Re-select a valid figure in the
+                editor before publishing.
+              </span>
+            </div>
+          ) : (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={imgSrc}
+              alt={imgAlt}
+              referrerPolicy="no-referrer"
+              className={`mx-auto max-h-96 ${
+                layout === 'locked' ? 'w-auto object-contain' : 'w-full object-cover'
+              }`}
+            />
+          )}
+          {captionHtml && (
+            <figcaption
+              className="mt-2.5 text-center text-xs text-slate-600 dark:text-slate-400"
+              dangerouslySetInnerHTML={{ __html: enrichInlineScientificMarkup(captionHtml) }}
+            />
+          )}
+          {(credit || licence || sourceUrl) && (
+            <div className="mt-1.5 text-center text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center justify-center gap-2">
+              {credit && <span>Credit: {credit}</span>}
+              {licence && <span>Licence: {licence}</span>}
+              {sourceUrl && (
+                <a
+                  href={sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#087f83] dark:text-teal-400 hover:underline inline-flex items-center gap-0.5"
+                >
+                  <span>Source</span>
+                  <ExternalLink className="w-2.5 h-2.5" />
+                </a>
+              )}
+            </div>
+          )}
+        </figure>
       );
     } else if (tagLower === 'div') {
-      blocks.push(
-        <div
-          key={key}
-          className="my-4 overflow-x-auto rounded-lg border border-indigo-200/70 bg-indigo-50/40 px-4 py-3 text-center font-serif text-base text-slate-900 dark:border-indigo-900/50 dark:bg-indigo-950/30 dark:text-slate-100"
-          dangerouslySetInnerHTML={{ __html: safeFragment(inner) }}
-        />
-      );
+      const mathTex = getAttrValue(attrStr, 'data-math-tex');
+      if (mathTex) {
+        const rendered = parseAndRenderLatex(mathTex, 'block');
+        blocks.push(
+          <div
+            key={key}
+            data-math-tex={mathTex}
+            data-math-display="block"
+            className="my-5 overflow-x-auto rounded-lg border border-teal-200/80 bg-teal-50/40 px-4 py-3.5 text-center font-serif text-base text-slate-900 dark:border-teal-900/50 dark:bg-teal-950/25 dark:text-slate-100"
+            dangerouslySetInnerHTML={{
+              __html: rendered.valid ? rendered.renderedHtml : `[LaTeX Error: ${mathTex}]`,
+            }}
+          />
+        );
+      } else {
+        blocks.push(
+          <div
+            key={key}
+            className="my-4 overflow-x-auto rounded-lg border border-indigo-200/70 bg-indigo-50/40 px-4 py-3 text-center font-serif text-base text-slate-900 dark:border-indigo-900/50 dark:bg-indigo-950/30 dark:text-slate-100"
+            dangerouslySetInnerHTML={{ __html: enrichInlineScientificMarkup(inner) }}
+          />
+        );
+      }
     } else {
       blocks.push(
         <p
@@ -390,5 +537,6 @@ export function InteractiveArticleBodyRenderer({
     </div>
   );
 }
+
 
 

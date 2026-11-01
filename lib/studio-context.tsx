@@ -122,13 +122,25 @@ async function getDb(): Promise<IDBPDatabase | null> {
     return null;
   }
   try {
-    return await openDB(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          db.createObjectStore(STORE_NAME);
+    const db = await openDB(DB_NAME, undefined, {
+      upgrade(upgradeDb) {
+        if (!upgradeDb.objectStoreNames.contains(STORE_NAME)) {
+          upgradeDb.createObjectStore(STORE_NAME);
         }
       },
     });
+    if (!db.objectStoreNames.contains(STORE_NAME)) {
+      const nextVersion = db.version + 1;
+      db.close();
+      return await openDB(DB_NAME, nextVersion, {
+        upgrade(upgradeDb) {
+          if (!upgradeDb.objectStoreNames.contains(STORE_NAME)) {
+            upgradeDb.createObjectStore(STORE_NAME);
+          }
+        },
+      });
+    }
+    return db;
   } catch {
     return null;
   }
@@ -299,10 +311,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           return { ok: true, volatileMemoryOnly: true };
         }
       } catch (err) {
-        setPersistenceMode('memory_fallback');
         return {
           ok: false,
-          volatileMemoryOnly: true,
+          volatileMemoryOnly: persistenceMode === 'memory_fallback',
           error: err instanceof Error ? err.message : 'IndexedDB write failed',
         };
       }
@@ -346,7 +357,6 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           return true;
         })
         .catch(() => {
-          setPersistenceMode('memory_fallback');
           stateRef.current = committedStateRef.current;
           setState(committedStateRef.current);
           return false;
@@ -782,10 +792,73 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             if (existing && options?.expectedVersion !== undefined && existing.version !== options.expectedVersion) {
               return { snapshot: latest, result: { conflict: `Version conflict: stored article is v${existing.version} while editor base was v${options.expectedVersion}.`, version: existing.version, savedAt: existing.updatedAt, demotedH1Count: 0 } };
             }
+            const targetStatus = articleInput.status ?? existing?.status ?? 'draft';
+            if (existing && articleInput.status && articleInput.status !== existing.status) {
+              const roleCheck = canTransitionStatus(existing.status, articleInput.status, latest.activeRole);
+              if (!roleCheck.allowed) {
+                return {
+                  snapshot: latest,
+                  result: {
+                    conflict: roleCheck.reason || 'Workflow status transition not permitted.',
+                    version: existing.version,
+                    savedAt: existing.updatedAt,
+                    demotedH1Count: 0,
+                  },
+                };
+              }
+            } else if (existing && articleInput.status === 'scheduled' && existing.status === 'scheduled') {
+              if (latest.activeRole === 'author' || latest.activeRole === 'reviewer') {
+                return {
+                  snapshot: latest,
+                  result: {
+                    conflict: 'Only Editors or Owners can reschedule articles.',
+                    version: existing.version,
+                    savedAt: existing.updatedAt,
+                    demotedH1Count: 0,
+                  },
+                };
+              }
+            }
             const built = buildUpdatedArticleSnapshot(latest, articleInput, {
               ...options,
               intent: { ...intent, revisionSuffix: intent.id },
             });
+            if (
+              (targetStatus === 'published' || targetStatus === 'scheduled') &&
+              (!existing || existing.status !== targetStatus)
+            ) {
+              const auditReport = runArticleAudit({
+                article: built.updatedArticle,
+                allArticles: built.nextState.articles,
+                categories: latest.categories,
+                tags: latest.tags,
+                sources: latest.sources,
+                media: latest.media,
+                knowledgeLinks: latest.knowledgeLinks,
+                integrations: latest.integrations,
+                executedAt: intent.timestamp,
+              });
+              const gate = evaluatePublishGate({
+                report: auditReport,
+                currentStatus: existing?.status || 'draft',
+                targetStatus,
+                activeRole: latest.activeRole,
+              });
+              if (gate.isBlocked) {
+                return {
+                  snapshot: latest,
+                  result: {
+                    conflict:
+                      gate.roleError ||
+                      gate.blockers[0]?.title ||
+                      'Article has publication blockers that must be resolved before publishing or scheduling.',
+                    version: existing?.version || 1,
+                    savedAt: existing?.updatedAt || intent.timestamp,
+                    demotedH1Count: 0,
+                  },
+                };
+              }
+            }
             return { snapshot: built.nextState, result: { built } };
           }
         );
@@ -1072,112 +1145,134 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (simulateSaveFailure) {
         return { ok: false, error: 'Storage transaction failed; article status was not saved.' };
       }
+      const db = await getDb();
+      if (!db) {
+        return { ok: false, error: 'IndexedDB is unavailable; article status was not saved.' };
+      }
       const intent = createEntityWriteIntent('rn');
-      let outcome: { ok: boolean; error?: string } = { ok: true };
-      const committed = await updateState((prev) => {
-        const article = prev.articles.find((a) => a.id === articleId);
-        if (!article) {
-          outcome = { ok: false, error: 'Article not found' };
-          return prev;
-        }
-        const check = canTransitionStatus(article.status, nextStatus, prev.activeRole);
-        if (!check.allowed) {
-          outcome = { ok: false, error: check.reason };
-          return prev;
-        }
+      try {
+        const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, { ok: boolean; error?: string }>(
+          db,
+          STORE_NAME,
+          STATE_KEY,
+          getInitialSeedSnapshot(),
+          (prev) => {
+            const article = prev.articles.find((a) => a.id === articleId);
+            if (!article) {
+              return { snapshot: prev, result: { ok: false, error: 'Article not found' } };
+            }
+            const check = canTransitionStatus(article.status, nextStatus, prev.activeRole);
+            if (!check.allowed) {
+              return { snapshot: prev, result: { ok: false, error: check.reason } };
+            }
 
-        if (nextStatus === 'published' || nextStatus === 'scheduled') {
-          const auditReport = runArticleAudit({
-            article,
-            allArticles: prev.articles,
-            categories: prev.categories,
-            tags: prev.tags,
-            sources: prev.sources,
-            media: prev.media,
-            knowledgeLinks: prev.knowledgeLinks,
-            integrations: prev.integrations,
-            executedAt: intent.timestamp,
-          });
-          const gate = evaluatePublishGate({
-            report: auditReport,
-            currentStatus: article.status,
-            targetStatus: nextStatus,
-            activeRole: prev.activeRole,
-          });
-          if (gate.isBlocked) {
-            outcome = {
-              ok: false,
-              error:
-                gate.roleError ||
-                gate.blockers[0]?.title ||
-                'Article has publication blockers that must be resolved before publishing or scheduling.',
+            if (nextStatus === 'published' || nextStatus === 'scheduled') {
+              const auditReport = runArticleAudit({
+                article,
+                allArticles: prev.articles,
+                categories: prev.categories,
+                tags: prev.tags,
+                sources: prev.sources,
+                media: prev.media,
+                knowledgeLinks: prev.knowledgeLinks,
+                integrations: prev.integrations,
+                executedAt: intent.timestamp,
+              });
+              const gate = evaluatePublishGate({
+                report: auditReport,
+                currentStatus: article.status,
+                targetStatus: nextStatus,
+                activeRole: prev.activeRole,
+              });
+              if (gate.isBlocked) {
+                return {
+                  snapshot: prev,
+                  result: {
+                    ok: false,
+                    error:
+                      gate.roleError ||
+                      gate.blockers[0]?.title ||
+                      'Article has publication blockers that must be resolved before publishing or scheduling.',
+                  },
+                };
+              }
+            }
+
+            const now = intent.timestamp;
+            const nextVersion = article.version + 1;
+            const reviewNotes = [...(article.reviewNotes || [])];
+            if (note && note.trim()) {
+              reviewNotes.unshift({
+                id: intent.id,
+                articleId: article.id,
+                authorName: `${prev.activeRole.toUpperCase()} (Demo)`,
+                role: prev.activeRole,
+                note: note.trim(),
+                action:
+                  nextStatus === 'approved'
+                    ? 'approve'
+                    : nextStatus === 'revision_requested'
+                    ? 'request_revision'
+                    : nextStatus === 'in_review'
+                    ? 'submit'
+                    : 'comment',
+                createdAt: now,
+                resolved: nextStatus === 'approved' || nextStatus === 'published',
+              });
+            }
+
+            const updated: Article = {
+              ...article,
+              status: nextStatus,
+              publishedAt: nextStatus === 'published' ? now : article.publishedAt,
+              updatedAt: now,
+              version: nextVersion,
+              reviewNotes,
             };
-            return prev;
+
+            const rev: ArticleRevision = {
+              id: `rev-${updated.id}-v${nextVersion}-${intent.id}`,
+              articleId: updated.id,
+              version: nextVersion,
+              snapshot: updated,
+              source: nextStatus === 'published' ? 'publish' : 'review',
+              createdAt: now,
+              summary: `Status changed: ${article.status} -> ${nextStatus}${note ? ` (${note})` : ''}`,
+            };
+
+            return {
+              snapshot: {
+                ...prev,
+                articles: prev.articles.map((a) => (a.id === articleId ? updated : a)),
+                revisions: [rev, ...prev.revisions],
+                auditEvents: appendAudit(
+                  prev,
+                  `Changed status to ${nextStatus}`,
+                  'article',
+                  updated.title,
+                  nextStatus === 'published'
+                    ? 'Published in local demo store only — scientificradar.com remains untouched'
+                    : `Transitioned ${article.status} -> ${nextStatus}`,
+                  intent
+                ),
+              },
+              result: { ok: true },
+            };
           }
-        }
-
-        const now = intent.timestamp;
-        const nextVersion = article.version + 1;
-        const reviewNotes = [...(article.reviewNotes || [])];
-        if (note && note.trim()) {
-          reviewNotes.unshift({
-            id: intent.id,
-            articleId: article.id,
-            authorName: `${prev.activeRole.toUpperCase()} (Demo)`,
-            role: prev.activeRole,
-            note: note.trim(),
-            action:
-              nextStatus === 'approved'
-                ? 'approve'
-                : nextStatus === 'revision_requested'
-                ? 'request_revision'
-                : nextStatus === 'in_review'
-                ? 'submit'
-                : 'comment',
-            createdAt: now,
-            resolved: nextStatus === 'approved' || nextStatus === 'published',
-          });
-        }
-
-        const updated: Article = {
-          ...article,
-          status: nextStatus,
-          publishedAt: nextStatus === 'published' ? now : article.publishedAt,
-          updatedAt: now,
-          version: nextVersion,
-          reviewNotes,
-        };
-
-        const rev: ArticleRevision = {
-          id: `rev-${updated.id}-v${nextVersion}-${intent.id}`,
-          articleId: updated.id,
-          version: nextVersion,
-          snapshot: updated,
-          source: nextStatus === 'published' ? 'publish' : 'review',
-          createdAt: now,
-          summary: `Status changed: ${article.status} -> ${nextStatus}${note ? ` (${note})` : ''}`,
-        };
-
+        );
+        if (!committed.result.ok) return committed.result;
+        committedStateRef.current = committed.snapshot;
+        stateRef.current = committed.snapshot;
+        setState(committed.snapshot);
+        return committed.result;
+      } catch (err) {
         return {
-          ...prev,
-          articles: prev.articles.map((a) => (a.id === articleId ? updated : a)),
-          revisions: [rev, ...prev.revisions],
-          auditEvents: appendAudit(
-            prev,
-            `Changed status to ${nextStatus}`,
-            'article',
-            updated.title,
-            nextStatus === 'published'
-              ? 'Published in local demo store only — scientificradar.com remains untouched'
-              : `Transitioned ${article.status} -> ${nextStatus}`,
-            intent
-          ),
+          ok: false,
+          error: err instanceof Error ? err.message : 'Storage transaction failed; article status was not saved.',
         };
-      });
-      if (!committed) return { ok: false, error: 'Storage transaction failed; article status was not saved.' };
-      return outcome;
+      }
     },
-    [updateState, appendAudit, simulateSaveFailure]
+    [appendAudit, simulateSaveFailure]
   );
 
   const deleteArticle = useCallback(
@@ -1302,120 +1397,137 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (simulateSaveFailure) {
         return { ok: false, error: 'Storage transaction failed; accepted changes were not saved.' };
       }
+      const db = await getDb();
+      if (!db) {
+        return { ok: false, error: 'IndexedDB is unavailable; accepted changes were not saved.' };
+      }
       const intent = createEntityWriteIntent('assist');
-      let result: { ok: boolean; error?: string; updatedArticle?: Article } = { ok: false };
-      const committed = await updateState((prev) => {
-        const article = prev.articles.find((a) => a.id === articleId);
-        if (!article) {
-          result = { ok: false, error: 'Article not found' };
-          return prev;
-        }
-        if (acceptedChanges.length === 0) {
-          result = { ok: false, error: 'No changes selected to apply' };
-          return prev;
-        }
-        const stale = acceptedChanges.some((c) => c.baseVersion !== article.version);
-        if (stale) {
-          result = {
-            ok: false,
-            error: `Version conflict detected: Article was updated to v${article.version} after checks ran on v${acceptedChanges[0].baseVersion}. Please re-run checks.`,
+      try {
+        const committed = await commitSnapshotMutation<
+          StudioDatabaseSnapshot,
+          { ok: boolean; error?: string; updatedArticle?: Article }
+        >(db, STORE_NAME, STATE_KEY, getInitialSeedSnapshot(), (prev) => {
+          const article = prev.articles.find((a) => a.id === articleId);
+          if (!article) {
+            return { snapshot: prev, result: { ok: false, error: 'Article not found' } };
+          }
+          if (acceptedChanges.length === 0) {
+            return { snapshot: prev, result: { ok: false, error: 'No changes selected to apply' } };
+          }
+          const stale = acceptedChanges.some((c) => c.baseVersion !== article.version);
+          if (stale) {
+            return {
+              snapshot: prev,
+              result: {
+                ok: false,
+                error: `Version conflict detected: Article was updated to v${article.version} after checks ran on v${acceptedChanges[0].baseVersion}. Please re-run checks.`,
+              },
+            };
+          }
+
+          let nextArticle: Article = {
+            ...article,
+            seo: { ...article.seo },
+            tagIds: [...article.tagIds],
           };
-          return prev;
-        }
+          let nextMedia = [...prev.media];
 
-        let nextArticle: Article = {
-          ...article,
-          seo: { ...article.seo },
-          tagIds: [...article.tagIds],
-        };
-        let nextMedia = [...prev.media];
-
-        for (const chg of acceptedChanges) {
-          if (chg.targetPath === 'bodyHtml') {
-            const sanitized = sanitizeAndDemoteBodyH1(
-              nextArticle.bodyHtml,
-              trustedMediaSourceSet(prev.media.map((media) => media.src))
-            );
-            nextArticle.bodyHtml = sanitized.sanitizedHtml;
-          } else if (chg.targetPath === 'summary') {
-            nextArticle.summary = chg.after;
-          } else if (chg.targetPath === 'seo.title') {
-            nextArticle.seo.title = chg.after;
-          } else if (chg.targetPath === 'seo.description') {
-            nextArticle.seo.description = chg.after;
-          } else if (chg.targetPath === 'tagIds') {
-            const desiredNames = chg.after.split(',').map((s) => s.trim().toLowerCase());
-            const matchedIds = prev.tags
-              .filter((t) => desiredNames.includes(t.name.toLowerCase()))
-              .map((t) => t.id);
-            nextArticle.tagIds = normalizeArticleTagIds([...nextArticle.tagIds, ...matchedIds]).tagIds;
-          } else if (chg.targetPath === 'media.altText') {
-            nextMedia = nextMedia.map((m) =>
-              m.id === nextArticle.featuredMediaId || chg.id.endsWith(m.id)
-                ? { ...m, altText: chg.after }
-                : m
-            );
-          } else if (chg.targetPath === 'knowledgeLinks') {
-            const kl = prev.knowledgeLinks.find(
-              (k) => k.term.toLowerCase() === chg.before.toLowerCase()
-            );
-            if (kl) {
-              const regex = new RegExp(`\\b(${kl.term})\\b`, 'i');
-              nextArticle.bodyHtml = nextArticle.bodyHtml.replace(
-                regex,
-                `<a href="${kl.targetUrl}" data-knowledge-term="${kl.term.toLowerCase()}" target="${
-                  kl.targetType === 'wikipedia' ? '_blank' : '_self'
-                }" rel="noopener noreferrer">$1</a>`
+          for (const chg of acceptedChanges) {
+            if (chg.targetPath === 'bodyHtml') {
+              const sanitized = sanitizeAndDemoteBodyH1(
+                nextArticle.bodyHtml,
+                trustedMediaSourceSet(prev.media.map((media) => media.src))
               );
+              nextArticle.bodyHtml = sanitized.sanitizedHtml;
+            } else if (chg.targetPath === 'summary') {
+              nextArticle.summary = chg.after;
+            } else if (chg.targetPath === 'seo.title') {
+              nextArticle.seo.title = chg.after;
+            } else if (chg.targetPath === 'seo.description') {
+              nextArticle.seo.description = chg.after;
+            } else if (chg.targetPath === 'tagIds') {
+              const desiredNames = chg.after.split(',').map((s) => s.trim().toLowerCase());
+              const matchedIds = prev.tags
+                .filter((t) => desiredNames.includes(t.name.toLowerCase()))
+                .map((t) => t.id);
+              nextArticle.tagIds = normalizeArticleTagIds([...nextArticle.tagIds, ...matchedIds]).tagIds;
+            } else if (chg.targetPath === 'media.altText') {
+              nextMedia = nextMedia.map((m) =>
+                m.id === nextArticle.featuredMediaId || chg.id.endsWith(m.id)
+                  ? { ...m, altText: chg.after }
+                  : m
+              );
+            } else if (chg.targetPath === 'knowledgeLinks') {
+              const kl = prev.knowledgeLinks.find(
+                (k) => k.term.toLowerCase() === chg.before.toLowerCase()
+              );
+              if (kl) {
+                const regex = new RegExp(`\\b(${kl.term})\\b`, 'i');
+                nextArticle.bodyHtml = nextArticle.bodyHtml.replace(
+                  regex,
+                  `<a href="${kl.targetUrl}" data-knowledge-term="${kl.term.toLowerCase()}" target="${
+                    kl.targetType === 'wikipedia' ? '_blank' : '_self'
+                  }" rel="noopener noreferrer">$1</a>`
+                );
+              }
             }
           }
-        }
 
-        const now = intent.timestamp;
-        const nextVersion = article.version + 1;
-        nextArticle = {
-          ...nextArticle,
-          bodyHtml: sanitizeAndDemoteBodyH1(
-            nextArticle.bodyHtml,
-            trustedMediaSourceSet(nextMedia.map((media) => media.src))
-          ).sanitizedHtml,
-          version: nextVersion,
-          updatedAt: now,
-        };
+          const now = intent.timestamp;
+          const nextVersion = article.version + 1;
+          nextArticle = {
+            ...nextArticle,
+            bodyHtml: sanitizeAndDemoteBodyH1(
+              nextArticle.bodyHtml,
+              trustedMediaSourceSet(nextMedia.map((media) => media.src))
+            ).sanitizedHtml,
+            version: nextVersion,
+            updatedAt: now,
+          };
 
-        const rev: ArticleRevision = {
-          id: `rev-${nextArticle.id}-v${nextVersion}-${intent.id}`,
-          articleId: nextArticle.id,
-          version: nextVersion,
-          snapshot: nextArticle,
-          source: 'assistant_review',
-          createdAt: now,
-          summary: `Accepted ${acceptedChanges.length} local check proposal(s): ${acceptedChanges
-            .map((c) => c.label)
-            .join('; ')}`,
-        };
+          const rev: ArticleRevision = {
+            id: `rev-${nextArticle.id}-v${nextVersion}-${intent.id}`,
+            articleId: nextArticle.id,
+            version: nextVersion,
+            snapshot: nextArticle,
+            source: 'assistant_review',
+            createdAt: now,
+            summary: `Accepted ${acceptedChanges.length} local check proposal(s): ${acceptedChanges
+              .map((c) => c.label)
+              .join('; ')}`,
+          };
 
-        result = { ok: true, updatedArticle: nextArticle };
-
+          return {
+            snapshot: {
+              ...prev,
+              articles: prev.articles.map((a) => (a.id === articleId ? nextArticle : a)),
+              media: nextMedia,
+              revisions: [rev, ...prev.revisions],
+              auditEvents: appendAudit(
+                prev,
+                `Applied ${acceptedChanges.length} reviewed local check change(s)`,
+                'assistant',
+                nextArticle.title,
+                `Saved as new version v${nextVersion} (previous version recoverable)`,
+                intent
+              ),
+            },
+            result: { ok: true, updatedArticle: nextArticle },
+          };
+        });
+        if (!committed.result.ok) return committed.result;
+        committedStateRef.current = committed.snapshot;
+        stateRef.current = committed.snapshot;
+        setState(committed.snapshot);
+        return committed.result;
+      } catch (err) {
         return {
-          ...prev,
-          articles: prev.articles.map((a) => (a.id === articleId ? nextArticle : a)),
-          media: nextMedia,
-          revisions: [rev, ...prev.revisions],
-          auditEvents: appendAudit(
-            prev,
-            `Applied ${acceptedChanges.length} reviewed local check change(s)`,
-            'assistant',
-            nextArticle.title,
-            `Saved as new version v${nextVersion} (previous version recoverable)`,
-            intent
-          ),
+          ok: false,
+          error: err instanceof Error ? err.message : 'Storage transaction failed; accepted changes were not saved.',
         };
-      });
-      if (!committed) return { ok: false, error: 'Storage transaction failed; accepted changes were not saved.' };
-      return result;
+      }
     },
-    [updateState, appendAudit, simulateSaveFailure]
+    [appendAudit, simulateSaveFailure]
   );
 
   const savePage = useCallback(
@@ -1423,53 +1535,66 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (simulateSaveFailure) {
         throw new Error('Storage transaction failed; page changes were not saved.');
       }
+      const db = await getDb();
+      if (!db) {
+        throw new Error('IndexedDB is unavailable; page changes were not saved.');
+      }
       const intent = createEntityWriteIntent('page', pageInput.id);
-      let savedPage!: EditorialPage;
-      const committed = await updateState((prev) => {
-        const existing = pageInput.id ? prev.pages.find((p) => p.id === pageInput.id) : undefined;
-        const sanitized = sanitizeAndDemoteBodyH1(
-          pageInput.bodyHtml ?? existing?.bodyHtml ?? '<p></p>',
-          trustedMediaSourceSet(prev.media.map((media) => media.src))
-        );
-        const page: EditorialPage = {
-          id: existing?.id || intent.id,
-          title: pageInput.title.trim() || 'Untitled Page',
-          slug: slugify(pageInput.slug || existing?.slug || pageInput.title) || 'untitled-page',
-          locale: pageInput.locale || existing?.locale || 'en',
-          summary: pageInput.summary ?? existing?.summary ?? '',
-          body: pageInput.body ?? existing?.body ?? { type: 'doc', content: [] },
-          bodyHtml: sanitized.sanitizedHtml,
-          status: pageInput.status ?? existing?.status ?? 'draft',
-          template: pageInput.template ?? existing?.template ?? 'standard',
-          navigationVisibility:
-            pageInput.navigationVisibility ?? existing?.navigationVisibility ?? true,
-          seo: {
-            title: pageInput.seo?.title ?? existing?.seo?.title ?? `${pageInput.title} | ScientificRadar`,
-            description: pageInput.seo?.description ?? existing?.seo?.description ?? '',
-            noindex: true,
-          },
-          updatedAt: intent.timestamp,
-        };
-        savedPage = page;
-        return {
-          ...prev,
-          pages: existing
-            ? prev.pages.map((p) => (p.id === existing.id ? page : p))
-            : [page, ...prev.pages],
-          auditEvents: appendAudit(
-            prev,
-            existing ? 'Updated static page' : 'Created static page',
-            'page',
-            page.title,
-            `Slug: /${page.slug} · Template: ${page.template}`,
-            intent
-          ),
-        };
-      });
-      if (!committed) throw new Error('Storage transaction failed; page changes were not saved.');
-      return savedPage;
+      const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, EditorialPage>(
+        db,
+        STORE_NAME,
+        STATE_KEY,
+        getInitialSeedSnapshot(),
+        (prev) => {
+          const existing = pageInput.id ? prev.pages.find((p) => p.id === pageInput.id) : undefined;
+          const sanitized = sanitizeAndDemoteBodyH1(
+            pageInput.bodyHtml ?? existing?.bodyHtml ?? '<p></p>',
+            trustedMediaSourceSet(prev.media.map((media) => media.src))
+          );
+          const page: EditorialPage = {
+            id: existing?.id || intent.id,
+            title: pageInput.title.trim() || 'Untitled Page',
+            slug: slugify(pageInput.slug || existing?.slug || pageInput.title) || 'untitled-page',
+            locale: pageInput.locale || existing?.locale || 'en',
+            summary: pageInput.summary ?? existing?.summary ?? '',
+            body: pageInput.body ?? existing?.body ?? { type: 'doc', content: [] },
+            bodyHtml: sanitized.sanitizedHtml,
+            status: pageInput.status ?? existing?.status ?? 'draft',
+            template: pageInput.template ?? existing?.template ?? 'standard',
+            navigationVisibility:
+              pageInput.navigationVisibility ?? existing?.navigationVisibility ?? true,
+            seo: {
+              title: pageInput.seo?.title ?? existing?.seo?.title ?? `${pageInput.title} | ScientificRadar`,
+              description: pageInput.seo?.description ?? existing?.seo?.description ?? '',
+              noindex: true,
+            },
+            updatedAt: intent.timestamp,
+          };
+          return {
+            snapshot: {
+              ...prev,
+              pages: existing
+                ? prev.pages.map((p) => (p.id === existing.id ? page : p))
+                : [page, ...prev.pages],
+              auditEvents: appendAudit(
+                prev,
+                existing ? 'Updated static page' : 'Created static page',
+                'page',
+                page.title,
+                `Slug: /${page.slug} · Template: ${page.template}`,
+                intent
+              ),
+            },
+            result: page,
+          };
+        }
+      );
+      committedStateRef.current = committed.snapshot;
+      stateRef.current = committed.snapshot;
+      setState(committed.snapshot);
+      return committed.result;
     },
-    [updateState, appendAudit, simulateSaveFailure]
+    [appendAudit, simulateSaveFailure]
   );
 
   const deletePage = useCallback(
@@ -1683,14 +1808,26 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const deleteSource = useCallback(
     (sourceId: string) => {
-      updateState((prev) => ({
-        ...prev,
-        sources: prev.sources.filter((s) => s.id !== sourceId),
-        articles: prev.articles.map((a) => ({
-          ...a,
-          sourceIds: a.sourceIds.filter((id) => id !== sourceId),
-        })),
-      }));
+      const intent = createEntityWriteIntent('src-del', sourceId);
+      updateState((prev) => {
+        const nextAuditReports = { ...(prev.auditReportsByArticleId || {}) };
+        const nextArticles = prev.articles.map((a) => {
+          if (!a.sourceIds.includes(sourceId)) return a;
+          delete nextAuditReports[a.id];
+          return {
+            ...a,
+            sourceIds: a.sourceIds.filter((id) => id !== sourceId),
+            version: a.version + 1,
+            updatedAt: intent.timestamp,
+          };
+        });
+        return {
+          ...prev,
+          sources: prev.sources.filter((s) => s.id !== sourceId),
+          articles: nextArticles,
+          auditReportsByArticleId: nextAuditReports,
+        };
+      });
     },
     [updateState]
   );
@@ -1754,8 +1891,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         byteSize: assetInput.byteSize || 38400,
         altText: assetInput.altText || '',
         caption: assetInput.caption || '',
-        credit: assetInput.credit || 'Local Demo Upload',
-        licence: assetInput.licence || 'CC BY 4.0',
+        credit: assetInput.credit?.trim() ?? '',
+        licence: assetInput.licence?.trim() ?? '',
         sourceUrl: assetInput.sourceUrl || '',
         layout: assetInput.layout || (isFigure ? 'locked' : 'auto'),
         focalPoint: assetInput.focalPoint || { x: 0.5, y: 0.5 },
