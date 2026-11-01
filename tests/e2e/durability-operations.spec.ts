@@ -18,14 +18,21 @@ async function readSnapshot(page: import('@playwright/test').Page): Promise<Stor
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    const snapshot = await new Promise<StoredSnapshot>((resolve, reject) => {
-      const tx = db.transaction('studio_state', 'readonly');
-      const request = tx.objectStore('studio_state').get('root_snapshot_v1');
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    db.close();
-    return snapshot;
+    try {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const snapshot = await new Promise<StoredSnapshot | undefined>((resolve, reject) => {
+          const tx = db.transaction('studio_state', 'readonly');
+          const request = tx.objectStore('studio_state').get('root_snapshot_v1');
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        if (snapshot) return snapshot;
+        await new Promise((resolve) => window.setTimeout(resolve, 50));
+      }
+      throw new Error('The application did not persist root_snapshot_v1 after 5 seconds.');
+    } finally {
+      db.close();
+    }
   });
 }
 
@@ -74,6 +81,7 @@ function revisionRow(page: import('@playwright/test').Page) {
 
 test('fresh revision restoration commits a new sanitized version before success feedback', async ({ page, diagnostics }) => {
   await page.goto('/dashboard');
+  await readSnapshot(page);
   await page.evaluate(async (id) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open('scientificradar-studio-p0-db');
