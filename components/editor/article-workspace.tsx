@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import {
   Save,
@@ -129,6 +130,18 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>(
     existingArticle?.sourceIds || []
   );
+  // Keep editor dependency identities stable across unrelated React state updates.
+  // Otherwise CKEditor's external-content sync effect sees a fresh Set/array on
+  // every parent render, calls onSyncJson again, and can enter an update loop.
+  const editorAvailableSources = useMemo(
+    () => sources.filter((source) => selectedSourceIds.includes(source.id)),
+    [sources, selectedSourceIds]
+  );
+  const editorTrustedImageSources = useMemo(
+    () => new Set(media.map((asset) => asset.src)),
+    [media]
+  );
+
   const [featuredMediaId, setFeaturedMediaId] = useState<string>(
     existingArticle?.featuredMediaId || ''
   );
@@ -1023,8 +1036,8 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 <ArticleCKEditor
                   contentHtml={bodyHtml}
                   knowledgeLinks={knowledgeLinks}
-                  availableSources={sources.filter((s) => selectedSourceIds.includes(s.id))}
-                  trustedImageSources={new Set(media.map((m) => m.src))}
+                  availableSources={editorAvailableSources}
+                  trustedImageSources={editorTrustedImageSources}
                   pendingFigureInsert={pendingFigureInsert}
                   onFigureInserted={() => setPendingFigureInsert(null)}
                   onRequestMediaInsert={() => setFigurePickerOpen(true)}
@@ -1057,8 +1070,8 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 <ArticleTiptapEditor
                   contentHtml={bodyHtml}
                   knowledgeLinks={knowledgeLinks}
-                  availableSources={sources.filter((s) => selectedSourceIds.includes(s.id))}
-                  trustedImageSources={new Set(media.map((m) => m.src))}
+                  availableSources={editorAvailableSources}
+                  trustedImageSources={editorTrustedImageSources}
                   pendingFigureInsert={pendingFigureInsert}
                   onFigureInserted={() => setPendingFigureInsert(null)}
                   onRequestMediaInsert={() => setFigurePickerOpen(true)}
@@ -1666,10 +1679,16 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                     {featuredMedia && (
                       <div className="space-y-3 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
                         <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-950 p-2 dark:border-slate-800">
-                          <img
+                          <Image
                             src={featuredMedia.src}
                             alt={featuredMedia.altText || featuredMedia.title}
-                            className="mx-auto max-h-40 w-auto object-contain"
+                            width={640}
+                            height={360}
+                            // Local data URLs and editorial previews should bypass the
+                            // Next optimization proxy. Public article images use their
+                            // own separately configured optimized delivery path.
+                            unoptimized
+                            className="mx-auto h-auto max-h-40 w-auto object-contain"
                           />
                         </div>
 
