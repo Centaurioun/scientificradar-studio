@@ -37,4 +37,20 @@ jobs:
           du -sh core/packages/* | sort -h | tail -18
           echo CORE_ROOT_DIRS:
           du -sh core/* | sort -h | tail -20
+          echo STAGED_SOURCE_COPY_SIMULATION
+          mkdir -p source-only/ckeditor5/packages source-only/ckeditor5-math
+          rsync -a --prune-empty-dirs \
+            --include='*/' --include='*.ts' --include='*.tsx' --include='*.js' \
+            --include='*.mjs' --include='*.cjs' --include='*.css' --include='*.scss' \
+            --include='*.svg' --include='*.json' --include='*.md' \
+            --include='*.html' --include='*.yml' --include='*.yaml' \
+            --include='*.xml' --include='*.txt' --exclude='*' \
+            core/packages/ source-only/ckeditor5/packages/
+          for f in package.json pnpm-workspace.yaml COPYING.GPL LICENSE.md README.md tsconfig.json tsconfig.build.json; do cp "core/$f" source-only/ckeditor5/; done
+          cp -a math/. source-only/ckeditor5-math/
+          rm -rf source-only/ckeditor5-math/.git
+          du -sh source-only/ckeditor5 source-only/ckeditor5-math
+          echo STAGED_FILES=$(find source-only/ckeditor5 -type f | wc -l)
+          echo LARGE_SOURCE_FILES:
+          find source-only/ckeditor5 -type f -size +1000k -printf '%s %p\n' | sort -nr | head -20
           echo CKEDITOR_FOOTPRINT_END
