@@ -56,7 +56,7 @@ export default function PublishingCalendarPage() {
     return interpretWallTime(scheduleDate, timeZone, dstDisambiguation);
   }, [scheduleDate, timeZone, dstDisambiguation]);
 
-  const handleSchedule = (e: React.FormEvent) => {
+  const handleSchedule = async (e: React.FormEvent) => {
     e.preventDefault();
     setWarning(null);
     setSuccess(null);
@@ -89,11 +89,16 @@ export default function PublishingCalendarPage() {
       return;
     }
 
-    saveArticle({
-      ...target,
-      status: 'scheduled',
-      scheduledAt: interpretation.utcIso,
-    });
+    try {
+      await saveArticle({
+        ...target,
+        status: 'scheduled',
+        scheduledAt: interpretation.utcIso,
+      });
+    } catch (error) {
+      setWarning(error instanceof Error ? error.message : 'Schedule was not saved.');
+      return;
+    }
 
     const formattedLocal = formatLocalizedInstant(interpretation.utcIso, effectivePrefs, {
       mode: 'datetime',

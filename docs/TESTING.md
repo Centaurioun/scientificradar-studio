@@ -41,6 +41,39 @@ These are known failures from the 2026-11-01 isolated Brave runtime audit. PR-A 
 | SRS-RT-007 | Save a newer value in a second tab, apply an older Quick Fix proposal, and assert the newer value is not overwritten. | Pending; no Quick Fix mutation in smoke tests. |
 | SRS-RT-008 | Render a 120+ character article title at the three required viewports and assert the full title stays visible without clipping. | Pending; layout remains unchanged. |
 
+## PR-C persistence regressions
+
+`tests/e2e/concurrency.spec.ts` covers cross-tab stale drafts and revision restores, a held same-tab save whose older successful receipt must preserve the later dirty draft and beforeunload guard, a held older transaction abort with scheduled retry, stale and fresh SEO Quick Fixes, and a native transaction abort that retains the editor draft and permits a later durable save. `tests/e2e/durability-operations.spec.ts` verifies sanitized fresh revision restore, aborted restore with an unsaved editor draft, transactional duplicate success/failure and unique slug, delete success/failure, unrelated concurrent-root-change preservation, and the distinction between an in-memory audit report and an IndexedDB-persisted report. The held-operation cases use real IndexedDB read/write transactions and keep them active until the test releases or aborts them. They read `root_snapshot_v1` directly; successful mutations are also checked after reload. `lib/studio-persistence.test.ts` checks concurrent read-modify-write ordering, transaction-completion acknowledgment, no-op conflict behavior, and failed writes.
+
+Local PR-C verification on Bun 1.4.0 / Node.js 26.12.1, macOS Brave 156.1.98.60 (`/Applications/Brave Browser.app/Contents/MacOS/Brave Browser`):
+
+| Command | Result |
+| --- | --- |
+| `bun install --frozen-lockfile` | Pass; no lockfile changes |
+| `bun run test:unit` | 29 passed, 0 failed |
+| `bun run typecheck` | Pass |
+| `bun run lint` | Pass, 0 errors; one pre-existing `<img>` warning in `components/editor/article-workspace.tsx:1454` |
+| `bun run build` | Pass |
+| `bun run test:e2e` (isolated Brave) | 27 passed, 0 failed on `127.0.0.1:4175` |
+| `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=... bun run test:e2e` (pinned Playwright Chromium) | 27 passed, 0 failed on `127.0.0.1:4175` |
+
+The original stale cross-tab and Quick Fix regressions were copied unchanged to an isolated worktree at baseline `4f756294a81531b39d1fd9dfc68c68e29b3dd668`; both failed there because the stale editor save and old Quick Fix were acknowledged without a conflict. The same-tab receipt regression also failed on the committed editor implementation: IndexedDB held the first title while the UI incorrectly showed `Saved (Local)` instead of `Unsaved changes`. The final isolated Brave and pinned Playwright Chromium suites each pass all 27 cases, including PR-B HTML security and backup import coverage. The first clean hosted CI attempt passed unit, TypeScript, lint, build, and GitGuardian but exposed that the new direct IndexedDB reader did not create the version-1 object store when opening a fresh database. The second attempt then exposed an initialization race: a few tests read before the application's initial `root_snapshot_v1` write had committed. The helper now creates the store on upgrade and waits up to five seconds for the seed snapshot; both full local browser suites pass after the synchronization correction. Hosted CI must check the final exact head.
+
+### Durable mutation boundary
+
+The audited article operations covered here—draft saves, status transitions, assistant changes, Quick Fix, revision restore, duplicate, delete, calendar scheduling, backup import, and SEO audit report storage—return or display successful completion only after their authoritative IndexedDB mutation commits. Restore rejects a stale expected article version; failure and abort leave the stored article and editor draft unchanged. SEO audit receipts distinguish calculated reports from reports persisted in IndexedDB.
+
+This PR does **not** claim app-wide SRS-DATA-003 completion. Supporting-entity and other generic `updateState` actions outside the audited article paths still optimistically update React state and do not all expose awaited durable receipts. In particular, media library mutations and linked-media durability are outside this repair's scope; taxonomy, author, source, page deletion, and preference CRUD also retain separate generic contracts. Those paths need their own bounded contract and failure/UI coverage before they can be represented as universally durable. PR-F1's fingerprint calculation and PR-F2's SEO Center freshness redesign remain separate ownership.
+
+## PR-C six-cycle refinement record
+
+1. **Cycle 1 — reproduce:** Read the independent review and confirmed each positive receipt path against source. Held/aborted browser transactions reproduced early duplicate and audit success messages; restore abort and stale-revision tests exposed missing receipts/conflict rejection.
+2. **Cycle 2 — contracts:** Restore now requires the caller's expected current article version and validates it against the latest root inside the transaction. Duplicate identity is generated once per operation and slug is chosen against the latest committed articles. Delete and audit return explicit commit/failure receipts.
+3. **Cycle 3 — transactional operations:** Restore sanitizes with the existing PR-B policy and creates the new revision atomically with the restored article. Duplicate, delete, and restore update React context only after `tx.done`; aborted operations leave authoritative state unchanged.
+4. **Cycle 4 — audit receipt and feedback:** Audit calculation and IndexedDB persistence are distinct receipt fields. Single and batch audit messages report saved reports only after commit; memory-only calculations are explicitly labeled, and pre-publish UI does not proceed on an unsaved audit report.
+5. **Cycle 5 — full verification:** Frozen Bun install, 29 unit tests, TypeScript, lint, build, and full E2E each passed. Isolated Brave and pinned Playwright Chromium each passed 27 tests, including prior 18, the new operations, PR-B security, and backup import coverage.
+6. **Cycle 6 — call-site and failure-path review:** Reviewed both restore callers, article list duplicate/delete handlers, all audit callers, conflict/abort receipts, IndexedDB reload reads, and final diff. The duplicate transaction preserved a concurrent unrelated theme update in a second tab. Explicitly retained the non-covered generic `updateState`/supporting-entity boundary; SRS-DATA-003 is not marked fully complete app-wide. GitHub Actions and GitGuardian remain required on the final pushed exact head.
+
 ## PR-A refinement record
 
 1. **Cycle 1 — baseline and architecture:** fetched `origin/main` at `0a26268503008aab78437ef4186c05ffa1a43123`; frozen Bun 1.4.0 install succeeded; native `bun test` passed all 14 existing cases. Chose Bun for unit tests because it runs the existing Node-style tests without an extra TSX package or altered semantics. Retained Node for Next.js and selected Playwright Test only for browser automation.

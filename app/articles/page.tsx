@@ -40,6 +40,7 @@ export default function ArticlesListPage() {
   const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [pendingArticleAction, setPendingArticleAction] = useState<string | null>(null);
 
   const filteredArticles = useMemo(() => {
     return articles.filter((art) => {
@@ -102,11 +103,11 @@ export default function ArticlesListPage() {
 
   const selectedList = Object.keys(selectedIds).filter((id) => selectedIds[id]);
 
-  const handleBulkStatusChange = (nextStatus: ArticleStatus) => {
+  const handleBulkStatusChange = async (nextStatus: ArticleStatus) => {
     let updatedCount = 0;
     let deniedReason: string | undefined;
     for (const id of selectedList) {
-      const res = transitionArticleStatus(id, nextStatus, 'Bulk status transition');
+      const res = await transitionArticleStatus(id, nextStatus, 'Bulk status transition');
       if (res.ok) {
         updatedCount += 1;
       } else {
@@ -388,11 +389,16 @@ export default function ArticlesListPage() {
                           </Link>
                           <button
                             type="button"
-                            onClick={() => {
-                              const copy = duplicateArticle(art.id);
-                              if (copy) {
-                                setFeedback(`Duplicated article with unique slug /${copy.slug}`);
-                              }
+                            disabled={pendingArticleAction !== null}
+                            onClick={async () => {
+                              setPendingArticleAction(`duplicate:${art.id}`);
+                              const result = await duplicateArticle(art.id);
+                              setFeedback(
+                                result.ok && result.article
+                                  ? `Duplicated article with unique slug /${result.article.slug}`
+                                  : `Duplicate failed: ${result.error || 'Article was not saved.'}`
+                              );
+                              setPendingArticleAction(null);
                             }}
                             title={`Duplicate ${art.title}`}
                             aria-label={`Duplicate ${art.title}`}
@@ -402,7 +408,11 @@ export default function ArticlesListPage() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => transitionArticleStatus(art.id, 'archived')}
+                            onClick={() => {
+                              void transitionArticleStatus(art.id, 'archived').then((res) => {
+                                setFeedback(res.ok ? `Archived "${art.title}".` : `Archive failed: ${res.error}`);
+                              });
+                            }}
                             title={`Archive ${art.title}`}
                             aria-label={`Archive ${art.title}`}
                             className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
@@ -453,13 +463,23 @@ export default function ArticlesListPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    deleteArticle(confirmDeleteId);
+                  disabled={pendingArticleAction !== null}
+                  onClick={async () => {
+                    const deletingId = confirmDeleteId;
+                    if (!deletingId) return;
+                    setPendingArticleAction(`delete:${deletingId}`);
+                    const result = await deleteArticle(deletingId);
+                    setFeedback(
+                      result.ok
+                        ? 'Deleted article from local demo repository.'
+                        : `Delete failed: ${result.error || 'Article was not deleted.'}`
+                    );
+                    setPendingArticleAction(null);
                     setConfirmDeleteId(null);
                   }}
                   className="px-3 py-1.5 rounded bg-red-600 hover:bg-red-700 text-white text-xs font-semibold"
                 >
-                  Delete Permanently
+                  {pendingArticleAction === `delete:${confirmDeleteId}` ? 'Deleting…' : 'Delete Permanently'}
                 </button>
               </div>
             </div>

@@ -126,7 +126,7 @@ export function CodexAssistantDrawer({
     setSelectedChangeIds({});
   };
 
-  const handleApplySelected = () => {
+  const handleApplySelected = async () => {
     const chosen = proposals.filter((p) => selectedChangeIds[p.id] && p.safeToAutoSelect);
     if (chosen.length === 0) {
       setFeedbackBanner({
@@ -135,7 +135,7 @@ export function CodexAssistantDrawer({
       });
       return;
     }
-    const res = applyAssistantChanges(article.id, chosen);
+    const res = await applyAssistantChanges(article.id, chosen);
     if (!res.ok) {
       setFeedbackBanner({ type: 'error', message: res.error || 'Failed to apply changes' });
       return;

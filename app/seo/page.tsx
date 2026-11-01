@@ -118,12 +118,15 @@ export default function SeoCenterPage() {
     );
   }, [auditedArticles]);
 
-  const handleRunAllAudits = () => {
-    for (const art of articles) {
-      runAndStoreArticleAudit(art.id);
-    }
+  const handleRunAllAudits = async () => {
+    const receipts = await Promise.all(articles.map((article) => runAndStoreArticleAudit(article.id)));
+    const computed = receipts.filter((receipt) => receipt.report).length;
+    const saved = receipts.filter((receipt) => receipt.persisted).length;
+    const memoryOnly = receipts.filter((receipt) => receipt.report && !receipt.persisted).length;
     setAuditBanner(
-      `Executed deterministic SEO & Editorial Quality Audit across all ${articles.length} manuscripts.`
+      saved === receipts.length
+        ? `Calculated and saved SEO audits for ${saved} manuscripts in IndexedDB.`
+        : `Calculated ${computed} SEO audits; ${saved} saved to IndexedDB and ${memoryOnly} remain in memory only because storage failed.`
     );
   };
 

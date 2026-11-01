@@ -51,23 +51,29 @@ export function PageWorkspace({ pageId }: { pageId?: string }) {
     return () => window.clearTimeout(timer);
   }, [existing]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!title.trim()) {
       setNotice('Page title (H1) is required.');
       return;
     }
-    const saved = savePage({
-      id: existing?.id || pageId,
-      title,
-      slug: slug || title,
-      locale,
-      summary,
-      body: bodyJson,
-      bodyHtml,
-      template,
-      status,
-      navigationVisibility,
-    });
+    let saved: EditorialPage;
+    try {
+      saved = await savePage({
+        id: existing?.id || pageId,
+        title,
+        slug: slug || title,
+        locale,
+        summary,
+        body: bodyJson,
+        bodyHtml,
+        template,
+        status,
+        navigationVisibility,
+      });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Page changes were not saved.');
+      return;
+    }
     setNotice(`Saved page "${saved.title}" in local demo repository.`);
     if (!existing) {
       router.replace(`/pages/${saved.id}/edit`);
