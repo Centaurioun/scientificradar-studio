@@ -1,0 +1,23 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+/**
+ * @module utils/dom/remove
+ */
+
+import { getParentNode } from './getparentnode.js';
+
+/**
+ * Removes given node from parent.
+ *
+ * @param node Node to remove.
+ */
+export function remove( node: Node ): void {
+	const parent = getParentNode( node );
+
+	if ( parent ) {
+		parent.removeChild( node );
+	}
+}

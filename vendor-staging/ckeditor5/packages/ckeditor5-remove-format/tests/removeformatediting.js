@@ -1,0 +1,41 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { ModelTestEditor } from '@ckeditor/ckeditor5-core/tests/_utils/modeltesteditor.js';
+import { RemoveFormatCommand } from '../src/removeformatcommand.js';
+import { RemoveFormatEditing } from '../src/removeformatediting.js';
+
+describe( 'RemoveFormat', () => {
+	let editor;
+
+	beforeEach( () => {
+		return ModelTestEditor.create( {
+			plugins: [ RemoveFormatEditing ]
+		} ).then( newEditor => {
+			editor = newEditor;
+		} );
+	} );
+
+	afterEach( () => {
+		return editor.destroy();
+	} );
+
+	it( 'should have `isOfficialPlugin` static flag set to `true`', () => {
+		expect( RemoveFormatEditing.isOfficialPlugin ).toBe( true );
+	} );
+
+	it( 'should have `isPremiumPlugin` static flag set to `true`', () => {
+		expect( RemoveFormatEditing.isPremiumPlugin ).toBe( true );
+	} );
+
+	it( 'should have `licenseFeatureCode` static flag set to `RF`', () => {
+		expect( RemoveFormatEditing.licenseFeatureCode ).toBe( 'RF' );
+	} );
+
+	it( 'should register removeFormat command', () => {
+		expect( editor.commands.get( 'removeFormat' ) ).toBeInstanceOf( RemoveFormatCommand );
+	} );
+} );

@@ -1,0 +1,44 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+/**
+ * @module restricted-editing/restrictededitingmode
+ */
+
+import { Plugin, type PluginDependenciesOf } from '@ckeditor/ckeditor5-core';
+
+import { RestrictedEditingModeEditing } from './restrictededitingmodeediting.js';
+import { RestrictedEditingModeUI } from './restrictededitingmodeui.js';
+
+/**
+ * The restricted editing mode plugin.
+ *
+ * This is a "glue" plugin which loads the following plugins:
+ *
+ * * The {@link module:restricted-editing/restrictededitingmodeediting~RestrictedEditingModeEditing restricted mode editing feature}.
+ * * The {@link module:restricted-editing/restrictededitingmodeui~RestrictedEditingModeUI restricted mode UI feature}.
+ */
+export class RestrictedEditingMode extends Plugin {
+	/**
+	 * @inheritDoc
+	 */
+	public static get pluginName() {
+		return 'RestrictedEditingMode' as const;
+	}
+
+	/**
+	 * @inheritDoc
+	 */
+	public static override get isOfficialPlugin(): true {
+		return true;
+	}
+
+	/**
+	 * @inheritDoc
+	 */
+	public static get requires(): PluginDependenciesOf<[ RestrictedEditingModeEditing, RestrictedEditingModeUI ]> {
+		return [ RestrictedEditingModeEditing, RestrictedEditingModeUI ];
+	}
+}

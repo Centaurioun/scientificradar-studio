@@ -1,0 +1,419 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Paragraph } from '@ckeditor/ckeditor5-paragraph';
+import { VirtualTestEditor } from '@ckeditor/ckeditor5-core/tests/_utils/virtualtesteditor.js';
+import { ClassicTestEditor } from '@ckeditor/ckeditor5-core/tests/_utils/classictesteditor.js';
+import { _getModelData, _setModelData } from '@ckeditor/ckeditor5-engine';
+import { ImageBlockEditing } from '@ckeditor/ckeditor5-image';
+
+import { TableEditing } from '../src/tableediting.js';
+import { modelTable } from './_utils/utils.js';
+import { InsertRowCommand } from '../src/commands/insertrowcommand.js';
+import { InsertTableCommand } from '../src/commands/inserttablecommand.js';
+import { InsertColumnCommand } from '../src/commands/insertcolumncommand.js';
+import { RemoveRowCommand } from '../src/commands/removerowcommand.js';
+import { RemoveColumnCommand } from '../src/commands/removecolumncommand.js';
+import { SelectRowCommand } from '../src/commands/selectrowcommand.js';
+import { SelectColumnCommand } from '../src/commands/selectcolumncommand.js';
+import { SplitCellCommand } from '../src/commands/splitcellcommand.js';
+import { MergeCellCommand } from '../src/commands/mergecellcommand.js';
+import { SetHeaderRowCommand } from '../src/commands/setheaderrowcommand.js';
+import { SetHeaderColumnCommand } from '../src/commands/setheadercolumncommand.js';
+import { SetFooterRowCommand } from '../src/commands/setfooterrowcommand.js';
+import { MediaEmbedEditing } from '@ckeditor/ckeditor5-media-embed';
+
+describe( 'TableEditing', () => {
+	let editor, model;
+
+	beforeEach( () => {
+		return VirtualTestEditor
+			.create( {
+				plugins: [ TableEditing, Paragraph, ImageBlockEditing, MediaEmbedEditing ]
+			} )
+			.then( newEditor => {
+				editor = newEditor;
+
+				model = editor.model;
+			} );
+	} );
+
+	afterEach( async () => {
+		await editor.destroy();
+	} );
+
+	it( 'should have pluginName', () => {
+		expect( TableEditing.pluginName ).toEqual( 'TableEditing' );
+	} );
+
+	it( 'should have `isOfficialPlugin` static flag set to `true`', () => {
+		expect( TableEditing.isOfficialPlugin ).toBe( true );
+	} );
+
+	it( 'should have `isPremiumPlugin` static flag set to `false`', () => {
+		expect( TableEditing.isPremiumPlugin ).toBe( false );
+	} );
+
+	it( 'should set proper schema rules', () => {
+		// Table:
+		expect( model.schema.isRegistered( 'table' ) ).toBe( true );
+		expect( model.schema.isObject( 'table' ) ).toBe( true );
+		expect( model.schema.isBlock( 'table' ) ).toBe( true );
+
+		expect( model.schema.checkChild( [ '$root' ], 'table' ) ).toBe( true );
+		expect( model.schema.checkAttribute( [ '$root', 'table' ], 'headingRows' ) ).toBe( true );
+		expect( model.schema.checkAttribute( [ '$root', 'table' ], 'headingColumns' ) ).toBe( true );
+		expect( model.schema.checkAttribute( [ '$root', 'table' ], 'footerRows' ) ).toBe( false );
+
+		// Table row:
+		expect( model.schema.isRegistered( 'tableRow' ) ).toBe( true );
+		expect( model.schema.isLimit( 'tableRow' ) ).toBe( true );
+
+		expect( model.schema.checkChild( [ '$root' ], 'tableRow' ) ).toBe( false );
+		expect( model.schema.checkChild( [ 'table' ], 'tableRow' ) ).toBe( true );
+
+		// Table cell:
+		expect( model.schema.isRegistered( 'tableCell' ) ).toBe( true );
+		expect( model.schema.isLimit( 'tableCell' ) ).toBe( true );
+		expect( model.schema.isObject( 'tableCell' ) ).toBe( false );
+		expect( model.schema.isSelectable( 'tableCell' ) ).toBe( true );
+
+		expect( model.schema.checkChild( [ '$root' ], 'tableCell' ) ).toBe( false );
+		expect( model.schema.checkChild( [ 'table' ], 'tableCell' ) ).toBe( false );
+		expect( model.schema.checkChild( [ 'tableRow' ], 'tableCell' ) ).toBe( true );
+		expect( model.schema.checkChild( [ 'tableCell' ], 'tableCell' ) ).toBe( false );
+
+		expect( model.schema.checkAttribute( [ 'tableCell' ], 'colspan' ) ).toBe( true );
+		expect( model.schema.checkAttribute( [ 'tableCell' ], 'rowspan' ) ).toBe( true );
+
+		// Table cell contents:
+		expect( model.schema.checkChild( [ '$root', 'table', 'tableRow', 'tableCell' ], '$text' ) ).toBe( false );
+		expect( model.schema.checkChild( [ '$root', 'table', 'tableRow', 'tableCell' ], '$block' ) ).toBe( true );
+		expect( model.schema.checkChild( [ '$root', 'table', 'tableRow', 'tableCell' ], 'table' ) ).toBe( true );
+		expect( model.schema.checkChild( [ '$root', 'table', 'tableRow', 'tableCell' ], 'imageBlock' ) ).toBe( true );
+	} );
+
+	it( 'should define table.showHiddenBorders config', async () => {
+		const editorElement = document.createElement( 'div' );
+
+		document.body.appendChild( editorElement );
+
+		const editor = await ClassicTestEditor.create( editorElement, {
+			plugins: [ TableEditing, Paragraph ]
+		} );
+
+		expect( editor.config.get( 'table.showHiddenBorders' ) ).toBe( true );
+		expect( editor.editing.view.getDomRoot().classList.contains( 'ck-table-show-hidden-borders' ) ).toBe( true );
+
+		editorElement.remove();
+		await editor.destroy();
+	} );
+
+	it( 'should get `table.showHiddenBorders` config set to false', async () => {
+		const editorElement = document.createElement( 'div' );
+
+		document.body.appendChild( editorElement );
+
+		const editor = await ClassicTestEditor.create( editorElement, {
+			plugins: [ TableEditing, Paragraph ],
+			table: {
+				showHiddenBorders: false
+			}
+		} );
+
+		expect( editor.config.get( 'table.showHiddenBorders' ) ).toBe( false );
+		expect( editor.editing.view.getDomRoot().classList.contains( 'ck-table-show-hidden-borders' ) ).toBe( false );
+
+		editorElement.remove();
+		await editor.destroy();
+	} );
+
+	it( 'inherits attributes from $blockObject', () => {
+		model.schema.extend( '$blockObject', {
+			allowAttributes: 'foo'
+		} );
+
+		expect( model.schema.checkAttribute( 'table', 'foo' ) ).toBe( true );
+	} );
+
+	it( 'adds insertTable command', () => {
+		expect( editor.commands.get( 'insertTable' ) ).to.be.instanceOf( InsertTableCommand );
+	} );
+
+	it( 'adds insertRowAbove command', () => {
+		expect( editor.commands.get( 'insertTableRowAbove' ) ).to.be.instanceOf( InsertRowCommand );
+	} );
+
+	it( 'adds insertRowBelow command', () => {
+		expect( editor.commands.get( 'insertTableRowBelow' ) ).to.be.instanceOf( InsertRowCommand );
+	} );
+
+	it( 'adds insertColumnLeft command', () => {
+		expect( editor.commands.get( 'insertTableColumnLeft' ) ).to.be.instanceOf( InsertColumnCommand );
+	} );
+
+	it( 'adds insertColumnRight command', () => {
+		expect( editor.commands.get( 'insertTableColumnRight' ) ).to.be.instanceOf( InsertColumnCommand );
+	} );
+
+	it( 'adds removeRow command', () => {
+		expect( editor.commands.get( 'removeTableRow' ) ).to.be.instanceOf( RemoveRowCommand );
+	} );
+
+	it( 'adds removeColumn command', () => {
+		expect( editor.commands.get( 'removeTableColumn' ) ).to.be.instanceOf( RemoveColumnCommand );
+	} );
+
+	it( 'adds selectRow command', () => {
+		expect( editor.commands.get( 'selectTableRow' ) ).to.be.instanceOf( SelectRowCommand );
+	} );
+
+	it( 'adds selectColumn command', () => {
+		expect( editor.commands.get( 'selectTableColumn' ) ).to.be.instanceOf( SelectColumnCommand );
+	} );
+
+	it( 'adds splitCellVertically command', () => {
+		expect( editor.commands.get( 'splitTableCellVertically' ) ).to.be.instanceOf( SplitCellCommand );
+	} );
+
+	it( 'adds splitCellHorizontally command', () => {
+		expect( editor.commands.get( 'splitTableCellHorizontally' ) ).to.be.instanceOf( SplitCellCommand );
+	} );
+
+	it( 'adds mergeCellRight command', () => {
+		expect( editor.commands.get( 'mergeTableCellRight' ) ).to.be.instanceOf( MergeCellCommand );
+	} );
+
+	it( 'adds mergeCellLeft command', () => {
+		expect( editor.commands.get( 'mergeTableCellLeft' ) ).to.be.instanceOf( MergeCellCommand );
+	} );
+
+	it( 'adds mergeCellDown command', () => {
+		expect( editor.commands.get( 'mergeTableCellDown' ) ).to.be.instanceOf( MergeCellCommand );
+	} );
+
+	it( 'adds mergeCellUp command', () => {
+		expect( editor.commands.get( 'mergeTableCellUp' ) ).to.be.instanceOf( MergeCellCommand );
+	} );
+
+	it( 'adds setColumnHeader command', () => {
+		expect( editor.commands.get( 'setTableColumnHeader' ) ).to.be.instanceOf( SetHeaderColumnCommand );
+	} );
+
+	it( 'adds setRowHeader command', () => {
+		expect( editor.commands.get( 'setTableRowHeader' ) ).to.be.instanceOf( SetHeaderRowCommand );
+	} );
+
+	it( 'does not add setFooterRow command by default', () => {
+		expect( editor.commands.get( 'setTableFooterRow' ) ).toBeUndefined();
+	} );
+
+	describe( 'config', () => {
+		it( 'disables table footers by default', () => {
+			expect( editor.config.get( 'table.enableFooters' ) ).toBe( false );
+		} );
+
+		it( 'sets proper default heading rows and columns', () => {
+			expect( editor.config.get( 'table.defaultHeadings.rows' ) ).toEqual( 0 );
+			expect( editor.config.get( 'table.defaultHeadings.columns' ) ).toEqual( 0 );
+		} );
+
+		it( 'sets proper default footer rows', () => {
+			expect( editor.config.get( 'table.defaultFooters' ) ).toEqual( 0 );
+		} );
+	} );
+
+	describe( 'when footers are enabled', () => {
+		let footerEditor, footerModel;
+
+		beforeEach( () => {
+			return VirtualTestEditor
+				.create( {
+					plugins: [ TableEditing, Paragraph, ImageBlockEditing, MediaEmbedEditing ],
+					table: {
+						enableFooters: true
+					}
+				} )
+				.then( newEditor => {
+					footerEditor = newEditor;
+					footerModel = newEditor.model;
+				} );
+		} );
+
+		afterEach( async () => {
+			await footerEditor.destroy();
+		} );
+
+		it( 'allows footerRows table attribute', () => {
+			expect( footerModel.schema.checkAttribute( [ '$root', 'table' ], 'footerRows' ) ).toBe( true );
+		} );
+
+		it( 'adds setFooterRow command', () => {
+			expect( footerEditor.commands.get( 'setTableFooterRow' ) ).to.be.instanceOf( SetFooterRowCommand );
+		} );
+	} );
+
+	describe( 'conversion in data pipeline', () => {
+		describe( 'model to view', () => {
+			it( 'should create tbody section', () => {
+				_setModelData( model, '<table><tableRow><tableCell><paragraph>foo[]</paragraph></tableCell></tableRow></table>' );
+
+				expect( editor.getData() ).toEqual( '<figure class="table">' +
+						'<table>' +
+							'<tbody>' +
+								'<tr><td>foo</td></tr>' +
+							'</tbody>' +
+						'</table>' +
+					'</figure>' );
+			} );
+
+			it( 'should create thead section', () => {
+				_setModelData(
+					model,
+					'<table headingRows="1"><tableRow><tableCell><paragraph>foo[]</paragraph></tableCell></tableRow></table>'
+				);
+
+				expect( editor.getData() ).toEqual( '<figure class="table">' +
+						'<table>' +
+							'<thead>' +
+								'<tr><th>foo</th></tr>' +
+							'</thead>' +
+						'</table>' +
+					'</figure>' );
+			} );
+		} );
+
+		describe( 'view to model', () => {
+			it( 'should convert table', () => {
+				editor.setData( '<table><tbody><tr><td>foo</td></tr></tbody></table>' );
+
+				expect( _getModelData( model, { withoutSelection: true } ) )
+					.toEqual( '<table><tableRow><tableCell><paragraph>foo</paragraph></tableCell></tableRow></table>' );
+			} );
+
+			it( 'should convert table with image', () => {
+				editor.setData( '<table><tbody><tr><td><img src="/sample.png"></td></tr></tbody></table>' );
+
+				expect( _getModelData( model, { withoutSelection: true } ) )
+					.toEqual( '<table><tableRow><tableCell><imageBlock src="/sample.png"></imageBlock></tableCell></tableRow></table>' );
+			} );
+
+			it( 'should insert a paragraph when the cell content is unsupported', () => {
+				editor.setData(
+					'<table><tbody><tr><td><foo></foo></td></tr></tbody></table>'
+				);
+
+				expect( _getModelData( model, { withoutSelection: true } ) )
+					.toEqual( '<table><tableRow><tableCell><paragraph></paragraph></tableCell></tableRow></table>' );
+			} );
+
+			it( 'should convert a table with media', () => {
+				editor.setData(
+					'<table><tbody><tr><td><oembed url="https://www.youtube.com/watch?v=H08tGjXNHO4"></oembed></td></tr></tbody></table>'
+				);
+
+				expect( _getModelData( model, { withoutSelection: true } ) ).toEqual( '<table><tableRow><tableCell>' +
+						'<media url="https://www.youtube.com/watch?v=H08tGjXNHO4"></media>' +
+					'</tableCell></tableRow></table>' );
+			} );
+
+			it( 'should convert table when colspan is string', () => {
+				editor.setData( '<table><tbody><tr><td colspan="abc">foo</td></tr></tbody></table>' );
+
+				expect( _getModelData( model, { withoutSelection: true } ) )
+					.toEqual( '<table><tableRow><tableCell><paragraph>foo</paragraph></tableCell></tableRow></table>' );
+			} );
+
+			it( 'should convert table with colspan 0', () => {
+				editor.setData( '<table><tbody><tr><td colspan="0">foo</td></tr></tbody></table>' );
+
+				expect( _getModelData( model, { withoutSelection: true } ) )
+					.toEqual( '<table><tableRow><tableCell><paragraph>foo</paragraph></tableCell></tableRow></table>' );
+			} );
+
+			it( 'should convert table with negative rowspan and colspan', () => {
+				editor.setData( '<table><tbody><tr><td colspan="-1" rowspan="-1">foo</td></tr></tbody></table>' );
+
+				expect( _getModelData( model, { withoutSelection: true } ) )
+					.toEqual( '<table><tableRow><tableCell><paragraph>foo</paragraph></tableCell></tableRow></table>' );
+			} );
+		} );
+	} );
+
+	describe( 'enter key', () => {
+		let evtDataStub, viewDocument;
+
+		beforeEach( () => {
+			evtDataStub = {
+				preventDefault: vi.fn(),
+				stopPropagation: vi.fn(),
+				isSoft: false
+			};
+
+			return VirtualTestEditor
+				.create( {
+					plugins: [ TableEditing, Paragraph ]
+				} )
+				.then( newEditor => {
+					editor = newEditor;
+
+					vi.spyOn( editor, 'execute' ).mockImplementation( () => {} );
+
+					viewDocument = editor.editing.view.document;
+					model = editor.model;
+				} );
+		} );
+
+		it( 'should do nothing if not in table cell', () => {
+			_setModelData( model, '<paragraph>[]foo</paragraph>' );
+
+			viewDocument.fire( 'enter', evtDataStub );
+
+			expect( editor.execute ).not.toHaveBeenCalled();
+			expect( _getModelData( model ) ).toEqualMarkup( '<paragraph>[]foo</paragraph>' );
+		} );
+
+		it( 'should do nothing if table cell has already a block content', () => {
+			_setModelData( model, modelTable( [
+				[ '<paragraph>[]11</paragraph>' ]
+			] ) );
+
+			viewDocument.fire( 'enter', evtDataStub );
+
+			expect( editor.execute ).not.toHaveBeenCalled();
+			expect( _getModelData( model ) ).toEqualMarkup( modelTable( [
+				[ '<paragraph>[]11</paragraph>' ]
+			] ) );
+		} );
+
+		it( 'should do nothing if table cell with a block content is selected as a whole', () => {
+			_setModelData( model, modelTable( [
+				[ '<paragraph>[1</paragraph><paragraph>1]</paragraph>' ]
+			] ) );
+
+			viewDocument.fire( 'enter', evtDataStub );
+
+			expect( editor.execute ).not.toHaveBeenCalled();
+			_setModelData( model, modelTable( [
+				[ '<paragraph>[1</paragraph><paragraph>1]</paragraph>' ]
+			] ) );
+		} );
+
+		it( 'should allow default behavior of Shift+Enter pressed', () => {
+			_setModelData( model, modelTable( [
+				[ '[]11' ]
+			] ) );
+
+			evtDataStub.isSoft = true;
+			viewDocument.fire( 'enter', evtDataStub );
+
+			expect( editor.execute ).not.toHaveBeenCalled();
+			expect( _getModelData( model ) ).toEqualMarkup( modelTable( [
+				[ '[]11' ]
+			] ) );
+		} );
+	} );
+} );

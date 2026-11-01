@@ -1,0 +1,65 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, it, beforeEach, afterEach, vi, expect } from 'vitest';
+
+import { MediaEmbed } from '../src/mediaembed.js';
+import { Paragraph } from '@ckeditor/ckeditor5-paragraph';
+
+import { ClassicTestEditor } from '@ckeditor/ckeditor5-core/tests/_utils/classictesteditor.js';
+import { _getViewData, enableViewPlaceholder } from '@ckeditor/ckeditor5-engine';
+
+describe( 'MediaEmbed integration', () => {
+	let element;
+
+	beforeEach( () => {
+		vi.useFakeTimers();
+		element = document.createElement( 'div' );
+		document.body.appendChild( element );
+	} );
+
+	afterEach( () => {
+		element.remove();
+		vi.useRealTimers();
+	} );
+
+	describe( 'with the placeholder feature', () => {
+		// https://github.com/ckeditor/ckeditor5/issues/1684
+		it( 'should make the placeholder CSS class disappear when pasting a new media into an empty editing root', async () => {
+			const editor = await ClassicTestEditor.create( element, {
+				plugins: [ MediaEmbed, Paragraph ]
+			} );
+			const editingRoot = editor.editing.view.document.getRoot();
+
+			editingRoot.placeholder = 'foo';
+			enableViewPlaceholder( {
+				view: editor.editing.view,
+				element: editingRoot,
+				isDirectHost: false
+			} );
+
+			editor.editing.view.document.fire( 'paste', {
+				dataTransfer: {
+					getData() {
+						return 'https://www.youtube.com/watch?v=H08tGjXNHO4';
+					}
+				},
+				stopPropagation() {},
+				preventDefault() {}
+			} );
+
+			vi.advanceTimersByTime( 100 );
+
+			expect( _getViewData( editor.editing.view ) ).toBe(
+				'[<figure class="ck-widget ck-widget_selected media" contenteditable="false" data-placeholder="foo">' +
+					'<div class="ck-media__wrapper" data-oembed-url="https://www.youtube.com/watch?v=H08tGjXNHO4"></div>' +
+					'<div class="ck ck-reset_all ck-widget__type-around"></div>' +
+				'</figure>]'
+			);
+
+			await editor.destroy();
+		} );
+	} );
+} );

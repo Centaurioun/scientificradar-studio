@@ -1,0 +1,33 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, expect, it } from 'vitest';
+import { remove } from '../../src/dom/remove.js';
+
+describe( 'remove', () => {
+	it( 'should remove element form parent', () => {
+		const div = document.createElement( 'div' );
+		const p0 = document.createElement( 'p' );
+		const p1 = document.createElement( 'p' );
+		const p2 = document.createElement( 'p' );
+
+		div.appendChild( p0 );
+		div.appendChild( p1 );
+		div.appendChild( p2 );
+
+		remove( p1 );
+
+		expect( p1.parentNode ).toBeNull();
+		expect( div.childNodes.length ).toEqual( 2 );
+	} );
+
+	it( 'should do nothing if element has no parent', () => {
+		const div = document.createElement( 'div' );
+
+		remove( div );
+
+		expect( div.parentNode ).toBeNull();
+	} );
+} );

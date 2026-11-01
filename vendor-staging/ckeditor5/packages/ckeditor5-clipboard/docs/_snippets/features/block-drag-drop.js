@@ -1,0 +1,19 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { ClassicEditorExperimental } from './build-drag-drop-source.js';
+
+ClassicEditorExperimental.create( {
+	attachTo: document.querySelector( '#snippet-block-drag-drop' ),
+	root: {
+		placeholder: 'Drop the content here to test the feature.'
+	}
+} )
+	.then( editor => {
+		window.editorExperimental = editor;
+	} )
+	.catch( err => {
+		console.error( err.stack );
+	} );

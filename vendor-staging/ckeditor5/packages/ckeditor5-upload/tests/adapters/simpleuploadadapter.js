@@ -1,0 +1,533 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { ClassicTestEditor } from '@ckeditor/ckeditor5-core/tests/_utils/classictesteditor.js';
+import { createFakeXHRServer } from '@ckeditor/ckeditor5-core/tests/_utils/fakexhrserver.js';
+import { SimpleUploadAdapter } from '../../src/adapters/simpleuploadadapter.js';
+import { FileRepository } from '../../src/filerepository.js';
+import { createNativeFileMock } from '../_utils/mocks.js';
+
+describe( 'SimpleUploadAdapter', () => {
+	let editor, editorElement, fakeXHR, consoleWarnStub, fileRepository;
+
+	beforeEach( () => {
+		editorElement = document.createElement( 'div' );
+		document.body.appendChild( editorElement );
+
+		fakeXHR = createFakeXHRServer();
+		consoleWarnStub = vi.spyOn( console, 'warn' ).mockImplementation( () => {} );
+
+		return ClassicTestEditor
+			.create( editorElement, {
+				plugins: [ SimpleUploadAdapter ],
+				simpleUpload: {
+					uploadUrl: 'http://example.com'
+				}
+			} )
+			.then( newEditor => {
+				editor = newEditor;
+				fileRepository = editor.plugins.get( FileRepository );
+			} );
+	} );
+
+	afterEach( () => {
+		editorElement.remove();
+
+		return editor.destroy();
+	} );
+
+	it( 'should require the FileRepository plugin', () => {
+		expect( SimpleUploadAdapter.requires ).toEqual( [ FileRepository ] );
+	} );
+
+	it( 'should be named', () => {
+		expect( SimpleUploadAdapter.pluginName ).toEqual( 'SimpleUploadAdapter' );
+	} );
+
+	it( 'should have `isOfficialPlugin` static flag set to `true`', () => {
+		expect( SimpleUploadAdapter.isOfficialPlugin ).toBe( true );
+	} );
+
+	it( 'should have `isPremiumPlugin` static flag set to `true`', () => {
+		expect( SimpleUploadAdapter.isPremiumPlugin ).toBe( true );
+	} );
+
+	it( 'should have `licenseFeatureCode` static flag set to `SUA`', () => {
+		expect( SimpleUploadAdapter.licenseFeatureCode ).toEqual( 'SUA' );
+	} );
+
+	describe( 'init()', () => {
+		it( 'should activate the adapter', () => {
+			return ClassicTestEditor
+				.create( editorElement, {
+					plugins: [ SimpleUploadAdapter ],
+					simpleUpload: {
+						uploadUrl: 'http://example.com'
+					}
+				} )
+				.then( editor => {
+					expect( editor.plugins.get( FileRepository ).createUploadAdapter ).is.a( 'function' );
+
+					return editor.destroy();
+				} );
+		} );
+	} );
+
+	describe( 'UploadAdapter', () => {
+		let adapter, loader;
+
+		beforeEach( () => {
+			const file = createNativeFileMock();
+			file.name = 'image.jpeg';
+
+			loader = fileRepository.createLoader( file );
+
+			adapter = editor.plugins.get( FileRepository ).createUploadAdapter( loader );
+		} );
+
+		it( 'the crateAdapter() method should be registered and have upload() and abort methods()', () => {
+			expect( adapter ).not.toBeUndefined();
+			expect( adapter.upload ).to.be.a( 'function' );
+			expect( adapter.abort ).to.be.a( 'function' );
+		} );
+
+		it( 'should not set the FileRepository.createUploadAdapter() factory if not configured', () => {
+			const editorElement = document.createElement( 'div' );
+			document.body.appendChild( editorElement );
+
+			return ClassicTestEditor
+				.create( editorElement, {
+					plugins: [ SimpleUploadAdapter ]
+				} )
+				.then( editor => {
+					const fileRepository = editor.plugins.get( FileRepository );
+
+					expect( fileRepository ).to.not.have.property( 'createUploadAdapter' );
+
+					editorElement.remove();
+
+					return editor.destroy();
+				} );
+		} );
+
+		it( 'should not set the FileRepository.createUploadAdapter() factory if not configured properly', () => {
+			const editorElement = document.createElement( 'div' );
+			document.body.appendChild( editorElement );
+
+			return ClassicTestEditor
+				.create( editorElement, {
+					plugins: [ SimpleUploadAdapter ],
+					simpleUpload: {
+						// Missing "uploadUrl".
+						foo: 'bar'
+					}
+				} )
+				.then( editor => {
+					expect( consoleWarnStub.mock.calls.length ).toEqual( 1 );
+					expect( consoleWarnStub.mock.calls[ 0 ][ 0 ] ).toMatch( /^simple-upload-adapter-missing-uploadurl/ );
+
+					const fileRepository = editor.plugins.get( FileRepository );
+
+					expect( fileRepository ).to.not.have.property( 'createUploadAdapter' );
+
+					editorElement.remove();
+
+					return editor.destroy();
+				} );
+		} );
+
+		describe( 'upload()', () => {
+			it( 'should return a Promise', () => {
+				return loader.file
+					.then( () => {
+						expect( adapter.upload() ).to.be.instanceof( Promise );
+					} );
+			} );
+
+			describe( 'using public feature configuration', () => {
+				it( 'should send a request to config#uploadUrl', () => {
+					const validResponse = {
+						url: 'http://example.com/images/image.jpeg'
+					};
+
+					const uploadPromise = adapter.upload();
+
+					return loader.file
+						.then( () => {
+							const request = fakeXHR.requests[ 0 ];
+							request.respond( 200, { 'Content-Type': 'application/json' }, JSON.stringify( validResponse ) );
+
+							expect( request.url ).toEqual( 'http://example.com' );
+
+							return uploadPromise;
+						} )
+						.then( uploadResponse => {
+							expect( uploadResponse ).toEqual( {
+								url: 'http://example.com/images/image.jpeg',
+								urls: {
+									default: 'http://example.com/images/image.jpeg'
+								}
+							} );
+						} );
+				} );
+
+				it( 'should use config#headers in the request (when specified)', () => {
+					const editorElement = document.createElement( 'div' );
+					document.body.appendChild( editorElement );
+
+					return ClassicTestEditor
+						.create( editorElement, {
+							plugins: [ SimpleUploadAdapter ],
+							simpleUpload: {
+								uploadUrl: 'http://example.com',
+								headers: {
+									'X-CSRF-TOKEN': 'foo',
+									Authorization: 'Bearer <token>'
+								}
+							}
+						} )
+						.then( editor => {
+							const adapter = editor.plugins.get( FileRepository ).createUploadAdapter( loader );
+							const validResponse = {
+								url: 'http://example.com/images/image.jpeg'
+							};
+
+							const uploadPromise = adapter.upload();
+
+							return loader.file
+								.then( () => {
+									const request = fakeXHR.requests[ 0 ];
+									request.respond( 200, { 'Content-Type': 'application/json' }, JSON.stringify( validResponse ) );
+
+									const requestHeaders = request.requestHeaders;
+
+									expect( requestHeaders ).to.be.a( 'object' );
+									expect( requestHeaders ).to.have.property( 'X-CSRF-TOKEN', 'foo' );
+									expect( requestHeaders ).to.have.property( 'Authorization', 'Bearer <token>' );
+
+									return uploadPromise;
+								} )
+								.then( uploadResponse => {
+									expect( uploadResponse ).toEqual( {
+										url: 'http://example.com/images/image.jpeg',
+										urls: {
+											default: 'http://example.com/images/image.jpeg'
+										}
+									} );
+
+									editorElement.remove();
+								} )
+								.then( () => editor.destroy() );
+						} );
+				} );
+
+				it( 'should use config#headers in the request (when specified as a function)', () => {
+					const editorElement = document.createElement( 'div' );
+					document.body.appendChild( editorElement );
+
+					return ClassicTestEditor
+						.create( editorElement, {
+							plugins: [ SimpleUploadAdapter ],
+							simpleUpload: {
+								uploadUrl: 'http://example.com',
+								headers: file => ( {
+									'X-File-Name': file.name,
+									'X-File-Size': file.size.toString()
+								} )
+							}
+						} )
+						.then( editor => {
+							const adapter = editor.plugins.get( FileRepository ).createUploadAdapter( loader );
+							const validResponse = {
+								url: 'http://example.com/images/image.jpeg'
+							};
+
+							const uploadPromise = adapter.upload();
+
+							return loader.file
+								.then( () => {
+									const request = fakeXHR.requests[ 0 ];
+									request.respond( 200, { 'Content-Type': 'application/json' }, JSON.stringify( validResponse ) );
+
+									const requestHeaders = request.requestHeaders;
+
+									expect( requestHeaders ).to.be.a( 'object' );
+									expect( requestHeaders ).to.have.property( 'X-File-Name', 'image.jpeg' );
+									expect( requestHeaders ).to.have.property( 'X-File-Size', '1024' );
+
+									return uploadPromise;
+								} )
+								.then( uploadResponse => {
+									expect( uploadResponse ).toEqual( {
+										url: 'http://example.com/images/image.jpeg',
+										urls: {
+											default: 'http://example.com/images/image.jpeg'
+										}
+									} );
+
+									editorElement.remove();
+								} )
+								.then( () => editor.destroy() );
+						} );
+				} );
+
+				it( 'should not set #requestHeaders of the request if config#headers is not specified', () => {
+					const editorElement = document.createElement( 'div' );
+					document.body.appendChild( editorElement );
+
+					return ClassicTestEditor
+						.create( editorElement, {
+							plugins: [ SimpleUploadAdapter ],
+							simpleUpload: {
+								uploadUrl: 'http://example.com'
+							}
+						} )
+						.then( editor => {
+							const adapter = editor.plugins.get( FileRepository ).createUploadAdapter( loader );
+							const validResponse = {
+								url: 'http://example.com/images/image.jpeg'
+							};
+
+							const uploadPromise = adapter.upload();
+
+							return loader.file
+								.then( () => {
+									const request = fakeXHR.requests[ 0 ];
+									request.respond( 200, { 'Content-Type': 'application/json' }, JSON.stringify( validResponse ) );
+
+									const requestHeaders = request.requestHeaders;
+
+									expect( requestHeaders ).to.be.a( 'object' );
+									expect( requestHeaders ).toEqual( {} );
+
+									return uploadPromise;
+								} )
+								.then( uploadResponse => {
+									expect( uploadResponse ).toEqual( {
+										url: 'http://example.com/images/image.jpeg',
+										urls: {
+											default: 'http://example.com/images/image.jpeg'
+										}
+									} );
+
+									editorElement.remove();
+								} )
+								.then( () => editor.destroy() );
+						} );
+				} );
+
+				it( 'should use config#withCredentials in the request (when specified)', () => {
+					const editorElement = document.createElement( 'div' );
+					document.body.appendChild( editorElement );
+
+					return ClassicTestEditor
+						.create( editorElement, {
+							plugins: [ SimpleUploadAdapter ],
+							simpleUpload: {
+								uploadUrl: 'http://example.com',
+								withCredentials: true
+							}
+						} )
+						.then( editor => {
+							const adapter = editor.plugins.get( FileRepository ).createUploadAdapter( loader );
+							const validResponse = {
+								url: 'http://example.com/images/image.jpeg'
+							};
+
+							const uploadPromise = adapter.upload();
+
+							return loader.file
+								.then( () => {
+									const request = fakeXHR.requests[ 0 ];
+									request.respond( 200, { 'Content-Type': 'application/json' }, JSON.stringify( validResponse ) );
+
+									expect( request ).to.have.property( 'withCredentials', true );
+
+									return uploadPromise;
+								} )
+								.then( uploadResponse => {
+									expect( uploadResponse ).toEqual( {
+										url: 'http://example.com/images/image.jpeg',
+										urls: {
+											default: 'http://example.com/images/image.jpeg'
+										}
+									} );
+
+									editorElement.remove();
+								} )
+								.then( () => editor.destroy() );
+						} );
+				} );
+
+				it( 'should not set #withCredentials of the request if config#withCredentials is not set', () => {
+					const editorElement = document.createElement( 'div' );
+					document.body.appendChild( editorElement );
+
+					return ClassicTestEditor
+						.create( editorElement, {
+							plugins: [ SimpleUploadAdapter ],
+							simpleUpload: {
+								uploadUrl: 'http://example.com'
+							}
+						} )
+						.then( editor => {
+							const adapter = editor.plugins.get( FileRepository ).createUploadAdapter( loader );
+							const validResponse = {
+								url: 'http://example.com/images/image.jpeg'
+							};
+
+							const uploadPromise = adapter.upload();
+
+							return loader.file
+								.then( () => {
+									const request = fakeXHR.requests[ 0 ];
+									request.respond( 200, { 'Content-Type': 'application/json' }, JSON.stringify( validResponse ) );
+
+									expect( request ).to.have.property( 'withCredentials', false );
+
+									return uploadPromise;
+								} )
+								.then( uploadResponse => {
+									expect( uploadResponse ).toEqual( {
+										url: 'http://example.com/images/image.jpeg',
+										urls: {
+											default: 'http://example.com/images/image.jpeg'
+										}
+									} );
+
+									editorElement.remove();
+								} )
+								.then( () => editor.destroy() );
+						} );
+				} );
+			} );
+
+			it( 'should support responsive image URLs returned in the server response', () => {
+				const validResponse = {
+					urls: {
+						default: 'http://example.com/images/image.jpeg',
+						'120': 'http://example.com/images/image-120.jpeg',
+						'240': 'http://example.com/images/image-240.jpeg'
+					}
+				};
+
+				const uploadPromise = adapter.upload();
+
+				return loader.file
+					.then( () => {
+						fakeXHR.requests[ 0 ].respond( 200, {
+							'Content-Type': 'application/json'
+						}, JSON.stringify( validResponse ) );
+
+						return uploadPromise;
+					} )
+					.then( uploadResponse => {
+						expect( uploadResponse ).toEqual( validResponse );
+					} );
+			} );
+
+			it( 'should pass additional properties to the response', () => {
+				const validResponse = {
+					urls: {
+						default: 'http://example.com/images/image.jpeg',
+						'120': 'http://example.com/images/image-120.jpeg',
+						'240': 'http://example.com/images/image-240.jpeg'
+					},
+					customProperty: 'foo'
+				};
+
+				const uploadPromise = adapter.upload();
+
+				return loader.file
+					.then( () => {
+						fakeXHR.requests[ 0 ].respond( 200, {
+							'Content-Type': 'application/json'
+						}, JSON.stringify( validResponse ) );
+
+						return uploadPromise;
+					} )
+					.then( uploadResponse => {
+						expect( uploadResponse ).toEqual( validResponse );
+					} );
+			} );
+
+			it( 'should throw on a generic request error', async () => {
+				const promise = adapter.upload();
+
+				loader.file.then( () => {
+					const request = fakeXHR.requests[ 0 ];
+					request.error();
+				} );
+
+				await expect( promise ).rejects.toBe( 'Couldn\'t upload file: image.jpeg.' );
+			} );
+
+			it( 'should throw on an error from server', async () => {
+				const responseError = {
+					error: {
+						message: 'Foo bar baz.'
+					}
+				};
+
+				const promise = adapter.upload();
+
+				loader.file.then( () => {
+					const request = fakeXHR.requests[ 0 ];
+					request.respond( 200, { 'Content-Type': 'application/json' }, JSON.stringify( responseError ) );
+				} );
+
+				await expect( promise ).rejects.toBe( 'Foo bar baz.' );
+			} );
+
+			it( 'should throw a generic error on an error from server without a message', async () => {
+				const responseError = {
+					error: {}
+				};
+
+				const promise = adapter.upload();
+
+				loader.file.then( () => {
+					const request = fakeXHR.requests[ 0 ];
+					request.respond( 200, { 'Content-Type': 'application/json' }, JSON.stringify( responseError ) );
+				} );
+
+				await expect( promise ).rejects.toBe( 'Couldn\'t upload file: image.jpeg.' );
+			} );
+
+			it( 'should throw an error on abort()', async () => {
+				let request;
+
+				const promise = adapter.upload();
+
+				loader.file.then( () => {
+					request = fakeXHR.requests[ 0 ];
+					adapter.abort();
+				} );
+
+				await expect( promise ).rejects.toBeUndefined();
+				expect( request.aborted ).toBe( true );
+			} );
+
+			it( 'abort() should not throw before upload', () => {
+				expect( () => {
+					adapter.abort();
+				} ).to.not.throw();
+			} );
+
+			it( 'should update progress', () => {
+				adapter.upload();
+
+				return loader.file.then( () => {
+					const request = fakeXHR.requests[ 0 ];
+					request.uploadProgress( { loaded: 4, total: 10 } );
+
+					expect( loader.uploadTotal ).toEqual( 10 );
+					expect( loader.uploaded ).toEqual( 4 );
+				} );
+			} );
+		} );
+	} );
+} );

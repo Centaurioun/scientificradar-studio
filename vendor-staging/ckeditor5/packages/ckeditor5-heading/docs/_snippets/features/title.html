@@ -1,0 +1,54 @@
+<div class="ck ck-content" id="snippet-title">
+	<h1></h1>
+	<p></p>
+</div>
+
+<style>
+	@layer snippets {
+		.ck.ck-editor__editable_inline {
+			border-color: var(--color-gray-300);
+		}
+
+		/* Let's move pilcrow icon inside the editor space. */
+		.ck.ck-block-toolbar-button {
+			transform: translateX( 40px );
+		}
+
+		#snippet-title {
+			min-height: 300px;
+			max-width: 450px;
+			padding: var(--spacing-12);
+			margin: var(--spacing-12) auto 0;
+			box-shadow: 5px 5px 1px 0px hsla( 0, 0%, 0%, 0.1);
+		}
+
+		#snippet-title h1 {
+			padding-top: var(--spacing-0);
+		}
+
+		#title-console__title,
+		#title-console__body {
+			margin-bottom: var(--spacing-3);
+		}
+
+		#title-console__title code::before,
+		#title-console__body code::before,
+		#title-console__data code::before {
+			display: inline-block;
+			margin-right: var(--spacing-1);
+			opacity: 0.5;
+		}
+
+		#title-console__title code::before {
+			content: 'Title:'
+		}
+
+		#title-console__body code::before {
+			content: 'Body:'
+		}
+
+		#title-console__data code::before {
+			content: 'Data:';
+		}
+	}
+</style>

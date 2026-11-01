@@ -1,0 +1,132 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+/**
+ * @module table/commands/inserttablecommand
+ */
+
+import { Command } from '@ckeditor/ckeditor5-core';
+
+import {
+	ModelDocumentSelection,
+	type ModelSchema,
+	type ModelSelection,
+	type ModelElement
+} from '@ckeditor/ckeditor5-engine';
+import { _getCopyOnEnterAttributes } from '@ckeditor/ckeditor5-enter';
+import { type TableUtils } from '../tableutils.js';
+import { getEmptyTableCellBlocks } from '../utils/common.js';
+
+/**
+ * The insert table command.
+ *
+ * The command is registered by {@link module:table/tableediting~TableEditing} as the `'insertTable'` editor command.
+ *
+ * To insert a table at the current selection, execute the command and specify the dimensions:
+ *
+ * ```ts
+ * editor.execute( 'insertTable', { rows: 20, columns: 5 } );
+ * ```
+ */
+export class InsertTableCommand extends Command {
+	/**
+	 * @inheritDoc
+	 */
+	public override refresh(): void {
+		const model = this.editor.model;
+		const selection = model.document.selection;
+		const schema = model.schema;
+
+		this.isEnabled = isAllowedInParent( selection, schema );
+	}
+
+	/**
+	 * Executes the command.
+	 *
+	 * Inserts a table with the given number of rows and columns into the editor.
+	 *
+	 * @param options.rows The number of rows to create in the inserted table. Default value is 2.
+	 * @param options.columns The number of columns to create in the inserted table. Default value is 2.
+	 * @param options.headingRows The number of heading rows. If not provided it will default to
+	 * {@link module:table/tableconfig~TableConfig#defaultHeadings `config.table.defaultHeadings.rows`} table config.
+	 * @param options.headingColumns The number of heading columns. If not provided it will default to
+	 * {@link module:table/tableconfig~TableConfig#defaultHeadings `config.table.defaultHeadings.columns`} table config.
+	 * @param options.footerRows The number of footer rows. If not provided it will default to
+	 * {@link module:table/tableconfig~TableConfig#defaultFooters `config.table.defaultFooters`} table config.
+	 * This option is ignored when {@link module:table/tableconfig~TableConfig#enableFooters `config.table.enableFooters`} is `false`.
+	 * @param options.inheritTextFormattingAttributes Whether every empty cell should inherit the `copyOnEnter` text
+	 * formatting attributes (e.g. bold, font color) that were uniformly active in the content right before
+	 * the table, so that whichever cell the user starts typing in first continues that formatting. Defaults
+	 * to `true`.
+	 * @fires execute
+	 */
+	public override execute(
+		options: {
+			rows?: number;
+			columns?: number;
+			headingRows?: number;
+			headingColumns?: number;
+			footerRows?: number;
+			inheritTextFormattingAttributes?: boolean;
+		} = {}
+	): void {
+		const editor = this.editor;
+		const model = editor.model;
+		const selection = model.document.selection;
+
+		const tableUtils: TableUtils = editor.plugins.get( 'TableUtils' );
+		const areTableFootersEnabled = !!editor.config.get( 'table.enableFooters' );
+
+		const defaultRows = editor.config.get( 'table.defaultHeadings.rows' );
+		const defaultColumns = editor.config.get( 'table.defaultHeadings.columns' );
+		const defaultFooterRows = editor.config.get( 'table.defaultFooters' );
+
+		if ( options.headingRows === undefined && defaultRows ) {
+			options.headingRows = defaultRows;
+		}
+
+		if ( options.headingColumns === undefined && defaultColumns ) {
+			options.headingColumns = defaultColumns;
+		}
+
+		if ( areTableFootersEnabled && options.footerRows === undefined && defaultFooterRows ) {
+			options.footerRows = defaultFooterRows;
+		}
+
+		if ( !areTableFootersEnabled && 'footerRows' in options ) {
+			delete options.footerRows;
+		}
+
+		model.change( writer => {
+			const selectionAttributesToCopy = Array.from(
+				_getCopyOnEnterAttributes( model.schema, selection.getAttributes() )
+			);
+
+			const table = tableUtils.createTable( writer, options );
+
+			model.insertObject( table, null, null, { findOptimalPosition: 'auto' } );
+
+			writer.setSelection( writer.createPositionAt( table.getNodeByPath( [ 0, 0, 0 ] ), 0 ) );
+
+			if ( options.inheritTextFormattingAttributes !== false && selectionAttributesToCopy.length ) {
+				for ( const cellBlock of getEmptyTableCellBlocks( table ) ) {
+					for ( const [ key, value ] of selectionAttributesToCopy ) {
+						writer.setAttribute( ModelDocumentSelection._getStoreAttributeKey( key ), value, cellBlock );
+					}
+				}
+			}
+		} );
+	}
+}
+
+/**
+ * Checks if the table is allowed in the parent.
+ */
+function isAllowedInParent( selection: ModelSelection | ModelDocumentSelection, schema: ModelSchema ) {
+	const positionParent = selection.getFirstPosition()!.parent;
+	const validParent = positionParent === positionParent.root ? positionParent : positionParent.parent;
+
+	return schema.checkChild( validParent as ModelElement, 'table' );
+}

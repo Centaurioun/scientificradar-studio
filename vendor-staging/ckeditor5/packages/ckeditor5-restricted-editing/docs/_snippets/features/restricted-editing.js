@@ -1,0 +1,153 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import {
+	StandardEditingMode,
+	RestrictedEditingMode,
+	CKBox,
+	CKBoxImageEdit,
+	PictureEditing,
+	ImageInsert,
+	ImageResize,
+	AutoImage,
+	LinkImage,
+	TodoList
+} from 'ckeditor5';
+import {
+	TOKEN_URL,
+	ArticlePluginSet,
+	ClassicEditor,
+	getViewportTopOffsetConfig,
+	attachTourBalloon,
+	findToolbarItem
+} from '@snippets/index.js';
+
+ClassicEditor.builtinPlugins.push(
+	RestrictedEditingMode,
+	StandardEditingMode,
+	ArticlePluginSet,
+	PictureEditing,
+	ImageInsert,
+	ImageResize,
+	AutoImage,
+	LinkImage,
+	TodoList,
+	CKBox,
+	CKBoxImageEdit );
+
+const restrictedModeButton = document.getElementById( 'mode-restricted' ).querySelector( 'input' );
+const standardModeButton = document.getElementById( 'mode-standard' ).querySelector( 'input' );
+
+restrictedModeButton.addEventListener( 'change', handleModeChange );
+standardModeButton.addEventListener( 'change', handleModeChange );
+
+startMode( document.querySelector( 'input[name="editor-restriction-mode"]:checked' ).value );
+
+async function handleModeChange( evt ) {
+	await startMode( evt.target.value );
+}
+
+async function startMode( selectedMode ) {
+	if ( selectedMode === 'standard' ) {
+		await startStandardEditingMode();
+	} else {
+		await startRestrictedEditingMode();
+	}
+}
+
+async function startStandardEditingMode() {
+	await reloadEditor( {
+		removePlugins: [ 'RestrictedEditingMode' ],
+		toolbar: {
+			items: [
+				'restrictedEditingException:auto',
+				'|', 'undo', 'redo',
+				'|', 'heading',
+				'|', 'bold', 'italic',
+				'|', 'link', 'insertImage', 'insertTable', 'mediaEmbed',
+				'|', 'bulletedList', 'numberedList', 'todoList', 'outdent', 'indent'
+			]
+		},
+		table: {
+			contentToolbar: [
+				'tableColumn',
+				'tableRow',
+				'mergeTableCells'
+			]
+		},
+		image: {
+			toolbar: [
+				'imageStyle:inline', 'imageStyle:block', 'imageStyle:wrapText', '|',
+				'toggleImageCaption', 'imageTextAlternative', 'ckboxImageEdit'
+			]
+		},
+		ui: {
+			viewportOffset: {
+				top: getViewportTopOffsetConfig()
+			}
+		},
+		ckbox: {
+			tokenUrl: TOKEN_URL,
+			allowExternalImagesEditing: [ /^data:/, 'origin', /ckbox/ ],
+			forceDemoLabel: true
+		},
+		updateSourceElementOnDestroy: true
+	} );
+}
+
+async function startRestrictedEditingMode() {
+	await reloadEditor( {
+		removePlugins: [ 'StandardEditingMode' ],
+		toolbar: {
+			items: [
+				'restrictedEditing',
+				'|', 'undo', 'redo',
+				'|', 'heading',
+				'|', 'bold', 'italic',
+				'|', 'link', 'insertImage', 'insertTable',
+				'|', 'bulletedList', 'numberedList', 'todoList', 'outdent', 'indent'
+			]
+		},
+		image: {
+			toolbar: [
+				'imageStyle:inline', 'imageStyle:block', 'imageStyle:wrapText', '|',
+				'toggleImageCaption', 'imageTextAlternative', 'ckboxImageEdit'
+			]
+		},
+		ui: {
+			viewportOffset: {
+				top: getViewportTopOffsetConfig()
+			}
+		},
+		ckbox: {
+			tokenUrl: TOKEN_URL,
+			allowExternalImagesEditing: [ /^data:/, 'origin', /ckbox/ ]
+		},
+		updateSourceElementOnDestroy: true
+	} );
+}
+
+async function reloadEditor( config ) {
+	if ( window.editor ) {
+		await window.editor.destroy();
+	}
+
+	window.editor = await ClassicEditor.create( {
+		...config,
+		attachTo: document.querySelector( '#restricted-editing-editor' )
+	} );
+
+	attachTourBalloon( {
+		target: findToolbarItem(
+			window.editor.ui.view.toolbar,
+			item => item.label && [ 'Enable editing', 'Disable editing' ].includes( item.label )
+		),
+		text: 'Click to add or remove editable regions.',
+		editor: window.editor,
+		tippyOptions: {
+			placement: 'bottom-start'
+		}
+	} );
+}

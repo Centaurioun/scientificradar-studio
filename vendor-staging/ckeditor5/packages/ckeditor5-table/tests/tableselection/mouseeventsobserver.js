@@ -1,0 +1,48 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { EditingView } from '@ckeditor/ckeditor5-engine';
+import { MouseEventsObserver } from '../../src/tablemouse/mouseeventsobserver.js';
+
+describe( 'table selection', () => {
+	describe( 'MouseEventsObserver', () => {
+		let view, viewDocument, observer;
+
+		beforeEach( () => {
+			view = new EditingView();
+			viewDocument = view.document;
+			observer = view.addObserver( MouseEventsObserver );
+		} );
+
+		afterEach( () => {
+			view.destroy();
+		} );
+
+		it( 'should define domEventTypes', () => {
+			expect( observer.domEventType ).toEqual( [
+				'mousemove',
+				'mouseleave'
+			] );
+		} );
+
+		describe( 'onDomEvent', () => {
+			for ( const eventName of [ 'mousemove', 'mouseleave' ] ) {
+				it( `should fire ${ eventName } with the right event data`, () => {
+					const spy = vi.fn();
+
+					viewDocument.on( eventName, spy );
+
+					observer.onDomEvent( { type: eventName, target: document.body } );
+
+					expect( spy ).toHaveBeenCalledOnce();
+
+					const data = spy.mock.calls[ 0 ][ 1 ];
+					expect( data.domTarget ).toEqual( document.body );
+				} );
+			}
+		} );
+	} );
+} );

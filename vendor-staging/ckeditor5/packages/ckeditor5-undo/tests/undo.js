@@ -1,0 +1,27 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, it, expect } from 'vitest';
+import { Undo } from '../src/undo.js';
+import { UndoEditing } from '../src/undoediting.js';
+import { UndoUI } from '../src/undoui.js';
+
+describe( 'Undo', () => {
+	it( 'should be named', () => {
+		expect( Undo.pluginName ).toEqual( 'Undo' );
+	} );
+
+	it( 'should require UndoEditing and UndoUI', () => {
+		expect( Undo.requires ).toEqual( [ UndoEditing, UndoUI ] );
+	} );
+
+	it( 'should have `isOfficialPlugin` static flag set to `true`', () => {
+		expect( Undo.isOfficialPlugin ).toBe( true );
+	} );
+
+	it( 'should have `isPremiumPlugin` static flag set to `false`', () => {
+		expect( Undo.isPremiumPlugin ).toBe( false );
+	} );
+} );

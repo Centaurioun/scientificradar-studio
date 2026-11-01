@@ -1,0 +1,203 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+/**
+ * @module image/imagestyle/imagestyleediting
+ */
+
+import { Plugin, type PluginDependenciesOf } from '@ckeditor/ckeditor5-core';
+import type { ModelBlockAlignmentAttributesMapping, ModelElement, UpcastElementEvent } from '@ckeditor/ckeditor5-engine';
+
+import { ImageStyleCommand } from './imagestylecommand.js';
+import { ImageUtils } from '../imageutils.js';
+import { getStyleDefinitionByName, utils } from './utils.js';
+import { viewToModelStyleAttribute, modelToViewStyleAttribute } from './converters.js';
+import type { ImageStyleOptionDefinition } from '../imageconfig.js';
+
+/**
+ * The image style engine plugin. It sets the default configuration, creates converters and registers
+ * {@link module:image/imagestyle/imagestylecommand~ImageStyleCommand ImageStyleCommand}.
+ */
+export class ImageStyleEditing extends Plugin {
+	/**
+	 * @inheritDoc
+	 */
+	public static get pluginName() {
+		return 'ImageStyleEditing' as const;
+	}
+
+	/**
+	 * @inheritDoc
+	 */
+	public static override get isOfficialPlugin(): true {
+		return true;
+	}
+
+	/**
+	 * @inheritDoc
+	 */
+	public static get requires(): PluginDependenciesOf<[ ImageUtils ]> {
+		return [ ImageUtils ];
+	}
+
+	/**
+	 * It contains a list of the normalized and validated style options.
+	 *
+	 * * Each option contains a complete icon markup.
+	 * * The style options not supported by any of the loaded image editing plugins (
+	 * {@link module:image/image/imageinlineediting~ImageInlineEditing `ImageInlineEditing`} or
+	 * {@link module:image/image/imageblockediting~ImageBlockEditing `ImageBlockEditing`}) are filtered out.
+	 *
+	 * @internal
+	 * @readonly
+	 */
+	public normalizedStyles?: Array<ImageStyleOptionDefinition>;
+
+	/**
+	 * @inheritDoc
+	 */
+	public init(): void {
+		const editor = this.editor;
+		const isBlockPluginLoaded = editor.plugins.has( 'ImageBlockEditing' );
+		const isInlinePluginLoaded = editor.plugins.has( 'ImageInlineEditing' );
+
+		editor.config.define( 'image.styles', utils.getDefaultStylesConfiguration( isBlockPluginLoaded, isInlinePluginLoaded ) );
+
+		this.normalizedStyles = utils.normalizeStyles( {
+			configuredStyles: editor.config.get( 'image.styles' )!,
+			isBlockPluginLoaded,
+			isInlinePluginLoaded
+		} );
+
+		this._setupConversion( isBlockPluginLoaded, isInlinePluginLoaded );
+		this._setupPostFixer();
+
+		// Register imageStyle command.
+		editor.commands.add( 'imageStyle', new ImageStyleCommand( editor, this.normalizedStyles ) );
+	}
+
+	/**
+	 * Sets the editor conversion taking the presence of
+	 * {@link module:image/image/imageinlineediting~ImageInlineEditing `ImageInlineEditing`}
+	 * and {@link module:image/image/imageblockediting~ImageBlockEditing `ImageBlockEditing`} plugins into consideration.
+	 */
+	private _setupConversion( isBlockPluginLoaded: boolean, isInlinePluginLoaded: boolean ): void {
+		const editor = this.editor;
+		const schema = editor.model.schema;
+
+		const modelToViewConverter = modelToViewStyleAttribute( this.normalizedStyles! );
+		const viewToModelConverter = viewToModelStyleAttribute( this.normalizedStyles! );
+
+		editor.editing.downcastDispatcher.on( 'attribute:imageStyle', modelToViewConverter );
+		editor.data.downcastDispatcher.on( 'attribute:imageStyle', modelToViewConverter );
+
+		// Allow imageStyle attribute in image and imageInline.
+		// We could call it 'style' but https://github.com/ckeditor/ckeditor5-engine/issues/559.
+		if ( isBlockPluginLoaded ) {
+			schema.extend( 'imageBlock', { allowAttributes: 'imageStyle' } );
+			schema.setAttributeProperties( 'imageStyle', {
+				isFormatting: true,
+				blockAlignment: getBlockAlignmentAttributeProperty( this.normalizedStyles! )
+			} );
+
+			// Converter for figure element from view to model.
+			editor.data.upcastDispatcher.on<UpcastElementEvent>( 'element:figure', viewToModelConverter, { priority: 'low' } );
+		}
+
+		if ( isInlinePluginLoaded ) {
+			schema.extend( 'imageInline', { allowAttributes: 'imageStyle' } );
+			schema.setAttributeProperties( 'imageStyle', { isFormatting: true } );
+
+			// Converter for the img element from view to model.
+			editor.data.upcastDispatcher.on( 'element:img', viewToModelConverter, { priority: 'low' } );
+		}
+	}
+
+	/**
+	 * Registers a post-fixer that will make sure that the style attribute value is correct for a specific image type (block vs inline).
+	 */
+	private _setupPostFixer(): void {
+		const editor = this.editor;
+		const document = editor.model.document;
+
+		const imageUtils = editor.plugins.get( ImageUtils );
+		const stylesMap = new Map( this.normalizedStyles!.map( style => [ style.name, style ] ) );
+
+		// Make sure that style attribute is valid for the image type.
+		document.registerPostFixer( writer => {
+			let changed = false;
+
+			for ( const change of document.differ.getChanges() ) {
+				if ( change.type == 'insert' || change.type == 'attribute' && change.attributeKey == 'imageStyle' ) {
+					let element = change.type == 'insert' ? change.position.nodeAfter! : change.range.start.nodeAfter!;
+
+					if ( element && element.is( 'element', 'paragraph' ) && element.childCount > 0 ) {
+						element = element.getChild( 0 )!;
+					}
+
+					if ( !imageUtils.isImage( element as ModelElement ) ) {
+						continue;
+					}
+
+					const imageStyle = element.getAttribute( 'imageStyle' ) as string | undefined;
+
+					if ( !imageStyle ) {
+						continue;
+					}
+
+					const imageStyleDefinition = stylesMap.get( imageStyle );
+
+					if ( !imageStyleDefinition || !imageStyleDefinition.modelElements.includes( ( element as ModelElement ).name ) ) {
+						writer.removeAttribute( 'imageStyle', element );
+						changed = true;
+					}
+				}
+			}
+
+			return changed;
+		} );
+	}
+}
+
+/**
+ * Returns a mapping of generic alignment values ('left', 'right', 'center') to their corresponding
+ * block image alignment style names.
+ *
+ * This function is particularly useful for scenarios like `td[align]` conversion, which needs to know
+ * exactly how to map a generic `align` attribute to the correct alignment value. This mapping is necessary
+ * because the actual alignment value can differ depending on the target element type (e.g., block images
+ * vs. tables).
+ *
+ * @param styles An array of available image style option definitions.
+ * @returns A record mapping basic alignments to their valid, block-specific style names.
+ */
+function getBlockAlignmentAttributeProperty( styles: Array<ImageStyleOptionDefinition> ): ModelBlockAlignmentAttributesMapping {
+	const pickFirstSupported = ( ...names: Array<string> ) => {
+		const found = names
+			.map( name => getStyleDefinitionByName( name, styles ) )
+			.find( definition => definition?.modelElements.includes( 'imageBlock' ) );
+
+		if ( !found ) {
+			return;
+		}
+
+		return {
+			isDefault: !!found.isDefault,
+			value: found.name
+		};
+	};
+
+	const candidates: Record<string, Array<string>> = {
+		left: [ 'alignBlockLeft', 'alignLeft' ],
+		right: [ 'alignBlockRight', 'alignRight' ],
+		center: [ 'block', 'alignCenter' ]
+	};
+
+	return Object.fromEntries(
+		Object.entries( candidates )
+			.map( ( [ align, names ] ) => [ align, pickFirstSupported( ...names ) ] )
+			.filter( ( [ , resolved ] ) => resolved !== undefined )
+	);
+}

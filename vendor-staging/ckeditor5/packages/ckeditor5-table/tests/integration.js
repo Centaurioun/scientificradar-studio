@@ -1,0 +1,284 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { ClassicTestEditor } from '@ckeditor/ckeditor5-core/tests/_utils/classictesteditor.js';
+import { _setModelData, _getModelData } from '@ckeditor/ckeditor5-engine';
+import { BalloonToolbar, View } from '@ckeditor/ckeditor5-ui';
+import { ClipboardPipeline } from '@ckeditor/ckeditor5-clipboard';
+import { Paragraph } from '@ckeditor/ckeditor5-paragraph';
+import { Heading } from '@ckeditor/ckeditor5-heading';
+import { EmptyBlock } from '@ckeditor/ckeditor5-html-support';
+import { global } from '@ckeditor/ckeditor5-utils';
+import { Table } from '../src/table.js';
+import { TableToolbar } from '../src/tabletoolbar.js';
+
+describe( 'TableContentToolbar integration', () => {
+	describe( 'with the BalloonToolbar', () => {
+		let balloon, balloonToolbar, newEditor, editorElement;
+
+		beforeEach( () => {
+			editorElement = global.document.createElement( 'div' );
+			global.document.body.appendChild( editorElement );
+
+			return ClassicTestEditor
+				.create( editorElement, {
+					plugins: [ Table, TableToolbar, BalloonToolbar, Paragraph, ClipboardPipeline ]
+				} )
+				.then( editor => {
+					newEditor = editor;
+					balloon = newEditor.plugins.get( 'ContextualBalloon' );
+					balloonToolbar = newEditor.plugins.get( 'BalloonToolbar' );
+					const button = new View();
+
+					button.element = global.document.createElement( 'div' );
+
+					// There must be at least one toolbar items which is not disabled to show it.
+					// https://github.com/ckeditor/ckeditor5-ui/issues/269
+					balloonToolbar.toolbarView.items.add( button );
+
+					newEditor.editing.view.isFocused = true;
+					newEditor.editing.view.getDomRoot().focus();
+				} );
+		} );
+
+		afterEach( () => {
+			editorElement.remove();
+			return newEditor.destroy();
+		} );
+
+		it( 'should allow the BalloonToolbar to be displayed when a table is selected with surrounding text', () => {
+			_setModelData( newEditor.model, '<paragraph>fo[o</paragraph><table><tableRow><tableCell></tableCell></tableRow></table>]' );
+
+			balloonToolbar.show();
+
+			expect( balloon.visibleView ).toBe( balloonToolbar.toolbarView );
+		} );
+
+		it( 'should allow the BalloonToolbar to be displayed when a table content is selected', () => {
+			_setModelData(
+				newEditor.model,
+				'<paragraph>foo</paragraph><table><tableRow><tableCell><paragraph>x[y]z</paragraph></tableCell></tableRow></table>'
+			);
+
+			balloonToolbar.show();
+
+			expect( balloon.visibleView ).toBe( balloonToolbar.toolbarView );
+		} );
+
+		it( 'should prevent the BalloonToolbar from being displayed when a table is selected as whole', () => {
+			_setModelData(
+				newEditor.model,
+				'<paragraph>foo</paragraph>[<table><tableRow><tableCell><paragraph>foo</paragraph></tableCell></tableRow></table>]'
+			);
+
+			balloonToolbar.show();
+
+			expect( balloon.visibleView ).toBeNull();
+		} );
+
+		it( 'should listen to BalloonToolbar#show event with the high priority', () => {
+			const highestPrioritySpy = vi.fn();
+			const highPrioritySpy = vi.fn();
+			const normalPrioritySpy = vi.fn();
+
+			// Select an table
+			_setModelData(
+				newEditor.model,
+				'<paragraph>foo</paragraph>[<table><tableRow><tableCell><paragraph>x</paragraph></tableCell></tableRow></table>]'
+			);
+
+			newEditor.listenTo( balloonToolbar, 'show', highestPrioritySpy, { priority: 'highest' } );
+			newEditor.listenTo( balloonToolbar, 'show', highPrioritySpy, { priority: 'high' } );
+			newEditor.listenTo( balloonToolbar, 'show', normalPrioritySpy, { priority: 'normal' } );
+
+			balloonToolbar.show();
+
+			expect( highestPrioritySpy ).toHaveBeenCalledTimes( 1 );
+			expect( highPrioritySpy ).not.toHaveBeenCalled();
+			expect( normalPrioritySpy ).not.toHaveBeenCalled();
+		} );
+	} );
+
+	describe( 'with the EmptyBlock', () => {
+		let editor, editorElement;
+
+		beforeEach( async () => {
+			editorElement = global.document.createElement( 'div' );
+			global.document.body.appendChild( editorElement );
+
+			editor = await ClassicTestEditor.create( editorElement, {
+				plugins: [ Table, Paragraph, Heading, EmptyBlock ]
+			} );
+		} );
+
+		afterEach( async () => {
+			editorElement.remove();
+			await editor.destroy();
+		} );
+
+		it( 'plain content in table cell', () => {
+			editor.setData(
+				'<table>' +
+					'<tr>' +
+						'<td>x</td>' +
+					'</tr>' +
+					'<tr>' +
+						'<td>&nbsp;</td>' +
+					'</tr>' +
+					'<tr>' +
+						'<td></td>' +
+					'</tr>' +
+				'</table>'
+			);
+
+			expect( _getModelData( editor.model, { withoutSelection: true } ) ).toEqual(
+				'<table>' +
+					'<tableRow>' +
+						'<tableCell>' +
+							'<paragraph>x</paragraph>' +
+						'</tableCell>' +
+					'</tableRow>' +
+					'<tableRow>' +
+						'<tableCell>' +
+							'<paragraph></paragraph>' +
+						'</tableCell>' +
+					'</tableRow>' +
+					'<tableRow>' +
+						'<tableCell htmlEmptyBlock="true">' +
+							'<paragraph htmlEmptyBlock="true"></paragraph>' +
+						'</tableCell>' +
+					'</tableRow>' +
+				'</table>'
+			);
+
+			expect( editor.getData() ).toEqual(
+				'<figure class="table">' +
+					'<table>' +
+						'<tbody>' +
+							'<tr>' +
+								'<td>x</td>' +
+							'</tr>' +
+							'<tr>' +
+								'<td>&nbsp;</td>' +
+							'</tr>' +
+							'<tr>' +
+								'<td></td>' +
+							'</tr>' +
+						'</tbody>' +
+					'</table>' +
+				'</figure>'
+			);
+		} );
+
+		it( 'content in paragraph in a table cell', () => {
+			editor.setData(
+				'<table>' +
+					'<tr>' +
+						'<td><p>x</p></td>' +
+					'</tr>' +
+					'<tr>' +
+						'<td><p>&nbsp;</p></td>' +
+					'</tr>' +
+					'<tr>' +
+						'<td><p></p></td>' +
+					'</tr>' +
+				'</table>'
+			);
+
+			expect( _getModelData( editor.model, { withoutSelection: true } ) ).toEqual(
+				'<table>' +
+					'<tableRow>' +
+						'<tableCell>' +
+							'<paragraph>x</paragraph>' +
+						'</tableCell>' +
+					'</tableRow>' +
+					'<tableRow>' +
+						'<tableCell>' +
+							'<paragraph></paragraph>' +
+						'</tableCell>' +
+					'</tableRow>' +
+					'<tableRow>' +
+						'<tableCell>' +
+							'<paragraph htmlEmptyBlock="true"></paragraph>' +
+						'</tableCell>' +
+					'</tableRow>' +
+				'</table>'
+			);
+
+			expect( editor.getData() ).toEqual(
+				'<figure class="table">' +
+					'<table>' +
+						'<tbody>' +
+							'<tr>' +
+								'<td>x</td>' +
+							'</tr>' +
+							'<tr>' +
+								'<td>&nbsp;</td>' +
+							'</tr>' +
+							'<tr>' +
+								'<td></td>' +
+							'</tr>' +
+						'</tbody>' +
+					'</table>' +
+				'</figure>'
+			);
+		} );
+
+		it( 'content in heading in a table cell', () => {
+			editor.setData(
+				'<table>' +
+					'<tr>' +
+						'<td><h2>x</h2></td>' +
+					'</tr>' +
+					'<tr>' +
+						'<td><h2>&nbsp;</h2></td>' +
+					'</tr>' +
+					'<tr>' +
+						'<td><h2></h2></td>' +
+					'</tr>' +
+				'</table>'
+			);
+
+			expect( _getModelData( editor.model, { withoutSelection: true } ) ).toEqual(
+				'<table>' +
+					'<tableRow>' +
+						'<tableCell>' +
+							'<heading1>x</heading1>' +
+						'</tableCell>' +
+					'</tableRow>' +
+					'<tableRow>' +
+						'<tableCell>' +
+							'<heading1></heading1>' +
+						'</tableCell>' +
+					'</tableRow>' +
+					'<tableRow>' +
+						'<tableCell>' +
+							'<heading1 htmlEmptyBlock="true"></heading1>' +
+						'</tableCell>' +
+					'</tableRow>' +
+				'</table>'
+			);
+
+			expect( editor.getData() ).toEqual(
+				'<figure class="table">' +
+					'<table>' +
+						'<tbody>' +
+							'<tr>' +
+								'<td><h2>x</h2></td>' +
+							'</tr>' +
+							'<tr>' +
+								'<td><h2>&nbsp;</h2></td>' +
+							'</tr>' +
+							'<tr>' +
+								'<td><h2></h2></td>' +
+							'</tr>' +
+						'</tbody>' +
+					'</table>' +
+				'</figure>'
+			);
+		} );
+	} );
+} );

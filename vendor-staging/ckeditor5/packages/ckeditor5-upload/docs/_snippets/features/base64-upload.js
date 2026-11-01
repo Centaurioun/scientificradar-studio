@@ -1,0 +1,54 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { Base64UploadAdapter } from 'ckeditor5';
+import {
+	ClassicEditor,
+	getViewportTopOffsetConfig,
+	attachTourBalloon,
+	findToolbarItem
+} from '@snippets/index.js';
+
+ClassicEditor.builtinPlugins.push( Base64UploadAdapter );
+
+ClassicEditor
+	.create( {
+		attachTo: document.querySelector( '#snippet-image-base64-upload' ),
+		removePlugins: [
+			'CKBox'
+		],
+		ui: {
+			viewportOffset: {
+				top: getViewportTopOffsetConfig()
+			}
+		}
+	} )
+	.then( editor => {
+		window.editor = editor;
+
+		attachTourBalloon( {
+			target: findToolbarItem(
+				editor.ui.view.toolbar,
+				item => item.buttonView && item.buttonView.label && item.buttonView.label === 'Upload image from computer'
+			),
+			text: 'Click to insert an image.',
+			editor
+		} );
+
+		window.umberto.afterReady( () => {
+			const { throttle, formatHtml } = window.umberto;
+			const { codeBlock } = document.getElementById( 'base64-upload-console' );
+
+			const refreshDevTools = throttle( () => {
+				codeBlock.setCode( formatHtml( editor.getData() ) );
+			}, 200 );
+
+			editor.model.document.on( 'change:data', refreshDevTools );
+			refreshDevTools();
+		} );
+	} )
+	.catch( err => {
+		console.error( err.stack );
+	} );

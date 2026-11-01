@@ -1,0 +1,18 @@
+/*
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+.ck-editor__editable .ck-table-bogus-paragraph {
+	/*
+	 * Use display:inline-block to force Chrome/Safari to limit text mutations to this element.
+	 * See https://github.com/ckeditor/ckeditor5/issues/6062.
+	 */
+	display: inline-block;
+
+	/*
+	 * Inline HTML elements nested in the span should always be dimensioned in relation to the whole cell width.
+	 * See https://github.com/ckeditor/ckeditor5/issues/9117.
+	 */
+	width: 100%;
+}

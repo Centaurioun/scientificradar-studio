@@ -1,0 +1,131 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { modelElementToPlainText } from '../src/utils.js';
+
+import { ModelElement, ModelText, _setModelData } from '@ckeditor/ckeditor5-engine';
+import { VirtualTestEditor } from '@ckeditor/ckeditor5-core/tests/_utils/virtualtesteditor.js';
+import { Paragraph } from '@ckeditor/ckeditor5-paragraph';
+import { BlockQuoteEditing } from '@ckeditor/ckeditor5-block-quote';
+import { BoldEditing } from '@ckeditor/ckeditor5-basic-styles';
+import { LinkEditing } from '@ckeditor/ckeditor5-link';
+import { ListEditing } from '@ckeditor/ckeditor5-list';
+import { TableEditing } from '@ckeditor/ckeditor5-table';
+import { Enter, ShiftEnter } from '@ckeditor/ckeditor5-enter';
+
+describe( 'utils', () => {
+	describe( 'modelElementToPlainText()', () => {
+		it( 'should extract only plain text', () => {
+			const text1 = new ModelText( 'Foo' );
+			const text2 = new ModelText( 'Bar', { bold: true } );
+			const text3 = new ModelText( 'Baz', { bold: true, underline: true } );
+
+			const innerElement1 = new ModelElement( 'paragraph', null, [ text1 ] );
+			const innerElement2 = new ModelElement( 'paragraph', null, [ text2, text3 ] );
+
+			const mainElement = new ModelElement( 'container', null, [ innerElement1, innerElement2 ] );
+
+			expect( modelElementToPlainText( mainElement ) ).toBe( 'Foo\nBarBaz' );
+		} );
+
+		describe( 'complex structures', () => {
+			let editor, model;
+
+			beforeEach( () => {
+				return VirtualTestEditor
+					.create( {
+						plugins: [
+							Enter, ShiftEnter, Paragraph, BoldEditing, LinkEditing, BlockQuoteEditing, ListEditing, TableEditing
+						]
+					} )
+					.then( newEditor => {
+						editor = newEditor;
+						model = editor.model;
+					} );
+			} );
+
+			afterEach( async () => {
+				await editor.destroy();
+			} );
+
+			it( 'extracts plain text from blockqoutes', () => {
+				_setModelData( model, '<blockQuote>' +
+						'<paragraph>Hello</paragraph>' +
+						'<paragraph listIndent="0" listItemId="000" listType="numbered">world</paragraph>' +
+						'<paragraph listIndent="0" listItemId="001" listType="numbered">foo</paragraph>' +
+						'<paragraph>bar</paragraph>' +
+					'</blockQuote>' );
+
+				expect( modelElementToPlainText( model.document.getRoot() ) ).toBe( 'Hello\nworld\nfoo\nbar' );
+			} );
+
+			it( 'extracts plain text from tables', () => {
+				_setModelData( model, '<table>' +
+						'<tableRow>' +
+							'<tableCell>' +
+								'<paragraph>Foo</paragraph>' +
+							'</tableCell>' +
+							'<tableCell>' +
+								'<paragraph>Bar</paragraph>' +
+							'</tableCell>' +
+						'</tableRow>' +
+						'<tableRow>' +
+							'<tableCell>' +
+								'<paragraph>Baz</paragraph>' +
+							'</tableCell>' +
+							'<tableCell>' +
+								'<paragraph>Foo</paragraph>' +
+							'</tableCell>' +
+						'</tableRow>' +
+					'</table>' );
+
+				expect( modelElementToPlainText( model.document.getRoot() ) ).toBe( 'Foo\nBar\nBaz\nFoo' );
+			} );
+
+			it( 'extracts plain text with soft break', () => {
+				_setModelData( model, '<paragraph>Foo<softBreak></softBreak>bar</paragraph>' );
+
+				expect( modelElementToPlainText( model.document.getRoot() ) ).toBe( 'Foo\nbar' );
+			} );
+
+			it( 'extracts plain text with inline styles', () => {
+				_setModelData( model, '<paragraph>F<$text bold="true">oo</$text><$text href="url">Ba</$text>r</paragraph>' );
+
+				expect( modelElementToPlainText( model.document.getRoot() ) ).toBe( 'FooBar' );
+			} );
+
+			it( 'extracts plain text from mixed structure', () => {
+				_setModelData( model, '<paragraph>' +
+						'<$text bold="true">111</$text><$text href="url" bold="true">222</$text>333' +
+					'</paragraph><blockQuote>' +
+						'<paragraph>444<softBreak></softBreak>555</paragraph>' +
+						'<table>' +
+							'<tableRow>' +
+								'<tableCell><paragraph>666</paragraph></tableCell>' +
+								'<tableCell><paragraph>7<$text bold="true">7</$text>7</paragraph></tableCell>' +
+							'</tableRow>' +
+							'<tableRow>' +
+								'<tableCell><paragraph>888</paragraph></tableCell>' +
+								'<tableCell><paragraph>999</paragraph></tableCell>' +
+							'</tableRow>' +
+						'</table>' +
+					'</blockQuote><table>' +
+						'<tableRow>' +
+							'<tableCell><paragraph>000</paragraph></tableCell>' +
+							'<tableCell><blockQuote>' +
+								'<paragraph listIndent="0" listItemId="000" listType="numbered">111</paragraph>' +
+								'<paragraph listIndent="0" listItemId="001" listType="numbered">222</paragraph>' +
+							'</blockQuote></tableCell>' +
+						'</tableRow>' +
+					'</table>' );
+
+				expect( modelElementToPlainText( model.document.getRoot() ) ).toBe(
+					'111222333\n444\n555\n666\n777\n888\n999\n000\n111\n222'
+				);
+			} );
+		} );
+	} );
+} );
