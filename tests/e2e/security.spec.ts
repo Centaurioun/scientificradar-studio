@@ -13,6 +13,11 @@ async function readPersistedSnapshot(page: import('@playwright/test').Page): Pro
     () =>
       new Promise<ExportedSnapshot | undefined>((resolve, reject) => {
         const request = indexedDB.open('scientificradar-studio-p0-db', 1);
+        request.onupgradeneeded = () => {
+          if (!request.result.objectStoreNames.contains('studio_state')) {
+            request.result.createObjectStore('studio_state');
+          }
+        };
         request.onerror = () => reject(request.error);
         request.onsuccess = () => {
           const db = request.result;
@@ -32,6 +37,11 @@ async function writePersistedSnapshot(page: import('@playwright/test').Page, sna
     (value) =>
       new Promise<void>((resolve, reject) => {
         const request = indexedDB.open('scientificradar-studio-p0-db', 1);
+        request.onupgradeneeded = () => {
+          if (!request.result.objectStoreNames.contains('studio_state')) {
+            request.result.createObjectStore('studio_state');
+          }
+        };
         request.onerror = () => reject(request.error);
         request.onsuccess = () => {
           const db = request.result;
