@@ -1,0 +1,35 @@
+{
+  "repository": "Centaurioun/scientificradar-studio",
+  "sourceSha": "c099ae0a78bf69a4b5f58785dcf2c3512e9b270d",
+  "branch": "audit/scientificradar-runtime-verification",
+  "browser": {
+    "name": "Brave Browser",
+    "executable": "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    "version": "156.1.98.60",
+    "chromium": "156.0.8078.48",
+    "automation": "Playwright 1.64.1 chromium.launchPersistentContext with executablePath and unique /tmp userDataDir",
+    "profileIsolation": "Personal Brave profile was not attached to, changed, or closed"
+  },
+  "application": {
+    "url": "http://127.0.0.1:4175",
+    "host": "127.0.0.1",
+    "port": 4175,
+    "externalRequestsForHtmlCanaries": []
+  },
+  "scenarioResults": {
+    "RT-01": "PASS (qualified)", "RT-02": "FAIL", "RT-03": "PASS (tested subset)",
+    "RT-04": "PASS (controlled QA path)", "RT-05": "FAIL", "RT-06": "FAIL",
+    "RT-07": "FAIL", "RT-08": "FAIL", "RT-09": "FAIL", "RT-10": "FAIL",
+    "RT-11": "PASS (tested matrix)", "RT-12": "FAIL"
+  },
+  "counts": {"pass": 4, "fail": 8, "blocked": 0, "notApplicable": 0},
+  "newFindings": ["SRS-RT-004", "SRS-RT-005", "SRS-RT-006", "SRS-RT-007", "SRS-RT-008"],
+  "responsiveViewportsCssPixels": ["1440x900", "1024x768", "390x844"],
+  "responsiveRouteMeasurements": 18,
+  "hydrationRepeatLoadsWithoutMismatch": 36,
+  "mediaSameProfileRestartReproductions": 2,
+  "seoStalenessReproductions": 2,
+  "staleQuickFixReproductions": 2,
+  "personalBrowserProfileUsed": false,
+  "productionContacted": false
+}
