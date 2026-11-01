@@ -12,6 +12,9 @@ async function readSnapshot(page: import('@playwright/test').Page): Promise<Stor
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open('scientificradar-studio-p0-db');
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains('studio_state')) request.result.createObjectStore('studio_state');
+      };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -74,6 +77,9 @@ test('fresh revision restoration commits a new sanitized version before success 
   await page.evaluate(async (id) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open('scientificradar-studio-p0-db');
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains('studio_state')) request.result.createObjectStore('studio_state');
+      };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -157,6 +163,9 @@ test('duplicate success returns the same stable ID and unique slug persisted acr
     const win = window as typeof window & { __concurrentMutationQueued?: boolean };
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open('scientificradar-studio-p0-db');
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains('studio_state')) request.result.createObjectStore('studio_state');
+      };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
