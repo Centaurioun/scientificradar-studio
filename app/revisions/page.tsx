@@ -10,6 +10,7 @@ import { LocalizedDate } from '@/components/datetime/localized-date';
 export default function RevisionHistoryPage() {
   const { revisions, articles, restoreArticleRevision } = useStudio();
   const [notice, setNotice] = useState<string | null>(null);
+  const [restoringRevisionId, setRestoringRevisionId] = useState<string | null>(null);
 
   return (
     <AppShell title="Revision History" breadcrumbs={[{ label: 'Revision History' }]}>
@@ -24,7 +25,7 @@ export default function RevisionHistoryPage() {
         </div>
 
         {notice && (
-          <div className="p-3 rounded-md bg-teal-50 dark:bg-teal-950/50 border border-teal-200 text-xs text-teal-900 dark:text-teal-200">
+          <div role="status" className="p-3 rounded-md bg-teal-50 dark:bg-teal-950/50 border border-teal-200 text-xs text-teal-900 dark:text-teal-200">
             {notice}
           </div>
         )}
@@ -59,18 +60,21 @@ export default function RevisionHistoryPage() {
 
                 <button
                   type="button"
-                  onClick={() => {
-                    const restored = restoreArticleRevision(rev.id);
-                    if (restored) {
-                      setNotice(
-                        `Restored "${restored.title}" to snapshot v${rev.version} (saved as new version v${restored.version}).`
-                      );
-                    }
+                  disabled={restoringRevisionId !== null}
+                  onClick={async () => {
+                    setRestoringRevisionId(rev.id);
+                    const result = await restoreArticleRevision(rev.id, art?.version ?? -1);
+                    setNotice(
+                      result.ok && result.article
+                        ? `Restored "${result.article.title}" to snapshot v${rev.version} (saved as new version v${result.article.version}).`
+                        : `Restore failed: ${result.error || 'Revision was not saved.'}`
+                    );
+                    setRestoringRevisionId(null);
                   }}
                   className="px-3 py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium flex items-center gap-1.5 shrink-0"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Restore Snapshot</span>
+                  <span>{restoringRevisionId === rev.id ? 'Restoring…' : 'Restore Snapshot'}</span>
                 </button>
               </div>
             );

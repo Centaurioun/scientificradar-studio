@@ -20,7 +20,7 @@ interface IssueRowProps {
   proposal?: FixProposal | null;
   onGoToField?: (finding: AuditFinding) => void;
   goToHref?: string;
-  onApplyQuickFix?: (proposal: FixProposal) => void;
+  onApplyQuickFix?: (proposal: FixProposal) => Promise<boolean>;
 }
 
 const CATEGORY_LABELS: Record<AuditFinding['category'], string> = {
@@ -51,6 +51,7 @@ export function IssueRow({
 }: IssueRowProps) {
   const [showQuickFixPreview, setShowQuickFixPreview] = useState(false);
   const [appliedSuccess, setAppliedSuccess] = useState(false);
+  const [applying, setApplying] = useState(false);
 
   const originBadge =
     finding.origin === 'local_deterministic' ? (
@@ -207,15 +208,20 @@ export function IssueRow({
             </button>
             <button
               type="button"
-              onClick={() => {
-                onApplyQuickFix(proposal);
-                setAppliedSuccess(true);
-                setShowQuickFixPreview(false);
+              disabled={applying}
+              onClick={async () => {
+                setApplying(true);
+                const saved = await onApplyQuickFix(proposal);
+                setApplying(false);
+                if (saved) {
+                  setAppliedSuccess(true);
+                  setShowQuickFixPreview(false);
+                }
               }}
               className="inline-flex items-center gap-1 rounded bg-indigo-600 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-700"
             >
               <Check className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Apply Fix & Save Revision</span>
+              <span>{applying ? 'Saving…' : 'Apply Fix & Save Revision'}</span>
             </button>
           </div>
         </div>

@@ -59,6 +59,7 @@ import { AuditReport, FixProposal } from './audit/types';
 import { computeArticleFingerprint, runArticleAudit } from './audit/run-article-audit';
 import { validateAndSanitizeSnapshot } from './backup-validation';
 import { trustedMediaSourceSet } from './html-security';
+import { commitSnapshotMutation } from './studio-persistence';
 
 const DB_NAME = 'scientificradar-studio-p0-db';
 const DB_VERSION = 1;
@@ -67,6 +68,8 @@ const STATE_KEY = 'root_snapshot_v1';
 
 export interface StudioDatabaseSnapshot {
   schemaVersion?: 1;
+  /** Monotonic revision for committed root-snapshot mutations (legacy records omit it). */
+  storageRevision?: number;
   articles: Article[];
   pages: EditorialPage[];
   categories: Category[];
@@ -150,7 +153,7 @@ interface StudioContextValue extends StudioDatabaseSnapshot {
   saveArticle: (
     articleInput: Partial<Article> & { id?: string; title: string },
     options?: { createRevision?: boolean; revisionSource?: ArticleRevision['source']; revisionSummary?: string }
-  ) => { article: Article; demotedH1Count: number };
+  ) => Promise<{ article: Article; demotedH1Count: number }>;
   persistArticleDraft: (
     articleInput: Partial<Article> & { id?: string; title: string },
     options?: {
@@ -160,20 +163,20 @@ interface StudioContextValue extends StudioDatabaseSnapshot {
       revisionSummary?: string;
     }
   ) => Promise<SaveReceipt>;
-  duplicateArticle: (articleId: string) => Article | null;
+  duplicateArticle: (articleId: string) => Promise<{ ok: boolean; article?: Article; error?: string }>;
   transitionArticleStatus: (
     articleId: string,
     nextStatus: ArticleStatus,
     note?: string
-  ) => { ok: boolean; error?: string };
-  deleteArticle: (articleId: string) => void;
-  restoreArticleRevision: (revisionId: string) => Article | null;
-  applyAssistantChanges: (articleId: string, acceptedChanges: EditorialChange[]) => { ok: boolean; error?: string; updatedArticle?: Article };
+  ) => Promise<{ ok: boolean; error?: string }>;
+  deleteArticle: (articleId: string) => Promise<{ ok: boolean; error?: string }>;
+  restoreArticleRevision: (revisionId: string, expectedVersion: number) => Promise<{ ok: boolean; article?: Article; error?: string }>;
+  applyAssistantChanges: (articleId: string, acceptedChanges: EditorialChange[]) => Promise<{ ok: boolean; error?: string; updatedArticle?: Article }>;
   // SEO & Quality Audit
-  runAndStoreArticleAudit: (articleId: string, draftOverride?: Article) => AuditReport | null;
-  applyQuickFixProposal: (proposal: FixProposal) => { ok: boolean; error?: string; updatedArticle?: Article };
+  runAndStoreArticleAudit: (articleId: string) => Promise<{ ok: boolean; persisted: boolean; report?: AuditReport; error?: string }>;
+  applyQuickFixProposal: (proposal: FixProposal) => Promise<{ ok: boolean; error?: string; updatedArticle?: Article }>;
   // Pages CRUD
-  savePage: (pageInput: Partial<EditorialPage> & { id?: string; title: string }) => EditorialPage;
+  savePage: (pageInput: Partial<EditorialPage> & { id?: string; title: string }) => Promise<EditorialPage>;
   deletePage: (pageId: string) => void;
   // Categories, Tags, Series, Authors
   addCategory: (cat: Omit<Category, 'id' | 'slug'> & { slug?: string }) => Category;
@@ -208,6 +211,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const [persistenceMode, setPersistenceMode] = useState<'indexeddb' | 'memory_fallback'>('indexeddb');
   const [simulateSaveFailure, setSimulateSaveFailure] = useState(false);
   const stateRef = useRef<StudioDatabaseSnapshot>(state);
+  const mutationTailRef = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
@@ -219,8 +223,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       try {
         const db = await getDb();
         if (db) {
-          const saved = (await db.get(STORE_NAME, STATE_KEY)) as StudioDatabaseSnapshot | undefined;
-          if (saved && saved.articles && saved.articles.length > 0) {
+          const transaction = db.transaction(STORE_NAME, 'readwrite');
+          const saved = (await transaction.store.get(STATE_KEY)) as StudioDatabaseSnapshot | undefined;
+          if (saved && Array.isArray(saved.articles)) {
+            await transaction.done;
             const validated = validateAndSanitizeSnapshot(
               JSON.stringify(saved),
               trustedMediaSourceSet([...SEED_MEDIA.map((item) => item.src), ...saved.media.map((item) => item.src)])
@@ -236,7 +242,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           }
           // Seed initial DB
           const seed = getInitialSeedSnapshot();
-          await db.put(STORE_NAME, seed, STATE_KEY);
+          await transaction.store.put(seed, STATE_KEY);
+          await transaction.done;
           if (!cancelled) {
             setState(seed);
             document.documentElement.classList.toggle('dark', seed.theme === 'dark');
@@ -271,7 +278,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       try {
         const db = await getDb();
         if (db) {
-          await db.put(STORE_NAME, nextState, STATE_KEY);
+          const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, undefined>(
+            db,
+            STORE_NAME,
+            STATE_KEY,
+            getInitialSeedSnapshot(),
+            () => ({ snapshot: nextState, result: undefined })
+          );
+          stateRef.current = committed.snapshot;
           return { ok: true, volatileMemoryOnly: false };
         } else {
           setPersistenceMode('memory_fallback');
@@ -291,13 +305,36 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const updateState = useCallback(
     (updater: (prev: StudioDatabaseSnapshot) => StudioDatabaseSnapshot) => {
-      setState((prev) => {
-        const next = updater(prev);
-        void persistState(next);
-        return next;
+      // React updater functions must stay pure. Apply optimistically, then replay
+      // the same functional mutation against the authoritative IDB record.
+      const optimistic = updater(stateRef.current);
+      stateRef.current = optimistic;
+      setState(optimistic);
+      const queued = mutationTailRef.current.then(async () => {
+        if (simulateSaveFailure) return false;
+        const db = await getDb();
+        if (!db) {
+          setPersistenceMode('memory_fallback');
+          return false;
+        }
+        const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, undefined>(
+          db,
+          STORE_NAME,
+          STATE_KEY,
+          getInitialSeedSnapshot(),
+          (latest) => ({ snapshot: updater(latest), result: undefined })
+        );
+        stateRef.current = committed.snapshot;
+        setState(committed.snapshot);
+        return true;
+      }).catch(() => {
+        setPersistenceMode('memory_fallback');
+        return false;
       });
+      mutationTailRef.current = queued.then(() => undefined);
+      return queued;
     },
-    [persistState]
+    [simulateSaveFailure]
   );
 
   const appendAudit = useCallback(
@@ -519,11 +556,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         existing?.id
       );
 
-      const nextVersion = existing
-        ? options?.createRevision
-          ? existing.version + 1
-          : existing.version
-        : 1;
+      const nextVersion = existing ? existing.version + 1 : 1;
 
       const normalizedTags = normalizeArticleTagIds(articleInput.tagIds ?? existing?.tagIds ?? []);
 
@@ -601,27 +634,35 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   );
 
   const saveArticle = useCallback(
-    (
+    async (
       articleInput: Partial<Article> & { id?: string; title: string },
       options?: {
         createRevision?: boolean;
         revisionSource?: ArticleRevision['source'];
         revisionSummary?: string;
       }
-    ): { article: Article; demotedH1Count: number } => {
-      let savedResult!: Article;
-      let demotedCount = 0;
-
-      updateState((prev) => {
-        const built = buildUpdatedArticleSnapshot(prev, articleInput, options);
-        savedResult = built.updatedArticle;
-        demotedCount = built.demotedH1Count;
-        return built.nextState;
+    ): Promise<{ article: Article; demotedH1Count: number }> => {
+      if (simulateSaveFailure) throw new Error('Simulated storage write failure; changes remain unsaved.');
+      const db = await getDb();
+      if (!db) throw new Error('IndexedDB is unavailable; changes remain unsaved.');
+      type Result = { conflict: string } | { built: ReturnType<typeof buildUpdatedArticleSnapshot> };
+      const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, Result>(db, STORE_NAME, STATE_KEY, getInitialSeedSnapshot(), (latest) => {
+        const existing = articleInput.id ? latest.articles.find((a) => a.id === articleInput.id) : undefined;
+        if (articleInput.id && !existing && articleInput.version !== undefined) {
+          return { snapshot: latest, result: { conflict: `Article ${articleInput.id} was removed from storage.` } };
+        }
+        if (existing && articleInput.version !== undefined && existing.version !== articleInput.version) {
+          return { snapshot: latest, result: { conflict: `Article changed in another tab (stored v${existing.version}; expected v${articleInput.version}).` } };
+        }
+        const built = buildUpdatedArticleSnapshot(latest, articleInput, options);
+        return { snapshot: built.nextState, result: { built } };
       });
-
-      return { article: savedResult, demotedH1Count: demotedCount };
+      if ('conflict' in committed.result) throw new Error(committed.result.conflict);
+      stateRef.current = committed.snapshot;
+      setState(committed.snapshot);
+      return { article: committed.result.built.updatedArticle, demotedH1Count: committed.result.built.demotedH1Count };
     },
-    [updateState, buildUpdatedArticleSnapshot]
+    [buildUpdatedArticleSnapshot, simulateSaveFailure]
   );
 
   const persistArticleDraft = useCallback(
@@ -634,105 +675,153 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         revisionSummary?: string;
       }
     ): Promise<SaveReceipt> => {
-      const currentSnapshot = stateRef.current;
-      const existing = articleInput.id
-        ? currentSnapshot.articles.find((a) => a.id === articleInput.id)
-        : undefined;
-
-      if (
-        existing &&
-        options?.expectedVersion !== undefined &&
-        existing.version > options.expectedVersion
-      ) {
+      if (simulateSaveFailure) {
+        return { ok: false, savedAt: new Date().toISOString(), version: options?.expectedVersion || 1, demotedH1Count: 0, volatileMemoryOnly: persistenceMode === 'memory_fallback', error: 'Simulated storage write failure. Changes remain unsaved.' };
+      }
+      const db = await getDb();
+      if (!db) {
+        setPersistenceMode('memory_fallback');
+        return { ok: false, savedAt: new Date().toISOString(), version: options?.expectedVersion || 1, demotedH1Count: 0, volatileMemoryOnly: true, error: 'IndexedDB is unavailable. Draft remains unsaved in this tab.' };
+      }
+      try {
+        type ArticleSaveResult = { conflict: string; version: number; savedAt: string; demotedH1Count: number } | { built: ReturnType<typeof buildUpdatedArticleSnapshot> };
+        const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, ArticleSaveResult>(
+          db,
+          STORE_NAME,
+          STATE_KEY,
+          getInitialSeedSnapshot(),
+          (latest) => {
+            const existing = articleInput.id ? latest.articles.find((a) => a.id === articleInput.id) : undefined;
+            if (articleInput.id && !existing && options?.expectedVersion !== undefined) {
+              return { snapshot: latest, result: { conflict: `Article ${articleInput.id} was removed from storage while this draft was open.`, version: options.expectedVersion, savedAt: new Date().toISOString(), demotedH1Count: 0 } };
+            }
+            if (existing && options?.expectedVersion !== undefined && existing.version !== options.expectedVersion) {
+              return { snapshot: latest, result: { conflict: `Version conflict: stored article is v${existing.version} while editor base was v${options.expectedVersion}.`, version: existing.version, savedAt: existing.updatedAt, demotedH1Count: 0 } };
+            }
+            const built = buildUpdatedArticleSnapshot(latest, articleInput, options);
+            return { snapshot: built.nextState, result: { built } };
+          }
+        );
+        if ('conflict' in committed.result) {
+          return { ok: false, savedAt: committed.result.savedAt, version: committed.result.version, demotedH1Count: 0, volatileMemoryOnly: false, error: committed.result.conflict };
+        }
+        const built = committed.result.built;
+        stateRef.current = committed.snapshot;
+        setState(committed.snapshot);
+        return { ok: true, savedAt: built.updatedArticle.updatedAt, version: built.updatedArticle.version, demotedH1Count: built.demotedH1Count, volatileMemoryOnly: false };
+      } catch (err) {
         return {
           ok: false,
-          savedAt: existing.updatedAt,
-          version: existing.version,
+          savedAt: new Date().toISOString(),
+          version: options?.expectedVersion || 1,
           demotedH1Count: 0,
-          volatileMemoryOnly: persistenceMode === 'memory_fallback',
-          error: `Version conflict: stored article is v${existing.version} while editor base was v${options.expectedVersion}.`,
+          volatileMemoryOnly: false,
+          error: err instanceof Error ? err.message : 'IndexedDB transaction failed; draft remains unsaved.',
         };
       }
-
-      const built = buildUpdatedArticleSnapshot(currentSnapshot, articleInput, options);
-      const writeResult = await persistState(built.nextState);
-      if (!writeResult.ok) {
-        return {
-          ok: false,
-          savedAt: existing?.updatedAt || new Date().toISOString(),
-          version: existing?.version || 1,
-          demotedH1Count: built.demotedH1Count,
-          volatileMemoryOnly: writeResult.volatileMemoryOnly,
-          error: writeResult.error || 'Repository write failed.',
-        };
-      }
-
-      setState(built.nextState);
-      return {
-        ok: true,
-        savedAt: built.updatedArticle.updatedAt,
-        version: built.updatedArticle.version,
-        demotedH1Count: built.demotedH1Count,
-        volatileMemoryOnly: writeResult.volatileMemoryOnly,
-      };
     },
-    [buildUpdatedArticleSnapshot, persistState, persistenceMode]
+    [buildUpdatedArticleSnapshot, persistenceMode, simulateSaveFailure]
   );
 
   const runAndStoreArticleAudit = useCallback(
-    (articleId: string, draftOverride?: Article): AuditReport | null => {
-      let generatedReport: AuditReport | null = null;
-      updateState((prev) => {
-        const target = draftOverride || prev.articles.find((a) => a.id === articleId);
-        if (!target) return prev;
-        const report = runArticleAudit({
+    async (articleId: string): Promise<{ ok: boolean; persisted: boolean; report?: AuditReport; error?: string }> => {
+      const calculate = (snapshot: StudioDatabaseSnapshot) => {
+        const target = snapshot.articles.find((article) => article.id === articleId);
+        if (!target) return undefined;
+        return runArticleAudit({
           article: target,
-          allArticles: prev.articles.map((a) => (a.id === target.id ? target : a)),
-          categories: prev.categories,
-          tags: prev.tags,
-          sources: prev.sources,
-          media: prev.media,
-          knowledgeLinks: prev.knowledgeLinks,
-          integrations: prev.integrations,
+          allArticles: snapshot.articles,
+          categories: snapshot.categories,
+          tags: snapshot.tags,
+          sources: snapshot.sources,
+          media: snapshot.media,
+          knowledgeLinks: snapshot.knowledgeLinks,
+          integrations: snapshot.integrations,
           executedAt: new Date().toISOString(),
         });
-        generatedReport = report;
+      };
+      const inMemoryReport = calculate(stateRef.current);
+      if (!inMemoryReport) return { ok: false, persisted: false, error: 'Article not found.' };
+      if (simulateSaveFailure) {
+        return { ok: false, persisted: false, report: inMemoryReport, error: 'Audit calculated in memory but not saved: simulated storage failure.' };
+      }
+      const db = await getDb();
+      if (!db) {
+        return { ok: false, persisted: false, report: inMemoryReport, error: 'Audit calculated in memory but not saved: IndexedDB is unavailable.' };
+      }
+      try {
+        type AuditMutationResult = { error: string } | { report: AuditReport; title: string };
+        const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, AuditMutationResult>(
+          db,
+          STORE_NAME,
+          STATE_KEY,
+          getInitialSeedSnapshot(),
+          (latest) => {
+            const target = latest.articles.find((article) => article.id === articleId);
+            if (!target) return { snapshot: latest, result: { error: 'Article not found in storage.' } };
+            const report = runArticleAudit({
+              article: target,
+              allArticles: latest.articles,
+              categories: latest.categories,
+              tags: latest.tags,
+              sources: latest.sources,
+              media: latest.media,
+              knowledgeLinks: latest.knowledgeLinks,
+              integrations: latest.integrations,
+              executedAt: new Date().toISOString(),
+            });
+            return {
+              snapshot: {
+                ...latest,
+                auditReportsByArticleId: { ...(latest.auditReportsByArticleId || {}), [articleId]: report },
+                auditEvents: appendAudit(
+                  latest,
+                  'Executed SEO & Editorial Quality Audit',
+                  'article',
+                  target.title,
+                  `Pass: ${report.counts.pass} · Warn: ${report.counts.warning} · Error: ${report.counts.error} · Unverified: ${report.counts.unverified}`
+                ),
+              },
+              result: { report, title: target.title },
+            };
+          }
+        );
+        if ('error' in committed.result) return { ok: false, persisted: false, error: committed.result.error };
+        stateRef.current = committed.snapshot;
+        setState(committed.snapshot);
+        return { ok: true, persisted: true, report: committed.result.report };
+      } catch (error) {
         return {
-          ...prev,
-          auditReportsByArticleId: {
-            ...(prev.auditReportsByArticleId || {}),
-            [target.id]: report,
-          },
-          auditEvents: appendAudit(
-            prev,
-            'Executed SEO & Editorial Quality Audit',
-            'article',
-            target.title,
-            `Pass: ${report.counts.pass} · Warn: ${report.counts.warning} · Error: ${report.counts.error} · Unverified: ${report.counts.unverified}`
-          ),
+          ok: false,
+          persisted: false,
+          report: inMemoryReport,
+          error: `Audit calculated in memory but not saved: ${error instanceof Error ? error.message : 'IndexedDB transaction failed.'}`,
         };
-      });
-      return generatedReport;
+      }
     },
-    [updateState, appendAudit]
+    [appendAudit, simulateSaveFailure]
   );
 
   const applyQuickFixProposal = useCallback(
-    (proposal: FixProposal): { ok: boolean; error?: string; updatedArticle?: Article } => {
-      let outcome: { ok: boolean; error?: string; updatedArticle?: Article } = { ok: false };
-      updateState((prev) => {
+    async (proposal: FixProposal): Promise<{ ok: boolean; error?: string; updatedArticle?: Article }> => {
+      if (simulateSaveFailure) return { ok: false, error: 'Storage write failed; Quick Fix was not saved.' };
+      const db = await getDb();
+      if (!db) {
+        setPersistenceMode('memory_fallback');
+        return { ok: false, error: 'IndexedDB is unavailable; Quick Fix was not saved.' };
+      }
+      try {
+        type QuickFixResult = { error: string } | { updatedArticle: Article };
+        const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, QuickFixResult>(db, STORE_NAME, STATE_KEY, getInitialSeedSnapshot(), (prev) => {
         const article = prev.articles.find((a) => a.id === proposal.articleId);
         if (!article) {
-          outcome = { ok: false, error: 'Article not found' };
-          return prev;
+          return { snapshot: prev, result: { error: 'Article not found' } };
         }
-        const currentFp = computeArticleFingerprint(article);
+        const articleMedia = prev.media.filter((m) => m.id === article.featuredMediaId);
+        const articleSources = prev.sources.filter((s) => article.sourceIds.includes(s.id));
+        const currentFp = computeArticleFingerprint(article, articleMedia, articleSources);
         if (proposal.baseFingerprint && proposal.baseFingerprint !== currentFp) {
-          outcome = {
-            ok: false,
-            error: 'Article changed since this Quick Fix was generated. Re-run SEO Audit first.',
-          };
-          return prev;
+          return { snapshot: prev, result: { error: 'Article changed since this Quick Fix was generated. Re-run SEO Audit first.' } };
         }
 
         const now = new Date().toISOString();
@@ -792,9 +881,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           integrations: prev.integrations,
         });
 
-        outcome = { ok: true, updatedArticle: nextArticle };
-
-        return {
+        return { snapshot: {
           ...prev,
           articles: nextArticles,
           revisions: [rev, ...prev.revisions],
@@ -809,60 +896,76 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             nextArticle.title,
             `${proposal.label} -> saved as v${nextVersion}`
           ),
-        };
-      });
-      return outcome;
+        }, result: { updatedArticle: nextArticle } };
+        });
+        if ('error' in committed.result) return { ok: false, error: committed.result.error };
+        stateRef.current = committed.snapshot;
+        setState(committed.snapshot);
+        return { ok: true, updatedArticle: committed.result.updatedArticle };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : 'IndexedDB transaction failed; Quick Fix was not saved.' };
+      }
     },
-    [updateState, appendAudit]
+    [appendAudit, simulateSaveFailure]
   );
 
   const duplicateArticle = useCallback(
-    (articleId: string): Article | null => {
-      let created: Article | null = null;
-      updateState((prev) => {
-        const orig = prev.articles.find((a) => a.id === articleId);
-        if (!orig) return prev;
-        const now = new Date().toISOString();
-        const newTitle = `${orig.title} (Copy)`;
-        const newSlug = ensureUniqueSlug(`${orig.slug}-copy`, orig.locale, prev.articles);
-        const copy: Article = {
-          ...orig,
-          id: `art-${Date.now()}`,
-          title: newTitle,
-          slug: newSlug,
-          status: 'draft',
-          publishedAt: undefined,
-          scheduledAt: undefined,
-          createdAt: now,
-          updatedAt: now,
-          version: 1,
-        };
-        created = copy;
-        return {
-          ...prev,
-          articles: [copy, ...prev.articles],
-          auditEvents: appendAudit(
-            prev,
-            'Duplicated article',
-            'article',
-            copy.title,
-            `Cloned from "${orig.title}" with unique slug /${copy.slug}`
-          ),
-        };
-      });
-      return created;
+    async (articleId: string): Promise<{ ok: boolean; article?: Article; error?: string }> => {
+      if (simulateSaveFailure) return { ok: false, error: 'Storage transaction failed; duplicate was not saved.' };
+      const db = await getDb();
+      if (!db) return { ok: false, error: 'IndexedDB is unavailable; duplicate was not saved.' };
+      const duplicateId = `art-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const now = new Date().toISOString();
+      try {
+        const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, { article?: Article; error?: string }>(
+          db,
+          STORE_NAME,
+          STATE_KEY,
+          getInitialSeedSnapshot(),
+          (latest) => {
+            const orig = latest.articles.find((article) => article.id === articleId);
+            if (!orig) return { snapshot: latest, result: { error: 'Article not found.' } };
+            const copy: Article = {
+              ...orig,
+              id: duplicateId,
+              title: `${orig.title} (Copy)`,
+              slug: ensureUniqueSlug(`${orig.slug}-copy`, orig.locale, latest.articles),
+              status: 'draft',
+              publishedAt: undefined,
+              scheduledAt: undefined,
+              createdAt: now,
+              updatedAt: now,
+              version: 1,
+            };
+            return {
+              snapshot: {
+                ...latest,
+                articles: [copy, ...latest.articles],
+                auditEvents: appendAudit(latest, 'Duplicated article', 'article', copy.title, `Cloned from "${orig.title}" with unique slug /${copy.slug}`),
+              },
+              result: { article: copy },
+            };
+          }
+        );
+        if (committed.result.error || !committed.result.article) return { ok: false, error: committed.result.error || 'Duplicate was not saved.' };
+        stateRef.current = committed.snapshot;
+        setState(committed.snapshot);
+        return { ok: true, article: committed.result.article };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : 'IndexedDB transaction failed; duplicate was not saved.' };
+      }
     },
-    [updateState, appendAudit]
+    [appendAudit, simulateSaveFailure]
   );
 
   const transitionArticleStatus = useCallback(
-    (
+    async (
       articleId: string,
       nextStatus: ArticleStatus,
       note?: string
-    ): { ok: boolean; error?: string } => {
+    ): Promise<{ ok: boolean; error?: string }> => {
       let outcome: { ok: boolean; error?: string } = { ok: true };
-      updateState((prev) => {
+      const committed = await updateState((prev) => {
         const article = prev.articles.find((a) => a.id === articleId);
         if (!article) {
           outcome = { ok: false, error: 'Article not found' };
@@ -931,85 +1034,117 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           ),
         };
       });
+      if (!committed) return { ok: false, error: 'Storage transaction failed; article status was not saved.' };
       return outcome;
     },
     [updateState, appendAudit]
   );
 
   const deleteArticle = useCallback(
-    (articleId: string) => {
-      updateState((prev) => {
-        const target = prev.articles.find((a) => a.id === articleId);
-        if (!target) return prev;
-        return {
-          ...prev,
-          articles: prev.articles.filter((a) => a.id !== articleId),
-          auditEvents: appendAudit(
-            prev,
-            'Deleted article',
-            'article',
-            target.title,
-            `Removed article /${target.slug} from local demo store`
-          ),
-        };
-      });
+    async (articleId: string): Promise<{ ok: boolean; error?: string }> => {
+      if (simulateSaveFailure) return { ok: false, error: 'Storage transaction failed; article was not deleted.' };
+      const db = await getDb();
+      if (!db) return { ok: false, error: 'IndexedDB is unavailable; article was not deleted.' };
+      try {
+        const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, { ok: boolean; error?: string }>(
+          db,
+          STORE_NAME,
+          STATE_KEY,
+          getInitialSeedSnapshot(),
+          (latest) => {
+            const target = latest.articles.find((article) => article.id === articleId);
+            if (!target) return { snapshot: latest, result: { ok: false, error: 'Article not found.' } };
+            return {
+              snapshot: {
+                ...latest,
+                articles: latest.articles.filter((article) => article.id !== articleId),
+                auditEvents: appendAudit(latest, 'Deleted article', 'article', target.title, `Removed article /${target.slug} from local demo store`),
+              },
+              result: { ok: true },
+            };
+          }
+        );
+        if (!committed.result.ok) return committed.result;
+        stateRef.current = committed.snapshot;
+        setState(committed.snapshot);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : 'IndexedDB transaction failed; article was not deleted.' };
+      }
     },
-    [updateState, appendAudit]
+    [appendAudit, simulateSaveFailure]
   );
 
   const restoreArticleRevision = useCallback(
-    (revisionId: string): Article | null => {
-      let restored: Article | null = null;
-      updateState((prev) => {
-        const rev = prev.revisions.find((r) => r.id === revisionId);
-        if (!rev) return prev;
-        const current = prev.articles.find((a) => a.id === rev.articleId);
-        const now = new Date().toISOString();
-        const nextVersion = (current?.version || rev.version) + 1;
-        const restoredArticle: Article = {
-          ...rev.snapshot,
-          bodyHtml: sanitizeAndDemoteBodyH1(
-            rev.snapshot.bodyHtml,
-            trustedMediaSourceSet(prev.media.map((media) => media.src))
-          ).sanitizedHtml,
-          version: nextVersion,
-          updatedAt: now,
-        };
-        restored = restoredArticle;
-        const newRevision: ArticleRevision = {
-          id: `rev-${restoredArticle.id}-v${nextVersion}-${Date.now()}`,
-          articleId: restoredArticle.id,
-          version: nextVersion,
-          snapshot: restoredArticle,
-          source: 'restore',
-          createdAt: now,
-          summary: `Restored from snapshot v${rev.version} (${rev.summary})`,
-        };
-        return {
-          ...prev,
-          articles: prev.articles.map((a) => (a.id === restoredArticle.id ? restoredArticle : a)),
-          revisions: [newRevision, ...prev.revisions],
-          auditEvents: appendAudit(
-            prev,
-            `Restored version v${rev.version} as new v${nextVersion}`,
-            'article',
-            restoredArticle.title,
-            `Non-destructive version restore created v${nextVersion}`
-          ),
-        };
-      });
-      return restored;
+    async (revisionId: string, expectedVersion: number): Promise<{ ok: boolean; article?: Article; error?: string }> => {
+      if (simulateSaveFailure) return { ok: false, error: 'Storage transaction failed; revision was not restored.' };
+      const db = await getDb();
+      if (!db) return { ok: false, error: 'IndexedDB is unavailable; revision was not restored.' };
+      const now = new Date().toISOString();
+      const newRevisionId = `rev-restore-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      try {
+        const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, { article?: Article; error?: string }>(
+          db,
+          STORE_NAME,
+          STATE_KEY,
+          getInitialSeedSnapshot(),
+          (latest) => {
+            const rev = latest.revisions.find((revision) => revision.id === revisionId);
+            if (!rev) return { snapshot: latest, result: { error: 'Revision was not found in storage.' } };
+            const current = latest.articles.find((article) => article.id === rev.articleId);
+            if (!current) return { snapshot: latest, result: { error: 'Article was removed from storage.' } };
+            if (current.version !== expectedVersion) {
+              return { snapshot: latest, result: { error: `Version conflict: stored article is v${current.version}; restore was based on v${expectedVersion}.` } };
+            }
+            const nextVersion = current.version + 1;
+            const restoredArticle: Article = {
+              ...rev.snapshot,
+              id: current.id,
+              bodyHtml: sanitizeAndDemoteBodyH1(
+                rev.snapshot.bodyHtml,
+                trustedMediaSourceSet(latest.media.map((media) => media.src))
+              ).sanitizedHtml,
+              version: nextVersion,
+              updatedAt: now,
+            };
+            const newRevision: ArticleRevision = {
+              id: newRevisionId,
+              articleId: restoredArticle.id,
+              version: nextVersion,
+              snapshot: restoredArticle,
+              source: 'restore',
+              createdAt: now,
+              summary: `Restored from snapshot v${rev.version} (${rev.summary})`,
+            };
+            return {
+              snapshot: {
+                ...latest,
+                articles: latest.articles.map((article) => (article.id === restoredArticle.id ? restoredArticle : article)),
+                revisions: [newRevision, ...latest.revisions],
+                auditEvents: appendAudit(latest, `Restored version v${rev.version} as new v${nextVersion}`, 'article', restoredArticle.title, `Non-destructive version restore created v${nextVersion}`),
+              },
+              result: { article: restoredArticle },
+            };
+          }
+        );
+        if (committed.result.error || !committed.result.article) return { ok: false, error: committed.result.error || 'Revision was not restored.' };
+        stateRef.current = committed.snapshot;
+        setState(committed.snapshot);
+        return { ok: true, article: committed.result.article };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : 'IndexedDB transaction failed; revision was not restored.' };
+      }
     },
-    [updateState, appendAudit]
+    [appendAudit, simulateSaveFailure]
   );
 
   const applyAssistantChanges = useCallback(
-    (
+    async (
       articleId: string,
       acceptedChanges: EditorialChange[]
-    ): { ok: boolean; error?: string; updatedArticle?: Article } => {
+    ): Promise<{ ok: boolean; error?: string; updatedArticle?: Article }> => {
       let result: { ok: boolean; error?: string; updatedArticle?: Article } = { ok: false };
-      updateState((prev) => {
+      const committed = await updateState((prev) => {
         const article = prev.articles.find((a) => a.id === articleId);
         if (!article) {
           result = { ok: false, error: 'Article not found' };
@@ -1117,15 +1252,16 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           ),
         };
       });
+      if (!committed) return { ok: false, error: 'Storage transaction failed; accepted changes were not saved.' };
       return result;
     },
     [updateState, appendAudit]
   );
 
   const savePage = useCallback(
-    (pageInput: Partial<EditorialPage> & { id?: string; title: string }): EditorialPage => {
+    async (pageInput: Partial<EditorialPage> & { id?: string; title: string }): Promise<EditorialPage> => {
       let savedPage!: EditorialPage;
-      updateState((prev) => {
+      const committed = await updateState((prev) => {
         const now = new Date().toISOString();
         const existing = pageInput.id ? prev.pages.find((p) => p.id === pageInput.id) : undefined;
         const sanitized = sanitizeAndDemoteBodyH1(
@@ -1166,6 +1302,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           ),
         };
       });
+      if (!committed) throw new Error('Storage transaction failed; page changes were not saved.');
       return savedPage;
     },
     [updateState, appendAudit]
@@ -1553,9 +1690,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       try {
         const db = await getDb();
         if (!db) return { ok: false, error: 'IndexedDB is unavailable; backup was not restored' };
-        // Await both the request and transaction completion. A successful put
-        // request alone is not treated as a durable restore receipt.
         const transaction = db.transaction(STORE_NAME, 'readwrite');
+        const current = (await transaction.store.get(STATE_KEY)) as StudioDatabaseSnapshot | undefined;
+        candidate.storageRevision = (current?.storageRevision || 0) + 1;
         await transaction.store.put(candidate, STATE_KEY);
         await transaction.done;
         stateRef.current = candidate;
@@ -1575,8 +1712,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const resetDemoDatabase = useCallback(async () => {
     const seed = getInitialSeedSnapshot();
-    setState(seed);
-    await persistState(seed);
+    const result = await persistState(seed);
+    if (!result.ok) throw new Error(result.error || 'Reset could not be persisted.');
+    if (result.volatileMemoryOnly) stateRef.current = seed;
+    setState(stateRef.current);
   }, [persistState]);
 
   const value: StudioContextValue = {

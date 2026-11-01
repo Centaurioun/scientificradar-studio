@@ -21,9 +21,9 @@ export default function ReviewQueuePage() {
       a.status === 'draft'
   );
 
-  const handleAction = (articleId: string, nextStatus: ArticleStatus) => {
+  const handleAction = async (articleId: string, nextStatus: ArticleStatus) => {
     const note = notesByArticle[articleId] || '';
-    const res = transitionArticleStatus(articleId, nextStatus, note);
+    const res = await transitionArticleStatus(articleId, nextStatus, note);
     if (!res.ok) {
       setFeedback({ type: 'err', text: res.error || 'Role permission denied' });
       return;
