@@ -137,6 +137,25 @@ test('HTML security policy preserves supported scientific formatting, references
   assert.doesNotMatch(sanitizedHtml, /<h1\b/i);
 });
 
+test('HTML security policy retains only explicitly approved attributes for each element and is idempotent', () => {
+  const dirty = [
+    '<p id="methods" title="Methods" data-foo="paragraph" align="center" aria-label="bad">Methods Ω 10.1038/s41586-026-01492-x <sup>2</sup><sub>n</sub></p>',
+    '<figure data-foo="figure"><img src="/media/figure-1.png" alt="Phase diagram" width="640" height="480" data-foo="image" loading="lazy" style="display:none"><figcaption data-extra="caption">Adapted with attribution.</figcaption></figure>',
+    '<p><a href="https://doi.org/10.1038/s41586-026-01492-x" target="_blank" rel="noopener noreferrer" data-knowledge-term="quantum state" data-foo="link" download aria-label="bad">Reference</a></p>',
+  ].join('');
+
+  const once = sanitizeAndDemoteBodyH1(dirty).sanitizedHtml;
+  const twice = sanitizeAndDemoteBodyH1(once).sanitizedHtml;
+  assert.equal(twice, once, 're-sanitizing supported HTML must not mutate its serialization');
+  assert.match(once, /id="methods" title="Methods"/);
+  assert.match(once, /href="https:\/\/doi\.org\/10\.1038/);
+  assert.match(once, /target="_blank" rel="noopener noreferrer" data-knowledge-term="quantum state"/);
+  assert.doesNotMatch(once, /data-foo|data-extra|align=|aria-label=|download|loading=|style=/i);
+  for (const scientific of ['Ω', '10.1038/s41586-026-01492-x', '<sup>2</sup>', '<sub>n</sub>', 'Phase diagram', 'Adapted with attribution.']) {
+    assert.ok(once.includes(scientific), `expected supported scientific content to survive: ${scientific}`);
+  }
+});
+
 test('HTML security policy rejects data/blob URLs and handles empty or large safe documents', () => {
   const urls = sanitizeAndDemoteBodyH1(
     '<p><a href="data:text/html,runCanary()">data link</a><a href="blob:https://example.invalid/id">blob link</a></p><img src="data:image/png;base64,AAAA" alt="data image"><img src="blob:https://example.invalid/id" alt="blob image">',

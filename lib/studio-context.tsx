@@ -227,7 +227,6 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             );
             if (!validated.snapshot) throw new Error(validated.error || 'Persisted snapshot is invalid');
             const migrated = validated.snapshot as unknown as StudioDatabaseSnapshot;
-            await db.put(STORE_NAME, migrated, STATE_KEY);
             if (!cancelled) {
               setState(migrated);
               document.documentElement.classList.toggle('dark', migrated.theme === 'dark');

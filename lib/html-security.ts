@@ -16,6 +16,20 @@ const ALLOWED_ATTR = [
   'start', 'target', 'title', 'value', 'width', 'data-knowledge-term',
 ];
 
+const COMMON_ATTRS = new Set(['id', 'title']);
+const ELEMENT_ATTRS: Record<string, ReadonlySet<string>> = {
+  a: new Set(['href', 'rel', 'target', 'data-knowledge-term']),
+  img: new Set(['alt', 'height', 'src', 'width']),
+  li: new Set(['value']),
+  ol: new Set(['start']),
+  td: new Set(['colspan', 'rowspan']),
+  th: new Set(['colspan', 'rowspan', 'scope']),
+};
+const SAFE_REL_TOKENS = new Set([
+  'author', 'bookmark', 'external', 'help', 'license', 'next', 'nofollow',
+  'noopener', 'noreferrer', 'prev', 'search', 'sponsored', 'tag', 'ugc',
+]);
+
 export interface SanitizeEditorialHtmlOptions {
   demoteBodyH1?: boolean;
   /** Exact source strings from already validated local media records. */
@@ -65,10 +79,9 @@ export function sanitizeEditorialHtml(
   const fragment = DOMPurify.sanitize(raw, {
     ALLOWED_TAGS,
     ALLOWED_ATTR,
-    ADD_ATTR: ['data-knowledge-term'],
-    // Temporarily allow parser retention; the post-pass below keeps only the
-    // explicit data-knowledge-term attribute on anchors.
-    ALLOW_DATA_ATTR: true,
+    // The explicit ALLOWED_ATTR entry above permits only data-knowledge-term;
+    // arbitrary data-* attributes remain disallowed.
+    ALLOW_DATA_ATTR: false,
     ALLOW_ARIA_ATTR: false,
     ALLOW_UNKNOWN_PROTOCOLS: false,
     // DOMPurify's URI policy handles known-dangerous schemes; the stricter
@@ -81,15 +94,22 @@ export function sanitizeEditorialHtml(
     for (const attribute of Array.from(element.attributes)) {
       const name = attribute.name.toLowerCase();
       const tag = element.localName.toLowerCase();
+      const allowedForElement = ELEMENT_ATTRS[tag];
+      const allowed = COMMON_ATTRS.has(name) || Boolean(allowedForElement?.has(name));
       const keep =
-        (name === 'href' && tag === 'a' && isSafeHref(attribute.value)) ||
-        (name === 'src' && tag === 'img' && isSafeImageSource(attribute.value, options.trustedImageSources || new Set())) ||
-        (name === 'target' && tag === 'a' && (attribute.value === '_blank' || attribute.value === '_self')) ||
-        (name === 'rel' && tag === 'a') ||
-        (name === 'data-knowledge-term' && tag === 'a') ||
-        (name === 'id' && /^[A-Za-z][A-Za-z0-9_:.-]{0,127}$/.test(attribute.value)) ||
-        (name !== 'href' && name !== 'src' && name !== 'target' && name !== 'rel' && name !== 'data-knowledge-term' && name !== 'id');
+        allowed &&
+        (name !== 'href' || isSafeHref(attribute.value)) &&
+        (name !== 'src' || isSafeImageSource(attribute.value, options.trustedImageSources || new Set())) &&
+        (name !== 'target' || attribute.value === '_blank' || attribute.value === '_self') &&
+        (name !== 'id' || /^[A-Za-z][A-Za-z0-9_:.-]{0,127}$/.test(attribute.value));
       if (!keep) element.removeAttribute(attribute.name);
+    }
+    if (element.localName.toLowerCase() === 'a' && element.hasAttribute('rel')) {
+      const rel = Array.from(new Set(
+        (element.getAttribute('rel') || '').toLowerCase().split(/\s+/).filter((token) => SAFE_REL_TOKENS.has(token)),
+      )).join(' ');
+      if (rel) element.setAttribute('rel', rel);
+      else element.removeAttribute('rel');
     }
     if (element.localName.toLowerCase() === 'a' && element.getAttribute('target') === '_blank') {
       const rel = new Set((element.getAttribute('rel') || '').split(/\s+/).filter(Boolean));
