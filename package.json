@@ -8,7 +8,11 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "npx --yes tsx --test lib/editorial-rules.test.ts",
+    "test": "bun test lib",
+    "test:unit": "bun test lib",
+    "test:e2e": "node scripts/prepare-playwright-server.mjs && playwright test",
+    "test:e2e:install": "playwright install chromium",
+    "test:e2e:install:ci": "playwright install --with-deps chromium",
     "clean": "next clean"
   },
   "dependencies": {
@@ -34,6 +38,7 @@
     "tailwind-merge": "^3.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.1",
     "@tailwindcss/postcss": "4.1.11",
     "@tailwindcss/typography": "^0.5.19",
     "@types/node": "^20",
