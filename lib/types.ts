@@ -161,6 +161,9 @@ export interface KnowledgeLink {
   isSampleDemoData: boolean;
 }
 
+export type KnowledgeLinkRecord = KnowledgeLink;
+export type SourceRecord = ScientificSource;
+
 export interface MediaAsset {
   id: string;
   filename: string;

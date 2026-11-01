@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { KnowledgeLink, MediaAsset, ScientificSource } from '@/lib/types';
 import { sanitizeEditorialHtml } from '@/lib/html-security';
-import { parseAndRenderLatex } from '@/lib/latex-math';
+import { validateAndRenderKatex } from '@/lib/ckeditor/ckeditor5-math/utils';
 import { analyzeManuscriptCitations } from '@/lib/citations';
 import { ExternalLink, BookOpen, X, AlertTriangle } from 'lucide-react';
 
@@ -209,15 +209,12 @@ export function InteractiveArticleBodyRenderer({
 
   const enrichInlineScientificMarkup = (fragment: string): string => {
     const sanitized = sanitizeEditorialHtml(fragment, { trustedImageSources }).html;
-    // 1. Transform inline <span data-math-tex="...">...</span> into 2D math HTML
+    // 1. Transform inline <span data-math-tex="...">...</span> into real KaTeX 2D math HTML
     const withMath = sanitized.replace(
       /<span\b([^>]*?\bdata-math-tex="([^"]+)"[^>]*)>[\s\S]*?<\/span>/gi,
       (_match, attrs, rawTex) => {
         const tex = decodeHtmlAttr(rawTex);
-        const rendered = parseAndRenderLatex(tex, 'inline');
-        if (!rendered.valid) {
-          return `<span ${attrs}>[LaTeX Error: ${rawTex}]</span>`;
-        }
+        const rendered = validateAndRenderKatex(tex, false);
         return `<span ${attrs}>${rendered.renderedHtml}</span>`;
       }
     );
@@ -490,7 +487,7 @@ export function InteractiveArticleBodyRenderer({
     } else if (tagLower === 'div') {
       const mathTex = getAttrValue(attrStr, 'data-math-tex');
       if (mathTex) {
-        const rendered = parseAndRenderLatex(mathTex, 'block');
+        const rendered = validateAndRenderKatex(mathTex, true);
         blocks.push(
           <div
             key={key}
@@ -498,7 +495,7 @@ export function InteractiveArticleBodyRenderer({
             data-math-display="block"
             className="my-5 overflow-x-auto rounded-lg border border-teal-200/80 bg-teal-50/40 px-4 py-3.5 text-center font-serif text-base text-slate-900 dark:border-teal-900/50 dark:bg-teal-950/25 dark:text-slate-100"
             dangerouslySetInnerHTML={{
-              __html: rendered.valid ? rendered.renderedHtml : `[LaTeX Error: ${mathTex}]`,
+              __html: rendered.renderedHtml,
             }}
           />
         );

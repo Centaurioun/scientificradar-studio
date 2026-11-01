@@ -118,6 +118,14 @@ export function validateSafeUrl(url: string): {
 }
 
 /**
+ * Fast boolean check for safe link hrefs (avoids javascript:, data:, vbscript:, etc.).
+ */
+export function isSafeLinkHref(url?: string): boolean {
+  if (!url) return false;
+  return validateSafeUrl(url).valid;
+}
+
+/**
  * Validates DOI syntax (e.g., 10.1038/s41586-026-01234-x).
  * Note: Syntax check only; never claims external Crossref/DOI registration verification.
  */

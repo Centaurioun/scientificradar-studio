@@ -36,7 +36,20 @@ import {
   slugify,
   validateCategoriesAndTags,
 } from '@/lib/editorial-rules';
+import dynamic from 'next/dynamic';
 import { ArticleTiptapEditor } from './article-tiptap-editor';
+
+const ArticleCKEditor = dynamic(
+  () => import('./article-ckeditor').then((mod) => mod.ArticleCKEditor),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="min-h-[520px] p-8 flex items-center justify-center text-slate-400 font-medium text-sm">
+        Loading CKEditor 5 + Math...
+      </div>
+    ),
+  }
+);
 import { CodexAssistantDrawer } from '@/components/assistant/codex-assistant-drawer';
 import { ArticlePreviewView } from './article-preview-view';
 import { runArticleAudit } from '@/lib/audit/run-article-audit';
@@ -139,9 +152,22 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
 
   // UI states
   const [activeMode, setActiveMode] = useState<'write' | 'preview'>('write');
+  const [editorEngine, setEditorEngine] = useState<'tiptap' | 'ckeditor'>('tiptap');
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('taxonomy');
   const [assistantOpen, setAssistantOpen] = useState(false);
+
+  // Support ?editor=ckeditor or ?editor=tiptap URL query parameter without SSR hydration mismatch
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const requestedEngine = params.get('editor');
+    if (requestedEngine === 'ckeditor' || requestedEngine === 'tiptap') {
+      queueMicrotask(() => {
+        setEditorEngine(requestedEngine);
+      });
+    }
+  }, []);
 
   // Verified Save State machine
   const [saveState, setSaveState] = useState<SaveState>('clean');
@@ -943,40 +969,125 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 </div>
               </div>
 
-              {/* Tiptap Body Editor (H2 & H3 only) */}
-              <ArticleTiptapEditor
-                contentHtml={bodyHtml}
-                knowledgeLinks={knowledgeLinks}
-                availableSources={sources.filter((s) => selectedSourceIds.includes(s.id))}
-                trustedImageSources={new Set(media.map((m) => m.src))}
-                pendingFigureInsert={pendingFigureInsert}
-                onFigureInserted={() => setPendingFigureInsert(null)}
-                onRequestMediaInsert={() => setFigurePickerOpen(true)}
-                onApplyHtmlSource={(sanitizedHtml, _summaryNote, nextJson) => {
-                  latestBodyRef.current = { bodyHtml: sanitizedHtml, body: nextJson };
-                  setBodyHtml(sanitizedHtml);
-                  setBodyJson(nextJson);
-                  markDirty();
-                  void performSave(
-                    true,
-                    `Applied sanitized HTML Source edits by ${activeRole}`,
-                    { bodyHtml: sanitizedHtml, body: nextJson }
-                  );
-                }}
-                onSyncJson={(nextJson, canonicalHtml) => {
-                  latestBodyRef.current = { bodyHtml: canonicalHtml, body: nextJson };
-                  setBodyJson(nextJson);
-                }}
-                onChange={(html, nextJson) => {
-                  latestBodyRef.current = { bodyHtml: html, body: nextJson };
-                  setBodyHtml(html);
-                  setBodyJson(nextJson);
-                  markDirty();
-                }}
-                onDemotedH1={(count) => {
-                  setDemotedNotice((prev) => prev + count);
-                }}
-              />
+              {/* Reversible Editor Engine Switcher (Tiptap 3 Baseline vs CKEditor 5 + Math Pilot) */}
+              <div
+                data-testid="editor-engine-switcher"
+                role="region"
+                aria-label="Manuscript editor engine switcher"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50/90 px-3.5 py-2 text-xs dark:border-slate-800 dark:bg-slate-900/80"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-slate-700 dark:text-slate-200">
+                    Manuscript Editor Engine:
+                  </span>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Non-destructive switch · Shared canonical HTML + ProseMirror JSON
+                  </span>
+                </div>
+                <div
+                  role="group"
+                  aria-label="Select manuscript editor engine"
+                  className="inline-flex items-center rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-800"
+                >
+                  <button
+                    type="button"
+                    data-testid="switch-editor-tiptap"
+                    aria-pressed={editorEngine === 'tiptap'}
+                    onClick={() => setEditorEngine('tiptap')}
+                    className={`rounded-md px-2.5 py-1 text-xs font-semibold transition-colors ${
+                      editorEngine === 'tiptap'
+                        ? 'bg-[#087f83] text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white'
+                    }`}
+                  >
+                    Tiptap 3 (Baseline)
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="switch-editor-ckeditor"
+                    aria-pressed={editorEngine === 'ckeditor'}
+                    onClick={() => setEditorEngine('ckeditor')}
+                    className={`rounded-md px-2.5 py-1 text-xs font-semibold transition-colors ${
+                      editorEngine === 'ckeditor'
+                        ? 'bg-[#087f83] text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white'
+                    }`}
+                  >
+                    CKEditor 5 + Math (Pilot)
+                  </button>
+                </div>
+              </div>
+
+              {/* Body Editor Surface (H2 & H3 only; reversible between Tiptap 3 and CKEditor 5 + Math) */}
+              {editorEngine === 'ckeditor' ? (
+                <ArticleCKEditor
+                  contentHtml={bodyHtml}
+                  knowledgeLinks={knowledgeLinks}
+                  availableSources={sources.filter((s) => selectedSourceIds.includes(s.id))}
+                  trustedImageSources={new Set(media.map((m) => m.src))}
+                  pendingFigureInsert={pendingFigureInsert}
+                  onFigureInserted={() => setPendingFigureInsert(null)}
+                  onRequestMediaInsert={() => setFigurePickerOpen(true)}
+                  onApplyHtmlSource={(sanitizedHtml, _summaryNote, nextJson) => {
+                    latestBodyRef.current = { bodyHtml: sanitizedHtml, body: nextJson };
+                    setBodyHtml(sanitizedHtml);
+                    setBodyJson(nextJson);
+                    markDirty();
+                    void performSave(
+                      true,
+                      `Applied sanitized HTML Source edits by ${activeRole}`,
+                      { bodyHtml: sanitizedHtml, body: nextJson }
+                    );
+                  }}
+                  onSyncJson={(nextJson, canonicalHtml) => {
+                    latestBodyRef.current = { bodyHtml: canonicalHtml, body: nextJson };
+                    setBodyJson(nextJson);
+                  }}
+                  onChange={(html, nextJson) => {
+                    latestBodyRef.current = { bodyHtml: html, body: nextJson };
+                    setBodyHtml(html);
+                    setBodyJson(nextJson);
+                    markDirty();
+                  }}
+                  onDemotedH1={(count) => {
+                    setDemotedNotice((prev) => prev + count);
+                  }}
+                />
+              ) : (
+                <ArticleTiptapEditor
+                  contentHtml={bodyHtml}
+                  knowledgeLinks={knowledgeLinks}
+                  availableSources={sources.filter((s) => selectedSourceIds.includes(s.id))}
+                  trustedImageSources={new Set(media.map((m) => m.src))}
+                  pendingFigureInsert={pendingFigureInsert}
+                  onFigureInserted={() => setPendingFigureInsert(null)}
+                  onRequestMediaInsert={() => setFigurePickerOpen(true)}
+                  onApplyHtmlSource={(sanitizedHtml, _summaryNote, nextJson) => {
+                    latestBodyRef.current = { bodyHtml: sanitizedHtml, body: nextJson };
+                    setBodyHtml(sanitizedHtml);
+                    setBodyJson(nextJson);
+                    markDirty();
+                    void performSave(
+                      true,
+                      `Applied sanitized HTML Source edits by ${activeRole}`,
+                      { bodyHtml: sanitizedHtml, body: nextJson }
+                    );
+                  }}
+                  onSyncJson={(nextJson, canonicalHtml) => {
+                    latestBodyRef.current = { bodyHtml: canonicalHtml, body: nextJson };
+                    setBodyJson(nextJson);
+                  }}
+                  onChange={(html, nextJson) => {
+                    latestBodyRef.current = { bodyHtml: html, body: nextJson };
+                    setBodyHtml(html);
+                    setBodyJson(nextJson);
+                    markDirty();
+                  }}
+                  onDemotedH1={(count) => {
+                    setDemotedNotice((prev) => prev + count);
+                  }}
+                />
+              )}
             </div>
           </div>
 

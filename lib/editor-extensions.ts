@@ -510,6 +510,14 @@ export const ScientificTableHeaderNode = Node.create({
         default: 'col',
         parseHTML: (element) => element.getAttribute('scope') || 'col',
       },
+      colspan: {
+        default: 1,
+        parseHTML: (element) => Number(element.getAttribute('colspan') || 1),
+      },
+      rowspan: {
+        default: 1,
+        parseHTML: (element) => Number(element.getAttribute('rowspan') || 1),
+      },
       textAlign: {
         default: 'left',
         parseHTML: (element) => element.getAttribute('data-text-align') || 'left',
@@ -523,6 +531,12 @@ export const ScientificTableHeaderNode = Node.create({
 
   renderHTML({ node, HTMLAttributes }) {
     const attrs: Record<string, string> = { scope: String(node.attrs.scope || 'col') };
+    if (Number(node.attrs.colspan) > 1) {
+      attrs.colspan = String(node.attrs.colspan);
+    }
+    if (Number(node.attrs.rowspan) > 1) {
+      attrs.rowspan = String(node.attrs.rowspan);
+    }
     if (node.attrs.textAlign && node.attrs.textAlign !== 'left') {
       attrs['data-text-align'] = String(node.attrs.textAlign);
     }
@@ -537,6 +551,14 @@ export const ScientificTableCellNode = Node.create({
 
   addAttributes() {
     return {
+      colspan: {
+        default: 1,
+        parseHTML: (element) => Number(element.getAttribute('colspan') || 1),
+      },
+      rowspan: {
+        default: 1,
+        parseHTML: (element) => Number(element.getAttribute('rowspan') || 1),
+      },
       textAlign: {
         default: 'left',
         parseHTML: (element) => element.getAttribute('data-text-align') || 'left',
@@ -550,6 +572,12 @@ export const ScientificTableCellNode = Node.create({
 
   renderHTML({ node, HTMLAttributes }) {
     const attrs: Record<string, string> = {};
+    if (Number(node.attrs.colspan) > 1) {
+      attrs.colspan = String(node.attrs.colspan);
+    }
+    if (Number(node.attrs.rowspan) > 1) {
+      attrs.rowspan = String(node.attrs.rowspan);
+    }
     if (node.attrs.textAlign && node.attrs.textAlign !== 'left') {
       attrs['data-text-align'] = String(node.attrs.textAlign);
     }

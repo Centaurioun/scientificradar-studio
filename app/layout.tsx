@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import 'ckeditor5/ckeditor5.css';
+import 'katex/dist/katex.min.css';
 import './globals.css';
 import { StudioProvider } from '@/lib/studio-context';
 

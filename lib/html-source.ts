@@ -851,13 +851,22 @@ export function deriveCanonicalBodyJsonFromHtml(sanitizedHtml: string): Record<s
       let rowMatch: RegExpExecArray | null;
       while ((rowMatch = rowRegex.exec(tableInner)) !== null) {
         const rowCells: Array<Record<string, unknown>> = [];
-        const cellRegex = /<(th|td)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+        const cellRegex = /<(th|td)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
         let cellMatch: RegExpExecArray | null;
         while ((cellMatch = cellRegex.exec(rowMatch[1])) !== null) {
           const isHeader = cellMatch[1].toLowerCase() === 'th';
-          const cellInline = parseInlineHtmlToProseMirrorNodes(cellMatch[2]);
+          const cellAttrsRaw = cellMatch[2] || '';
+          const colspan = Number(extractAttr(cellAttrsRaw, 'colspan') || 1);
+          const rowspan = Number(extractAttr(cellAttrsRaw, 'rowspan') || 1);
+          const textAlign = extractAttr(cellAttrsRaw, 'data-text-align') || undefined;
+          const cellAttrs: Record<string, unknown> = {};
+          if (colspan > 1) cellAttrs.colspan = colspan;
+          if (rowspan > 1) cellAttrs.rowspan = rowspan;
+          if (textAlign) cellAttrs.textAlign = textAlign;
+          const cellInline = parseInlineHtmlToProseMirrorNodes(cellMatch[3]);
           rowCells.push({
             type: isHeader ? 'tableHeader' : 'tableCell',
+            ...(Object.keys(cellAttrs).length > 0 ? { attrs: cellAttrs } : {}),
             content: [
               {
                 type: 'paragraph',

@@ -6,6 +6,78 @@ export interface LatexRenderResult {
   error?: string;
 }
 
+export interface ScientificSymbolCategory {
+  id: string;
+  label: string;
+  symbols: Array<{ char: string; name: string }>;
+}
+
+export const SCIENTIFIC_SYMBOL_CATEGORIES: ScientificSymbolCategory[] = [
+  {
+    id: 'greek',
+    label: 'Greek Letters',
+    symbols: [
+      { char: 'α', name: 'Alpha' },
+      { char: 'β', name: 'Beta' },
+      { char: 'γ', name: 'Gamma' },
+      { char: 'δ', name: 'Delta' },
+      { char: 'ε', name: 'Epsilon' },
+      { char: 'ζ', name: 'Zeta' },
+      { char: 'η', name: 'Eta' },
+      { char: 'θ', name: 'Theta' },
+      { char: 'λ', name: 'Lambda' },
+      { char: 'μ', name: 'Mu / Micro' },
+      { char: 'π', name: 'Pi' },
+      { char: 'ρ', name: 'Rho' },
+      { char: 'σ', name: 'Sigma' },
+      { char: 'τ', name: 'Tau' },
+      { char: 'φ', name: 'Phi' },
+      { char: 'ψ', name: 'Psi' },
+      { char: 'ω', name: 'Omega' },
+      { char: 'Δ', name: 'Capital Delta' },
+      { char: 'Σ', name: 'Capital Sigma' },
+      { char: 'Ω', name: 'Capital Omega' },
+    ],
+  },
+  {
+    id: 'operators',
+    label: 'Operators & Relations',
+    symbols: [
+      { char: '±', name: 'Plus-Minus' },
+      { char: '∓', name: 'Minus-Plus' },
+      { char: '×', name: 'Multiply' },
+      { char: '÷', name: 'Divide' },
+      { char: '·', name: 'Center Dot' },
+      { char: '≤', name: 'Less than or equal' },
+      { char: '≥', name: 'Greater than or equal' },
+      { char: '≠', name: 'Not equal' },
+      { char: '≈', name: 'Approximately equal' },
+      { char: '≡', name: 'Identical to' },
+      { char: '∝', name: 'Proportional to' },
+      { char: '∞', name: 'Infinity' },
+      { char: '∂', name: 'Partial differential' },
+      { char: '∇', name: 'Nabla / Del' },
+    ],
+  },
+  {
+    id: 'arrows_units',
+    label: 'Arrows & Units',
+    symbols: [
+      { char: '→', name: 'Right Arrow' },
+      { char: '←', name: 'Left Arrow' },
+      { char: '↔', name: 'Left-Right Arrow' },
+      { char: '⇒', name: 'Implies' },
+      { char: '⇔', name: 'Equivalent' },
+      { char: '⇌', name: 'Equilibrium Harpoons' },
+      { char: '°', name: 'Degree' },
+      { char: '℃', name: 'Degree Celsius' },
+      { char: 'Å', name: 'Angstrom' },
+      { char: 'ℏ', name: 'Reduced Planck Constant' },
+      { char: '‰', name: 'Per Mille' },
+    ],
+  },
+];
+
 export const FORBIDDEN_LATEX_MACROS =
   /\\(?:href|url|input|include|write|openout|def|csdef|catcode|csname|makeatletter|htmlData|htmlId|htmlClass|htmlStyle|includegraphics|write18|immediate)\b/i;
 
