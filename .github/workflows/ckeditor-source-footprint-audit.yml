@@ -1,0 +1,40 @@
+name: TEMP CKEditor source footprint audit
+on:
+  push:
+    branches: [audit/ckeditor-source-footprint-2026-11-02]
+permissions:
+  contents: read
+jobs:
+  audit:
+    if: github.repository == 'Centaurioun/scientificradar-studio'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Centaurioun/ckeditor5
+          ref: fc80e6091c1df4753fbbc82888bafdc6a4871f62
+          path: core
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: Centaurioun/ckeditor5-math
+          ref: 6d8a39a181d1a0b233b8676eb47847c9b506ef53
+          path: math
+          persist-credentials: false
+      - name: Compute relevant tracked source sizes (no code changes)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo CKEDITOR_FOOTPRINT_BEGIN
+          du -sh core core/packages math
+          echo CORE_TRACKED_FILE_COUNT=$(git -C core ls-files | wc -l)
+          echo MATH_TRACKED_FILE_COUNT=$(git -C math ls-files | wc -l)
+          echo PACKAGES=$(find core/packages -mindepth 1 -maxdepth 1 -type d | wc -l)
+          echo SOURCE_SIZE_EXCLUDING_HISTORY_AND_GIT:
+          du -sk --exclude=.git core math
+          echo CORE_PACKAGES_LARGEST:
+          du -sh core/packages/* | sort -h | tail -18
+          echo CORE_ROOT_DIRS:
+          du -sh core/* | sort -h | tail -20
+          echo CKEDITOR_FOOTPRINT_END
