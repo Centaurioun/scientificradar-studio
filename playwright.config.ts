@@ -1,11 +1,27 @@
-import { existsSync } from 'node:fs';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { defineConfig, devices } from '@playwright/test';
 
 const baseURL = 'http://127.0.0.1:4175';
-const bravePath =
-  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
-  '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
-const useInstalledBrave = process.platform === 'darwin' && existsSync(bravePath);
+const configuredChromiumPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+const defaultBravePath = '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
+
+function isExecutable(path: string) {
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+if (configuredChromiumPath !== undefined && (!configuredChromiumPath || !existsSync(configuredChromiumPath) || !isExecutable(configuredChromiumPath))) {
+  throw new Error(
+    `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH must name an existing executable browser binary; received: ${configuredChromiumPath || '<empty>'}`,
+  );
+}
+
+const braveIsAvailable = process.platform === 'darwin' && existsSync(defaultBravePath) && isExecutable(defaultBravePath);
+const chromiumExecutablePath = configuredChromiumPath ?? (braveIsAvailable ? defaultBravePath : undefined);
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -27,7 +43,7 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
     video: 'off',
-    launchOptions: useInstalledBrave ? { executablePath: bravePath } : {},
+    launchOptions: chromiumExecutablePath ? { executablePath: chromiumExecutablePath } : {},
   },
   webServer: {
     command: 'node .next/standalone/server.js',

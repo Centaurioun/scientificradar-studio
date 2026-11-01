@@ -68,13 +68,28 @@ test('G — browser applies and reports the three required CSS viewport dimensio
   await expectNoFatalBrowserFailures(diagnostics);
 });
 
-test('H — browser warnings, errors, and failed requests are captured for this test', async ({ page, diagnostics }) => {
+test('H — browser diagnostics capture marked console events and a controlled local request failure', async ({ page, diagnostics }, testInfo) => {
   await page.goto('/dashboard');
   await expect(page.getByRole('heading', { name: 'ScientificRadar Editorial Workspace' })).toBeVisible();
-  expect(Array.isArray(diagnostics.consoleWarnings)).toBe(true);
-  expect(Array.isArray(diagnostics.consoleErrors)).toBe(true);
-  expect(Array.isArray(diagnostics.pageErrors)).toBe(true);
-  expect(Array.isArray(diagnostics.failedLocalRequests)).toBe(true);
-  expect(Array.isArray(diagnostics.canceledLocalRequests)).toBe(true);
-  expect(Array.isArray(diagnostics.blockedExternalRequests)).toBe(true);
+
+  const marker = `pw-diagnostics-${testInfo.testId}`;
+  const warningMarker = `${marker}-warning`;
+  const errorMarker = `${marker}-error`;
+  const requestMarker = `${marker}-request`;
+  const requestUrl = `/__playwright_diagnostics_failure__?marker=${requestMarker}`;
+
+  await page.route(`**/__playwright_diagnostics_failure__?marker=${requestMarker}`, (route) => route.abort('failed'));
+  await page.evaluate(({ warningMarker, errorMarker, requestUrl }) => {
+    console.warn(warningMarker);
+    console.error(errorMarker);
+    return fetch(requestUrl).catch(() => undefined);
+  }, { warningMarker, errorMarker, requestUrl });
+
+  await expect.poll(() => diagnostics.consoleWarnings.some((entry) => entry.includes(warningMarker))).toBe(true);
+  await expect.poll(() => diagnostics.consoleErrors.some((entry) => entry.includes(errorMarker))).toBe(true);
+  await expect.poll(() => diagnostics.failedLocalRequests.some((entry) => entry.includes(requestMarker))).toBe(true);
+
+  expect(diagnostics.consoleWarnings.find((entry) => entry.includes(warningMarker))).toContain(warningMarker);
+  expect(diagnostics.consoleErrors.find((entry) => entry.includes(errorMarker))).toContain(errorMarker);
+  expect(diagnostics.failedLocalRequests.find((entry) => entry.includes(requestMarker))).toContain(requestMarker);
 });
