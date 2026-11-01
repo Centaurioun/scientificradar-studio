@@ -176,7 +176,7 @@ interface StudioContextValue extends StudioDatabaseSnapshot {
   runAndStoreArticleAudit: (articleId: string, draftOverride?: Article) => AuditReport | null;
   applyQuickFixProposal: (proposal: FixProposal) => Promise<{ ok: boolean; error?: string; updatedArticle?: Article }>;
   // Pages CRUD
-  savePage: (pageInput: Partial<EditorialPage> & { id?: string; title: string }) => EditorialPage;
+  savePage: (pageInput: Partial<EditorialPage> & { id?: string; title: string }) => Promise<EditorialPage>;
   deletePage: (pageId: string) => void;
   // Categories, Tags, Series, Authors
   addCategory: (cat: Omit<Category, 'id' | 'slug'> & { slug?: string }) => Category;
@@ -1178,9 +1178,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   );
 
   const savePage = useCallback(
-    (pageInput: Partial<EditorialPage> & { id?: string; title: string }): EditorialPage => {
+    async (pageInput: Partial<EditorialPage> & { id?: string; title: string }): Promise<EditorialPage> => {
       let savedPage!: EditorialPage;
-      updateState((prev) => {
+      const committed = await updateState((prev) => {
         const now = new Date().toISOString();
         const existing = pageInput.id ? prev.pages.find((p) => p.id === pageInput.id) : undefined;
         const sanitized = sanitizeAndDemoteBodyH1(
@@ -1221,6 +1221,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           ),
         };
       });
+      if (!committed) throw new Error('Storage transaction failed; page changes were not saved.');
       return savedPage;
     },
     [updateState, appendAudit]
