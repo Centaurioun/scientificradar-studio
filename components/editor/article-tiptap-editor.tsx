@@ -61,6 +61,9 @@ export function ArticleTiptapEditor({
         heading: {
           levels: [2, 3],
         },
+        // These standalone extensions are configured below; disable StarterKit's bundled copies.
+        link: false,
+        underline: false,
       }),
       Underline,
       LinkExtension.configure({
