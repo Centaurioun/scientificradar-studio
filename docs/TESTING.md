@@ -41,6 +41,32 @@ These are known failures from the 2026-11-01 isolated Brave runtime audit. PR-A 
 | SRS-RT-007 | Save a newer value in a second tab, apply an older Quick Fix proposal, and assert the newer value is not overwritten. | Pending; no Quick Fix mutation in smoke tests. |
 | SRS-RT-008 | Render a 120+ character article title at the three required viewports and assert the full title stays visible without clipping. | Pending; layout remains unchanged. |
 
+## PR-C persistence regressions
+
+`tests/e2e/concurrency.spec.ts` adds three isolated same-origin Brave cases. It verifies that a second tab's stale editor draft is rejected and the committed IndexedDB value survives reload; an SEO proposal generated before another tab saves is rejected without changing the stored article; and an injected native IndexedDB transaction abort produces a failed save state while retaining the editor draft. Each test reads `root_snapshot_v1` directly from IndexedDB. `lib/studio-persistence.test.ts` checks concurrent read-modify-write ordering, transaction-completion acknowledgment, no-op conflict behavior, and failed writes.
+
+Local PR-C verification on Bun 1.4.0 / Node.js 26.12.1, macOS Brave 156.1.98.60 (`/Applications/Brave Browser.app/Contents/MacOS/Brave Browser`):
+
+| Command | Result |
+| --- | --- |
+| `bun install --frozen-lockfile` | Pass; no lockfile changes |
+| `bun run test:unit` | 29 passed, 0 failed |
+| `bun run typecheck` | Pass |
+| `bun run lint` | Pass, 0 errors; one pre-existing `<img>` warning in `components/editor/article-workspace.tsx:1454` |
+| `bun run build` | Pass |
+| `bun run test:e2e` | 16 passed, 0 failed, using isolated Brave contexts on `127.0.0.1:4175` |
+
+The two concurrency browser tests were also copied unchanged to an isolated worktree at baseline `4f756294a81531b39d1fd9dfc68c68e29b3dd668`; both failed there because the stale editor save and old Quick Fix were acknowledged without a conflict. Both pass on PR-C. Hosted Chromium CI is required after the implementation branch is pushed and is reported separately from these local results.
+
+## PR-C six-cycle refinement record
+
+1. **Cycle 1 — reproduce:** Confirmed the source guarded article drafts and Quick Fixes against tab-local state. The regression tests failed on the exact fetched baseline in both reported stale-write scenarios.
+2. **Cycle 2 — persistence design:** Compared a transactional read-modify-write operation with a versioned storage mutation service. Selected a small transaction helper over the existing `idb` abstraction: one authoritative `root_snapshot_v1` read, synchronous validation/mutation, one write, and acknowledgment only after `tx.done`. No additional dependency or BroadcastChannel lock was needed.
+3. **Cycle 3 — persistence tests:** Added deterministic tests for serialized concurrent mutation, transaction completion, rejected no-op behavior, and aborted writes. Added browser regressions before the repair and confirmed baseline failures.
+4. **Cycle 4 — application integration:** Article draft saves now compare an exact persisted article version and increment that version on every committed save; Quick Fix checks its complete article fingerprint against persisted article/media/source data and records a revision only after a successful commit. Calendar saves, status transitions, and assistant changes await their durable transaction before reporting success. Other root mutations replay their functional updater against the latest stored snapshot instead of writing stale full-root copies.
+5. **Cycle 5 — adversarial verification:** Brave exercised two-tab stale writes, stale and valid SEO proposals (including linked media/source fingerprints), direct persisted-state checks after reload, and a controlled native IDB abort. Existing backup-security and smoke suites passed in the same run.
+6. **Cycle 6 — final review:** Reviewed all root-record write sites, transaction acknowledgment, article-version/history separation, historical records, import revision handling, empty-collection loading, and PR-B sanitizer/import behavior. Local acceptance passed. Hosted Chromium CI remains pending until PR creation and must pass on the exact PR head before READY.
+
 ## PR-A refinement record
 
 1. **Cycle 1 — baseline and architecture:** fetched `origin/main` at `0a26268503008aab78437ef4186c05ffa1a43123`; frozen Bun 1.4.0 install succeeded; native `bun test` passed all 14 existing cases. Chose Bun for unit tests because it runs the existing Node-style tests without an extra TSX package or altered semantics. Retained Node for Next.js and selected Playwright Test only for browser automation.

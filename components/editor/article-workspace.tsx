@@ -529,7 +529,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
       const savedOk = await performSave(false);
       if (!savedOk) return;
     }
-    const res = transitionArticleStatus(currentDraftArticle.id, nextStatus, note);
+    const res = await transitionArticleStatus(currentDraftArticle.id, nextStatus, note);
     if (!res.ok) {
       setWorkflowFeedback(res.error || 'Transition not permitted for active role.');
     } else {

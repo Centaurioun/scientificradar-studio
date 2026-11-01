@@ -102,11 +102,11 @@ export default function ArticlesListPage() {
 
   const selectedList = Object.keys(selectedIds).filter((id) => selectedIds[id]);
 
-  const handleBulkStatusChange = (nextStatus: ArticleStatus) => {
+  const handleBulkStatusChange = async (nextStatus: ArticleStatus) => {
     let updatedCount = 0;
     let deniedReason: string | undefined;
     for (const id of selectedList) {
-      const res = transitionArticleStatus(id, nextStatus, 'Bulk status transition');
+      const res = await transitionArticleStatus(id, nextStatus, 'Bulk status transition');
       if (res.ok) {
         updatedCount += 1;
       } else {
@@ -402,7 +402,11 @@ export default function ArticlesListPage() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => transitionArticleStatus(art.id, 'archived')}
+                            onClick={() => {
+                              void transitionArticleStatus(art.id, 'archived').then((res) => {
+                                setFeedback(res.ok ? `Archived "${art.title}".` : `Archive failed: ${res.error}`);
+                              });
+                            }}
                             title={`Archive ${art.title}`}
                             aria-label={`Archive ${art.title}`}
                             className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"

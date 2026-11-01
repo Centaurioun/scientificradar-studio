@@ -374,7 +374,15 @@ export default function ArticleSeoAuditPage() {
             </div>
           ) : (
             filteredFindings.map((finding) => {
-              const proposal = buildQuickFixProposal(article, finding.ruleId, categories);
+              const proposal = buildQuickFixProposal({
+                article,
+                findingId: finding.ruleId,
+                allArticles: articles,
+                categories,
+                tags,
+                sources,
+                media,
+              });
               const targetTab = finding.inspectorTab || 'seo';
               const targetFocus = finding.targetField || '';
               const goToHref = `/articles/${article.id}/edit?tab=${encodeURIComponent(
@@ -387,14 +395,21 @@ export default function ArticleSeoAuditPage() {
                   finding={finding}
                   proposal={proposal}
                   goToHref={goToHref}
-                  onApplyQuickFix={(prop) => {
-                    const res = applyQuickFixProposal(prop);
-                    if (res.ok) {
-                      setFeedbackBanner(
-                        `Applied deterministic Quick Fix "${prop.label}" and saved revision v${res.updatedArticle?.version}.`
-                      );
-                    } else if (res.error) {
-                      setFeedbackBanner(`Quick Fix error: ${res.error}`);
+                  onApplyQuickFix={async (prop) => {
+                    try {
+                      const res = await applyQuickFixProposal(prop);
+                      if (res.ok) {
+                        setFeedbackBanner(
+                          `Applied deterministic Quick Fix "${prop.label}" and saved revision v${res.updatedArticle?.version}.`
+                        );
+                        return true;
+                      } else if (res.error) {
+                        setFeedbackBanner(`Quick Fix error: ${res.error}`);
+                      }
+                      return false;
+                    } catch (error) {
+                      setFeedbackBanner(`Quick Fix error: ${error instanceof Error ? error.message : 'Storage failed.'}`);
+                      return false;
                     }
                   }}
                 />
@@ -410,8 +425,8 @@ export default function ArticleSeoAuditPage() {
           articleTitle={article.title}
           articleSlug={article.slug}
           report={report}
-          onConfirmPublish={(overrideNote) => {
-            const res = transitionArticleStatus(article.id, 'published', overrideNote);
+          onConfirmPublish={async (overrideNote) => {
+            const res = await transitionArticleStatus(article.id, 'published', overrideNote);
             if (res.ok) {
               setFeedbackBanner(
                 'Article marked as Published in local demo repository (scientificradar.com remains untouched).'
