@@ -49,6 +49,7 @@ export default function ArticleSeoAuditPage() {
   const [categoryFilter, setCategoryFilter] = useState<'all' | FindingCategory>('all');
   const [prePublishOpen, setPrePublishOpen] = useState(false);
   const [feedbackBanner, setFeedbackBanner] = useState<string | null>(null);
+  const [auditRunning, setAuditRunning] = useState(false);
 
   const liveReport = useMemo(() => {
     if (!article) return null;
@@ -105,13 +106,20 @@ export default function ArticleSeoAuditPage() {
     (f) => f.quickFixAvailable && f.status !== 'pass'
   );
 
-  const handleRunAudit = () => {
-    const updated = runAndStoreArticleAudit(article.id);
-    if (updated) {
+  const handleRunAudit = async () => {
+    setAuditRunning(true);
+    const receipt = await runAndStoreArticleAudit(article.id);
+    if (receipt.report && receipt.persisted) {
       setFeedbackBanner(
-        `SEO & Editorial Quality Audit completed: ${updated.counts.pass} passed, ${updated.counts.warning} warning(s), ${updated.counts.error} error(s), ${updated.counts.unverified} unverified.`
+        `SEO audit saved to IndexedDB: ${receipt.report.counts.pass} passed, ${receipt.report.counts.warning} warning(s), ${receipt.report.counts.error} error(s), ${receipt.report.counts.unverified} unverified.`
       );
+    } else if (receipt.report) {
+      setFeedbackBanner(`${receipt.error || 'Audit calculated in memory but not saved.'} Counts: ${receipt.report.counts.pass} passed, ${receipt.report.counts.warning} warning(s), ${receipt.report.counts.error} error(s).`);
+    } else {
+      setFeedbackBanner(receipt.error || 'SEO audit could not be calculated.');
     }
+    setAuditRunning(false);
+    return receipt.persisted;
   };
 
   return (
@@ -164,18 +172,18 @@ export default function ArticleSeoAuditPage() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={handleRunAudit}
+              disabled={auditRunning}
+              onClick={() => void handleRunAudit()}
               className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-indigo-700"
             >
               <RefreshCw className="h-3.5 w-3.5" />
-              <span>Run SEO Audit</span>
+              <span>{auditRunning ? 'Saving Audit…' : 'Run SEO Audit'}</span>
             </button>
 
             <button
               type="button"
-              onClick={() => {
-                runAndStoreArticleAudit(article.id);
-                setPrePublishOpen(true);
+              onClick={async () => {
+                if (await handleRunAudit()) setPrePublishOpen(true);
               }}
               className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-600 bg-emerald-50 px-3.5 py-2 text-xs font-semibold text-emerald-900 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-200"
             >

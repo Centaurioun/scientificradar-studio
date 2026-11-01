@@ -64,6 +64,24 @@ async function readPersistedArticle(page: import('@playwright/test').Page) {
   }, articleId);
 }
 
+async function readPersistedSnapshot(page: import('@playwright/test').Page) {
+  return page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('scientificradar-studio-p0-db');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const snapshot = await new Promise<{ articles: Array<{ id: string; title: string; slug: string; version: number }>; revisions: Array<{ id: string; articleId: string; version: number; source: string }> }>((resolve, reject) => {
+      const tx = db.transaction('studio_state', 'readonly');
+      const request = tx.objectStore('studio_state').get('root_snapshot_v1');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+    return snapshot;
+  });
+}
+
 async function readPersistedRevisionCount(page: import('@playwright/test').Page) {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -107,6 +125,32 @@ test('two tabs reject a stale article draft and retain the committed IndexedDB r
   await expect(staleTab.getByRole('textbox', { name: 'Article Title (H1)' })).toHaveValue(committedTitle);
   await expectNoFatalBrowserFailures(diagnostics);
   await staleTab.close();
+});
+
+test('a stale revisions tab cannot restore over a newer committed article', async ({ page, diagnostics }) => {
+  const staleRevisionTab = await page.context().newPage();
+  const editorTab = await page.context().newPage();
+  await page.goto('/dashboard');
+  const beforeSnapshot = await readPersistedSnapshot(page);
+  const before = beforeSnapshot.articles.find((article) => article.id === articleId);
+  await staleRevisionTab.goto('/revisions');
+  await editorTab.goto(`/articles/${articleId}/edit`);
+  const newestTitle = `Committed before stale restore ${Date.now()}`;
+  await editorTab.getByRole('textbox', { name: 'Article Title (H1)' }).fill(newestTitle);
+  await expect(editorTab.getByTestId('editor-save-indicator')).toContainText('Saved (Local)', { timeout: 10_000 });
+
+  const revisionRow = staleRevisionTab.locator(`a[href="/articles/${articleId}/edit"]`).first().locator('xpath=ancestor::div[contains(@class,"p-4")]');
+  const restoreButton = revisionRow.getByRole('button', { name: 'Restore Snapshot' }).first();
+  await expect(restoreButton).toBeVisible();
+  await restoreButton.click();
+  await expect(staleRevisionTab.getByRole('status')).toContainText(/version conflict|stale/i);
+  const after = await readPersistedArticle(page);
+  expect(after?.title).toBe(newestTitle);
+  expect(after?.version).toBe((before?.version || 0) + 1);
+  expect((await readPersistedSnapshot(page)).revisions).toHaveLength(beforeSnapshot.revisions.length);
+  await expectNoFatalBrowserFailures(diagnostics);
+  await staleRevisionTab.close();
+  await editorTab.close();
 });
 
 test('an older in-flight receipt preserves a newer dirty draft until its IndexedDB save commits', async ({ page, diagnostics }) => {

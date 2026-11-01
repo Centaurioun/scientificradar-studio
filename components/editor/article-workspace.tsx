@@ -147,6 +147,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   const [volatileWarning, setVolatileWarning] = useState(false);
   const [demotedNotice, setDemotedNotice] = useState<number>(0);
   const [workflowFeedback, setWorkflowFeedback] = useState<string | null>(null);
+  const [restoringRevisionId, setRestoringRevisionId] = useState<string | null>(null);
   const [taxonomyNotice, setTaxonomyNotice] = useState<string | null>(null);
   const [tagLimitNotice, setTagLimitNotice] = useState<string | null>(null);
 
@@ -697,8 +698,13 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                   const ok = await performSave(false);
                   if (!ok) return;
                 }
-                runAndStoreArticleAudit(currentDraftArticle.id, currentDraftArticle);
-                setPrePublishOpen(true);
+                const auditReceipt = await runAndStoreArticleAudit(currentDraftArticle.id);
+                setWorkflowFeedback(
+                  auditReceipt.persisted
+                    ? 'SEO audit calculated and saved to IndexedDB.'
+                    : auditReceipt.error || 'SEO audit was calculated in memory but not saved.'
+                );
+                if (auditReceipt.persisted) setPrePublishOpen(true);
               }}
               className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
             >
@@ -757,7 +763,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
 
       {/* Feedback / H1 Demotion Notice */}
       {(demotedNotice > 0 || workflowFeedback) && (
-        <div className="flex items-center justify-between border-b border-indigo-200 bg-indigo-50 px-6 py-2 text-xs text-indigo-950 dark:border-indigo-900/50 dark:bg-indigo-950/40 dark:text-indigo-200">
+        <div role="status" className="flex items-center justify-between border-b border-indigo-200 bg-indigo-50 px-6 py-2 text-xs text-indigo-950 dark:border-indigo-900/50 dark:bg-indigo-950/40 dark:text-indigo-200">
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
             <span>
@@ -1591,14 +1597,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                           type="button"
                           onClick={async () => {
                             if (isDirty) {
-                              await performSave(false);
+                              const saved = await performSave(false);
+                              if (!saved) return;
                             }
-                            runAndStoreArticleAudit(
-                              currentDraftArticle.id,
-                              currentDraftArticle
-                            );
+                            const receipt = await runAndStoreArticleAudit(currentDraftArticle.id);
                             setWorkflowFeedback(
-                              `SEO Audit executed: ${liveAuditReport.counts.pass} passed, ${liveAuditReport.counts.warning} warning(s), ${liveAuditReport.counts.error} error(s).`
+                              receipt.persisted
+                                ? `SEO audit saved to IndexedDB: ${receipt.report?.counts.pass ?? 0} passed, ${receipt.report?.counts.warning ?? 0} warning(s), ${receipt.report?.counts.error ?? 0} error(s).`
+                                : receipt.error || 'SEO audit was calculated in memory but not saved.'
                             );
                           }}
                           className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
@@ -1614,10 +1620,11 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                               const ok = await performSave(false);
                               if (!ok) return;
                             }
-                            runAndStoreArticleAudit(
-                              currentDraftArticle.id,
-                              currentDraftArticle
-                            );
+                            const receipt = await runAndStoreArticleAudit(currentDraftArticle.id);
+                            if (!receipt.persisted) {
+                              setWorkflowFeedback(receipt.error || 'SEO audit was calculated in memory but not saved.');
+                              return;
+                            }
                             router.push(`/articles/${currentDraftArticle.id}/seo`);
                           }}
                           className="inline-flex items-center justify-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
@@ -1812,25 +1819,22 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                         </p>
                         <button
                           type="button"
-                          onClick={() => {
-                            const restored = restoreArticleRevision(rev.id);
-                            if (restored) {
-                              lastSyncedVersionRef.current = restored.version;
-                              setTitle(restored.title);
-                              setSlug(restored.slug);
-                              setSummary(restored.summary);
-                              setBodyHtml(restored.bodyHtml);
-                              setSeoTitle(restored.seo.title || '');
-                              setSeoDescription(restored.seo.description || '');
+                          disabled={restoringRevisionId !== null}
+                          onClick={async () => {
+                            setRestoringRevisionId(rev.id);
+                            const result = await restoreArticleRevision(rev.id, lastSyncedVersionRef.current ?? -1);
+                            if (result.ok && result.article) {
+                              setSaveError(null);
                               setSaveState('clean');
-                              setWorkflowFeedback(
-                                `Restored snapshot v${rev.version} as new version v${restored.version}.`
-                              );
+                            setWorkflowFeedback(`Restored snapshot v${rev.version} as new version v${result.article.version}.`);
+                            } else {
+                              setWorkflowFeedback(`Restore failed: ${result.error || 'Revision was not saved.'}`);
                             }
+                            setRestoringRevisionId(null);
                           }}
                           className="mt-1 rounded border border-slate-300 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
                         >
-                          Restore as New Version
+                          {restoringRevisionId === rev.id ? 'Restoring…' : 'Restore as New Version'}
                         </button>
                       </div>
                     ))}
