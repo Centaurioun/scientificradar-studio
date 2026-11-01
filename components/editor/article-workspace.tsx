@@ -93,6 +93,13 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   const [summary, setSummary] = useState(existingArticle?.summary || '');
   const [locale, setLocale] = useState<'en' | 'tr'>(existingArticle?.locale || 'en');
   const [bodyHtml, setBodyHtml] = useState(existingArticle?.bodyHtml || '<p></p>');
+  const [bodyJson, setBodyJson] = useState<Record<string, unknown>>(
+    existingArticle?.body || { type: 'doc', content: [] }
+  );
+  const latestBodyRef = useRef<{ bodyHtml: string; body: Record<string, unknown> }>({
+    bodyHtml: existingArticle?.bodyHtml || '<p></p>',
+    body: existingArticle?.body || { type: 'doc', content: [] },
+  });
   const [primaryCategoryId, setPrimaryCategoryId] = useState(
     existingArticle?.primaryCategoryId || 'cat-physics'
   );
@@ -191,6 +198,11 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
       setSummary(existingArticle.summary);
       setLocale(existingArticle.locale);
       setBodyHtml(existingArticle.bodyHtml);
+      setBodyJson(existingArticle.body || { type: 'doc', content: [] });
+      latestBodyRef.current = {
+        bodyHtml: existingArticle.bodyHtml,
+        body: existingArticle.body || { type: 'doc', content: [] },
+      };
       setPrimaryCategoryId(existingArticle.primaryCategoryId || 'cat-physics');
       setSelectedCategoryIds(existingArticle.categoryIds);
       setSelectedTagIds(existingArticle.tagIds);
@@ -287,7 +299,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
       title: title || 'Untitled Scientific Article',
       slug: slug || slugify(title) || 'untitled-scientific-article',
       summary,
-      body: existingArticle?.body || { type: 'doc', content: [] },
+      body: bodyJson,
       bodyHtml,
       status: existingArticle?.status || 'draft',
       primaryCategoryId,
@@ -317,6 +329,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
       title,
       slug,
       summary,
+      bodyJson,
       bodyHtml,
       primaryCategoryId,
       selectedCategoryIds,
@@ -345,12 +358,23 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
 
   // Execute genuine verified repository persistence
   const performSave = useCallback(
-    (createRevision: boolean, revisionSummary?: string): Promise<boolean> => {
+    (
+      createRevision: boolean,
+      revisionSummary?: string,
+      draftOverride?: Partial<Article>
+    ): Promise<boolean> => {
       const requestedDraftRevision = draftEditRevisionRef.current;
       const queuedSave = saveQueueRef.current.then(async () => {
         setSaveState('saving');
         setSaveError(null);
-        const receipt = await persistArticleDraft(currentDraftArticle, {
+        const draftPayload: Article = {
+          ...currentDraftArticle,
+          body: draftOverride?.body ?? latestBodyRef.current.body ?? currentDraftArticle.body,
+          bodyHtml:
+            draftOverride?.bodyHtml ?? latestBodyRef.current.bodyHtml ?? currentDraftArticle.bodyHtml,
+          ...draftOverride,
+        };
+        const receipt = await persistArticleDraft(draftPayload, {
           expectedVersion: lastSyncedVersionRef.current,
           createRevision,
           revisionSource: 'editor',
@@ -511,7 +535,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
     markDirty();
   };
 
-  const handleAddInlineTag = () => {
+  const handleAddInlineTag = async () => {
     if (!newTagName.trim()) return;
     if (selectedTagIds.length >= MAX_EDITORIAL_TAGS) {
       setTagLimitNotice(
@@ -520,6 +544,11 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
       return;
     }
     const created = addTag(newTagName.trim());
+    const receipt = await created.committed;
+    if (!receipt.ok) {
+      setTagLimitNotice(receipt.error || 'Storage transaction failed; tag was not saved.');
+      return;
+    }
     if (!selectedTagIds.includes(created.id)) {
       setSelectedTagIds((prev) => [...prev, created.id]);
     }
@@ -528,7 +557,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
     markDirty();
   };
 
-  const handleAddInlineSource = () => {
+  const handleAddInlineSource = async () => {
     if (!newSourceTitle.trim() || !isValidHttpUrl(newSourceUrl.trim())) return;
     const created = saveSource({
       articleId: currentDraftArticle.id,
@@ -539,6 +568,11 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
       verificationStatus: 'unverified',
       notes: 'Added in editor · External DOI lookup not run in offline P0 demo',
     });
+    const receipt = await created.committed;
+    if (!receipt.ok) {
+      setWorkflowFeedback(receipt.error || 'Storage transaction failed; source was not saved.');
+      return;
+    }
     setSelectedSourceIds((prev) => [...prev, created.id]);
     setNewSourceTitle('');
     setNewSourceDoi('');
@@ -918,16 +952,25 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 pendingFigureInsert={pendingFigureInsert}
                 onFigureInserted={() => setPendingFigureInsert(null)}
                 onRequestMediaInsert={() => setFigurePickerOpen(true)}
-                onApplyHtmlSource={(sanitizedHtml) => {
+                onApplyHtmlSource={(sanitizedHtml, _summaryNote, nextJson) => {
+                  latestBodyRef.current = { bodyHtml: sanitizedHtml, body: nextJson };
                   setBodyHtml(sanitizedHtml);
+                  setBodyJson(nextJson);
                   markDirty();
                   void performSave(
                     true,
-                    `Applied sanitized HTML Source edits by ${activeRole}`
+                    `Applied sanitized HTML Source edits by ${activeRole}`,
+                    { bodyHtml: sanitizedHtml, body: nextJson }
                   );
                 }}
-                onChangeHtml={(html) => {
+                onSyncJson={(nextJson, canonicalHtml) => {
+                  latestBodyRef.current = { bodyHtml: canonicalHtml, body: nextJson };
+                  setBodyJson(nextJson);
+                }}
+                onChange={(html, nextJson) => {
+                  latestBodyRef.current = { bodyHtml: html, body: nextJson };
                   setBodyHtml(html);
+                  setBodyJson(nextJson);
                   markDirty();
                 }}
                 onDemotedH1={(count) => {
@@ -1593,7 +1636,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
 
                     <button
                       type="button"
-                      onClick={() => {
+                      onClick={async () => {
                         const created = addMediaAsset({
                           filename: `figure-${Date.now()}.svg`,
                           title: `${title.slice(0, 32) || 'Scientific'} Schematic Diagram`,
@@ -1605,6 +1648,13 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                           caption:
                             'Figure: Schematic diagram stored in Local Demo Storage.',
                         });
+                        const receipt = await created.committed;
+                        if (!receipt.ok) {
+                          setWorkflowFeedback(
+                            receipt.error || 'Storage transaction failed; figure was not saved.'
+                          );
+                          return;
+                        }
                         setFeaturedMediaId(created.id);
                         markDirty();
                       }}

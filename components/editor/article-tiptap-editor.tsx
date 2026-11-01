@@ -148,7 +148,13 @@ interface ArticleTiptapEditorProps {
   pendingFigureInsert?: MediaAsset | null;
   onFigureInserted?: () => void;
   /** Optional callback when HTML Source changes are explicitly applied (`SRS-HTML-003`) */
-  onApplyHtmlSource?: (sanitizedHtml: string, summaryNote: string) => void;
+  onApplyHtmlSource?: (
+    sanitizedHtml: string,
+    summaryNote: string,
+    nextJson: Record<string, unknown>
+  ) => void;
+  /** Emits the canonical ProseMirror JSON without marking the draft dirty on initial mount or external sync */
+  onSyncJson?: (nextJson: Record<string, unknown>, canonicalHtml: string) => void;
 }
 
 export function ArticleTiptapEditor({
@@ -164,6 +170,7 @@ export function ArticleTiptapEditor({
   pendingFigureInsert,
   onFigureInserted,
   onApplyHtmlSource,
+  onSyncJson,
 }: ArticleTiptapEditorProps) {
   const { media } = useStudio();
   const effectiveHtml = contentHtml ?? initialHtml ?? '<p></p>';
@@ -314,6 +321,11 @@ export function ArticleTiptapEditor({
         return false;
       },
     },
+    onCreate: ({ editor: ed }) => {
+      const sanitized = sanitizeAndDemoteBodyH1(ed.getHTML(), trustedSources);
+      lastEmittedHtmlRef.current = sanitized.sanitizedHtml;
+      onSyncJson?.(ed.getJSON() as Record<string, unknown>, sanitized.sanitizedHtml);
+    },
     onSelectionUpdate: () => {
       setSelectionTick((t) => t + 1);
     },
@@ -347,9 +359,10 @@ export function ArticleTiptapEditor({
     if (cleaned !== lastEmittedHtmlRef.current && cleaned !== current) {
       lastEmittedHtmlRef.current = cleaned;
       editor.commands.setContent(cleaned, { emitUpdate: false });
+      onSyncJson?.(editor.getJSON() as Record<string, unknown>, cleaned);
       setSelectionTick((t) => t + 1);
     }
-  }, [effectiveHtml, editor, trustedSources]);
+  }, [effectiveHtml, editor, trustedSources, onSyncJson]);
 
   // Synchronize inline citation numbering ([1], [2], [!1]) in document appearance order (SRS-SCI-001/002)
   const citationAnalysis = React.useMemo(() => {
@@ -383,6 +396,7 @@ export function ArticleTiptapEditor({
       return true;
     });
     if (mutated) {
+      tr.setMeta('preventUpdate', true);
       view.dispatch(tr);
     }
   }, [editor, citationAnalysis]);
@@ -1355,9 +1369,10 @@ export function ArticleTiptapEditor({
             />
             <button
               type="button"
+              disabled={!latexPreview.valid || !equationTex.trim()}
               onClick={handleInsertEquation}
               aria-label={editingMathPos !== null ? 'Update Equation' : 'Insert Equation'}
-              className="px-3 py-1.5 rounded bg-[#087f83] hover:bg-[#086b70] text-white font-semibold"
+              className="px-3 py-1.5 rounded bg-[#087f83] hover:bg-[#086b70] disabled:opacity-50 text-white font-semibold"
             >
               {editingMathPos !== null ? 'Update Equation' : 'Insert Equation'}
             </button>
@@ -1646,13 +1661,14 @@ export function ArticleTiptapEditor({
             } else {
               setPasteNotice('Applied HTML Source changes to Visual Editor.');
             }
+            const nextJson = editor.getJSON() as Record<string, unknown>;
             onChange?.(
               sanitizedHtml,
-              editor.getJSON() as Record<string, unknown>,
+              nextJson,
               demotedH1Count
             );
             onChangeHtml?.(sanitizedHtml);
-            onApplyHtmlSource?.(sanitizedHtml, summaryNote);
+            onApplyHtmlSource?.(sanitizedHtml, summaryNote, nextJson);
             setEditorMode('visual');
           }}
           onExitToVisual={() => setEditorMode('visual')}

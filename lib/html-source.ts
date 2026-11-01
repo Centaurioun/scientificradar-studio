@@ -445,3 +445,529 @@ export function validateAndRenderLatex(
   };
 }
 
+export interface ManuscriptSemanticSignature {
+  plainText: string;
+  headings: Array<{ level: number; text: string }>;
+  citationSourceIds: string[];
+  figureAssets: Array<{ mediaId: string; credit: string; licence: string; caption: string }>;
+  mathExpressions: Array<{ display: 'inline' | 'block'; tex: string }>;
+  tableCount: number;
+  tableCaptions: string[];
+  codeBlocks: string[];
+}
+
+function stripTagsAndDecode(raw: string): string {
+  return decodeHtmlEntities(raw.replace(/<[^>]+>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractAttr(attrsChunk: string, attrName: string): string {
+  const regex = new RegExp(`\\b${attrName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\\x60]+))`, 'i');
+  const match = regex.exec(attrsChunk);
+  if (!match) return '';
+  return decodeHtmlEntities(match[1] ?? match[2] ?? match[3] ?? '');
+}
+
+/**
+ * Extracts a portable, editor-agnostic scientific semantic signature from canonical body HTML.
+ */
+export function extractScientificSemanticsFromHtml(html: string): ManuscriptSemanticSignature {
+  const source = typeof html === 'string' ? html : '';
+  const headings: Array<{ level: number; text: string }> = [];
+  const citationSourceIds: string[] = [];
+  const figureAssets: Array<{ mediaId: string; credit: string; licence: string; caption: string }> = [];
+  const mathExpressions: Array<{ display: 'inline' | 'block'; tex: string }> = [];
+  const tableCaptions: string[] = [];
+  const codeBlocks: string[] = [];
+
+  const headingRegex = /<h([23])\b[^>]*>([\s\S]*?)<\/h\1>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = headingRegex.exec(source)) !== null) {
+    headings.push({
+      level: Number(match[1]),
+      text: stripTagsAndDecode(match[2]),
+    });
+  }
+
+  const citeRegex = /\bdata-citation-source-id\s*=\s*(?:"([^"]+)"|'([^']+)')/gi;
+  while ((match = citeRegex.exec(source)) !== null) {
+    citationSourceIds.push(decodeHtmlEntities(match[1] ?? match[2] ?? ''));
+  }
+
+  const figureRegex = /<figure\b([^>]*)>([\s\S]*?)<\/figure>/gi;
+  while ((match = figureRegex.exec(source)) !== null) {
+    const attrs = match[1] || '';
+    const inner = match[2] || '';
+    const mediaId = extractAttr(attrs, 'data-media-id');
+    const credit = extractAttr(attrs, 'data-figure-credit');
+    const licence = extractAttr(attrs, 'data-figure-licence');
+    const capMatch = /<figcaption\b[^>]*>([\s\S]*?)<\/figcaption>/i.exec(inner);
+    const caption = capMatch ? stripTagsAndDecode(capMatch[1]) : '';
+    if (mediaId || caption || credit || licence) {
+      figureAssets.push({ mediaId, credit, licence, caption });
+    }
+  }
+
+  const mathRegex = /<(span|div)\b([^>]*\bdata-math-tex\s*=\s*(?:"[^"]*"|'[^']*')[^>]*)>/gi;
+  while ((match = mathRegex.exec(source)) !== null) {
+    const tag = match[1].toLowerCase();
+    const attrs = match[2] || '';
+    const tex = extractAttr(attrs, 'data-math-tex').trim();
+    const displayAttr = extractAttr(attrs, 'data-math-display');
+    const display: 'inline' | 'block' =
+      displayAttr === 'block' || tag === 'div' ? 'block' : 'inline';
+    mathExpressions.push({ display, tex });
+  }
+
+  const tableCount = countPatternMatches(source, /<table\b/gi);
+
+  const captionRegex = /<caption\b[^>]*>([\s\S]*?)<\/caption>/gi;
+  while ((match = captionRegex.exec(source)) !== null) {
+    tableCaptions.push(stripTagsAndDecode(match[1]));
+  }
+
+  const codeBlockRegex = /<pre\b[^>]*>\s*<code\b[^>]*>([\s\S]*?)<\/code>\s*<\/pre>/gi;
+  while ((match = codeBlockRegex.exec(source)) !== null) {
+    codeBlocks.push(decodeHtmlEntities(match[1]));
+  }
+
+  const proseOnlyHtml = source
+    .replace(/<figure\b[^>]*>[\s\S]*?<\/figure>/gi, ' ')
+    .replace(/<div\b[^>]*\bdata-math-tex\b[^>]*>[\s\S]*?<\/div>/gi, ' ')
+    .replace(/<span\b[^>]*\bdata-math-tex\b[^>]*>[\s\S]*?<\/span>/gi, ' ')
+    .replace(/<sup\b[^>]*\bdata-citation-source-id\b[^>]*>[\s\S]*?<\/sup>/gi, ' ');
+
+  const plainText = stripTagsAndDecode(proseOnlyHtml);
+
+  return {
+    plainText,
+    headings,
+    citationSourceIds,
+    figureAssets,
+    mathExpressions,
+    tableCount,
+    tableCaptions,
+    codeBlocks,
+  };
+}
+
+function collectJsonRawText(node: Record<string, unknown>): string {
+  if (node.type === 'text' && typeof node.text === 'string') {
+    return node.text;
+  }
+  const content = Array.isArray(node.content) ? (node.content as Array<Record<string, unknown>>) : [];
+  return content.map(collectJsonRawText).join('');
+}
+
+function collectJsonProseText(node: Record<string, unknown>): string {
+  const type = String(node.type || '');
+  if (
+    type === 'scientificCitation' ||
+    type === 'scientificMathInline' ||
+    type === 'scientificMathBlock' ||
+    type === 'scientificFigure'
+  ) {
+    return '';
+  }
+  if (type === 'text' && typeof node.text === 'string') {
+    return node.text;
+  }
+  const content = Array.isArray(node.content) ? (node.content as Array<Record<string, unknown>>) : [];
+  const sep =
+    type === 'paragraph' ||
+    type === 'heading' ||
+    type === 'tableCell' ||
+    type === 'tableHeader' ||
+    type === 'tableCaption' ||
+    type === 'listItem'
+      ? ''
+      : ' ';
+  return content.map(collectJsonProseText).filter(Boolean).join(sep);
+}
+
+/**
+ * Extracts a portable scientific semantic signature from a ProseMirror/Tiptap JSON document.
+ */
+export function extractScientificSemanticsFromJson(
+  doc: Record<string, unknown> | undefined
+): ManuscriptSemanticSignature {
+  const headings: Array<{ level: number; text: string }> = [];
+  const citationSourceIds: string[] = [];
+  const figureAssets: Array<{ mediaId: string; credit: string; licence: string; caption: string }> = [];
+  const mathExpressions: Array<{ display: 'inline' | 'block'; tex: string }> = [];
+  const tableCaptions: string[] = [];
+  const codeBlocks: string[] = [];
+  let tableCount = 0;
+  const proseChunks: string[] = [];
+
+  function walk(node: Record<string, unknown> | undefined, insideBlockProse = false) {
+    if (!node || typeof node !== 'object') return;
+    const type = String(node.type || '');
+    const attrs = (node.attrs && typeof node.attrs === 'object'
+      ? (node.attrs as Record<string, unknown>)
+      : {});
+
+    if (type === 'heading') {
+      const level = Number(attrs.level || 2);
+      const text = collectJsonProseText(node).replace(/\s+/g, ' ').trim();
+      if (level === 2 || level === 3) {
+        headings.push({ level, text });
+      }
+      if (text) proseChunks.push(text);
+    } else if (type === 'scientificCitation') {
+      const sourceId = String(attrs.sourceId || '');
+      if (sourceId) citationSourceIds.push(sourceId);
+      return;
+    } else if (type === 'scientificFigure') {
+      figureAssets.push({
+        mediaId: String(attrs.mediaId || ''),
+        credit: String(attrs.credit || ''),
+        licence: String(attrs.licence || ''),
+        caption: String(attrs.caption || '').replace(/\s+/g, ' ').trim(),
+      });
+      return;
+    } else if (type === 'scientificMathInline') {
+      mathExpressions.push({
+        display: 'inline',
+        tex: String(attrs.tex || '').trim(),
+      });
+      return;
+    } else if (type === 'scientificMathBlock') {
+      mathExpressions.push({
+        display: 'block',
+        tex: String(attrs.tex || '').trim(),
+      });
+      return;
+    } else if (type === 'table') {
+      tableCount += 1;
+    } else if (type === 'tableCaption') {
+      const text = collectJsonProseText(node).replace(/\s+/g, ' ').trim();
+      tableCaptions.push(text);
+      if (text) proseChunks.push(text);
+    } else if (type === 'codeBlock') {
+      const raw = collectJsonRawText(node);
+      codeBlocks.push(raw);
+      const norm = raw.replace(/\s+/g, ' ').trim();
+      if (norm) proseChunks.push(norm);
+      return;
+    } else if (
+      type === 'paragraph' ||
+      type === 'tableCell' ||
+      type === 'tableHeader'
+    ) {
+      if (!insideBlockProse) {
+        const text = collectJsonProseText(node).replace(/\s+/g, ' ').trim();
+        if (text) proseChunks.push(text);
+      }
+    }
+
+    const nextInsideProse =
+      insideBlockProse ||
+      type === 'heading' ||
+      type === 'paragraph' ||
+      type === 'tableCaption' ||
+      type === 'tableCell' ||
+      type === 'tableHeader';
+
+    const content = Array.isArray(node.content) ? (node.content as Array<Record<string, unknown>>) : [];
+    for (const child of content) {
+      walk(child, nextInsideProse);
+    }
+  }
+
+  walk(doc, false);
+
+  return {
+    plainText: proseChunks.join(' ').replace(/\s+/g, ' ').trim(),
+    headings,
+    citationSourceIds,
+    figureAssets,
+    mathExpressions,
+    tableCount,
+    tableCaptions,
+    codeBlocks,
+  };
+}
+
+/**
+ * Checks whether an article's ProseMirror `body` JSON and sanitized `bodyHtml` represent the same scientific semantics.
+ */
+export function areBodyJsonAndHtmlSemanticallyAligned(
+  bodyJson: Record<string, unknown> | undefined,
+  bodyHtml: string
+): boolean {
+  if (!bodyJson || bodyJson.type !== 'doc' || !Array.isArray(bodyJson.content)) {
+    return false;
+  }
+  const htmlSig = extractScientificSemanticsFromHtml(bodyHtml);
+  const jsonSig = extractScientificSemanticsFromJson(bodyJson);
+  return JSON.stringify(htmlSig) === JSON.stringify(jsonSig);
+}
+
+function parseInlineHtmlToProseMirrorNodes(inlineHtml: string): Array<Record<string, unknown>> {
+  const nodes: Array<Record<string, unknown>> = [];
+  const tokenRegex =
+    /(<sup\b[^>]*\bdata-citation-source-id\b[^>]*>[\s\S]*?<\/sup>|<span\b[^>]*\bdata-math-tex\b[^>]*>[\s\S]*?<\/span>|<a\b[^>]*>[\s\S]*?<\/a>|<(strong|b|em|i|u|s|del|code|sup|sub)\b[^>]*>[\s\S]*?<\/\2>)/gi;
+
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  const pushPlainText = (rawSlice: string, marks?: Array<Record<string, unknown>>) => {
+    const clean = decodeHtmlEntities(rawSlice.replace(/<[^>]+>/g, ''));
+    if (!clean) return;
+    nodes.push(marks && marks.length > 0 ? { type: 'text', text: clean, marks } : { type: 'text', text: clean });
+  };
+
+  while ((match = tokenRegex.exec(inlineHtml)) !== null) {
+    if (match.index > lastIndex) {
+      pushPlainText(inlineHtml.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    if (/^<sup\b[^>]*\bdata-citation-source-id\b/i.test(token)) {
+      const sourceId = extractAttr(token, 'data-citation-source-id');
+      const inner = stripTagsAndDecode(token) || '[1]';
+      nodes.push({
+        type: 'scientificCitation',
+        attrs: { sourceId, label: inner },
+      });
+    } else if (/^<span\b[^>]*\bdata-math-tex\b/i.test(token)) {
+      const tex = extractAttr(token, 'data-math-tex').trim();
+      nodes.push({
+        type: 'scientificMathInline',
+        attrs: { tex },
+      });
+    } else if (/^<a\b/i.test(token)) {
+      const href = extractAttr(token, 'href');
+      const target = extractAttr(token, 'target') || (href.startsWith('/') ? '_self' : '_blank');
+      const knowledgeTerm = extractAttr(token, 'data-knowledge-term') || null;
+      const innerMatch = /^<a\b[^>]*>([\s\S]*?)<\/a>$/i.exec(token);
+      pushPlainText(innerMatch ? innerMatch[1] : token, [
+        {
+          type: 'link',
+          attrs: { href, target, 'data-knowledge-term': knowledgeTerm },
+        },
+      ]);
+    } else {
+      const tagMatch = /^<([a-z0-9]+)\b[^>]*>([\s\S]*?)<\/\1>$/i.exec(token);
+      if (tagMatch) {
+        const tag = tagMatch[1].toLowerCase();
+        const markType =
+          tag === 'strong' || tag === 'b'
+            ? 'bold'
+            : tag === 'em' || tag === 'i'
+            ? 'italic'
+            : tag === 'u'
+            ? 'underline'
+            : tag === 's' || tag === 'del'
+            ? 'strike'
+            : tag === 'code'
+            ? 'code'
+            : tag === 'sup'
+            ? 'superscript'
+            : 'subscript';
+        pushPlainText(tagMatch[2], [{ type: markType }]);
+      }
+    }
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < inlineHtml.length) {
+    pushPlainText(inlineHtml.slice(lastIndex));
+  }
+
+  return nodes;
+}
+
+/**
+ * Derives a canonical ProseMirror/Tiptap JSON document from sanitized body HTML so
+ * `body` JSON and `bodyHtml` remain semantically synchronized across visual edits,
+ * HTML Source mode, Quick Fixes, assistant reviews, and legacy records (P0-B / SRS-HTML-002).
+ */
+export function deriveCanonicalBodyJsonFromHtml(sanitizedHtml: string): Record<string, unknown> {
+  const source = typeof sanitizedHtml === 'string' && sanitizedHtml.trim() ? sanitizedHtml.trim() : '<p></p>';
+  const content: Array<Record<string, unknown>> = [];
+
+  const blockRegex =
+    /(<h([23])\b([^>]*)>([\s\S]*?)<\/h\2>|<pre\b[^>]*>\s*<code\b[^>]*>([\s\S]*?)<\/code>\s*<\/pre>|<figure\b([^>]*)>([\s\S]*?)<\/figure>|<div\b([^>]*\bdata-math-tex\b[^>]*)>[\s\S]*?<\/div>|<table\b[^>]*>([\s\S]*?)<\/table>|<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>|<ul>([\s\S]*?)<\/ul>|<ol\b[^>]*>([\s\S]*?)<\/ol>|<hr\b[^>]*\/?>|<p\b([^>]*)>([\s\S]*?)<\/p>)/gi;
+
+  let match: RegExpExecArray | null;
+  while ((match = blockRegex.exec(source)) !== null) {
+    const full = match[0];
+    if (/^<h[23]\b/i.test(full)) {
+      const level = Number(match[2]);
+      const textAlign = extractAttr(match[3] || '', 'data-text-align') || null;
+      const inlineNodes = parseInlineHtmlToProseMirrorNodes(match[4] || '');
+      content.push({
+        type: 'heading',
+        attrs: textAlign ? { level, textAlign } : { level },
+        ...(inlineNodes.length > 0 ? { content: inlineNodes } : {}),
+      });
+    } else if (/^<pre\b/i.test(full)) {
+      const rawCode = decodeHtmlEntities(match[5] || '');
+      content.push({
+        type: 'codeBlock',
+        ...(rawCode ? { content: [{ type: 'text', text: rawCode }] } : {}),
+      });
+    } else if (/^<figure\b/i.test(full)) {
+      const figAttrs = match[6] || '';
+      const figInner = match[7] || '';
+      const imgMatch = /<img\b([^>]*)\/?>/i.exec(figInner);
+      const capMatch = /<figcaption\b[^>]*>([\s\S]*?)<\/figcaption>/i.exec(figInner);
+      const imgAttrs = imgMatch ? imgMatch[1] : '';
+      content.push({
+        type: 'scientificFigure',
+        attrs: {
+          mediaId: extractAttr(figAttrs, 'data-media-id'),
+          layout: extractAttr(figAttrs, 'data-figure-layout') || 'locked',
+          credit: extractAttr(figAttrs, 'data-figure-credit'),
+          licence: extractAttr(figAttrs, 'data-figure-licence'),
+          sourceUrl: extractAttr(figAttrs, 'data-figure-source-url'),
+          src: extractAttr(imgAttrs, 'src'),
+          alt: extractAttr(imgAttrs, 'alt'),
+          caption: capMatch ? stripTagsAndDecode(capMatch[1]) : '',
+        },
+      });
+    } else if (/^<div\b[^>]*\bdata-math-tex\b/i.test(full)) {
+      const divAttrs = match[8] || '';
+      content.push({
+        type: 'scientificMathBlock',
+        attrs: {
+          tex: extractAttr(divAttrs, 'data-math-tex').trim(),
+        },
+      });
+    } else if (/^<table\b/i.test(full)) {
+      const tableInner = match[9] || '';
+      const tableChildren: Array<Record<string, unknown>> = [];
+      const capMatch = /<caption\b[^>]*>([\s\S]*?)<\/caption>/i.exec(tableInner);
+      if (capMatch) {
+        const capInline = parseInlineHtmlToProseMirrorNodes(capMatch[1]);
+        tableChildren.push({
+          type: 'tableCaption',
+          ...(capInline.length > 0 ? { content: capInline } : {}),
+        });
+      }
+      const rowRegex = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+      let rowMatch: RegExpExecArray | null;
+      while ((rowMatch = rowRegex.exec(tableInner)) !== null) {
+        const rowCells: Array<Record<string, unknown>> = [];
+        const cellRegex = /<(th|td)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+        let cellMatch: RegExpExecArray | null;
+        while ((cellMatch = cellRegex.exec(rowMatch[1])) !== null) {
+          const isHeader = cellMatch[1].toLowerCase() === 'th';
+          const cellInline = parseInlineHtmlToProseMirrorNodes(cellMatch[2]);
+          rowCells.push({
+            type: isHeader ? 'tableHeader' : 'tableCell',
+            content: [
+              {
+                type: 'paragraph',
+                ...(cellInline.length > 0 ? { content: cellInline } : {}),
+              },
+            ],
+          });
+        }
+        if (rowCells.length > 0) {
+          tableChildren.push({
+            type: 'tableRow',
+            content: rowCells,
+          });
+        }
+      }
+      if (tableChildren.length > 0) {
+        content.push({
+          type: 'table',
+          content: tableChildren,
+        });
+      }
+    } else if (/^<blockquote\b/i.test(full)) {
+      const inner = match[10] || '';
+      const inlineNodes = parseInlineHtmlToProseMirrorNodes(inner);
+      content.push({
+        type: 'blockquote',
+        content: [
+          {
+            type: 'paragraph',
+            ...(inlineNodes.length > 0 ? { content: inlineNodes } : {}),
+          },
+        ],
+      });
+    } else if (/^<(ul|ol)\b/i.test(full)) {
+      const isOrdered = /^<ol\b/i.test(full);
+      const listInner = (isOrdered ? match[12] : match[11]) || '';
+      const items: Array<Record<string, unknown>> = [];
+      const liRegex = /<li\b[^>]*>([\s\S]*?)<\/li>/gi;
+      let liMatch: RegExpExecArray | null;
+      while ((liMatch = liRegex.exec(listInner)) !== null) {
+        const liInline = parseInlineHtmlToProseMirrorNodes(liMatch[1]);
+        items.push({
+          type: 'listItem',
+          content: [
+            {
+              type: 'paragraph',
+              ...(liInline.length > 0 ? { content: liInline } : {}),
+            },
+          ],
+        });
+      }
+      if (items.length > 0) {
+        content.push({
+          type: isOrdered ? 'orderedList' : 'bulletList',
+          content: items,
+        });
+      }
+    } else if (/^<hr\b/i.test(full)) {
+      content.push({ type: 'horizontalRule' });
+    } else if (/^<p\b/i.test(full)) {
+      const pAttrs = match[13] || '';
+      const pInner = match[14] || '';
+      const textAlign = extractAttr(pAttrs, 'data-text-align') || null;
+      const inlineNodes = parseInlineHtmlToProseMirrorNodes(pInner);
+      content.push({
+        type: 'paragraph',
+        ...(textAlign ? { attrs: { textAlign } } : {}),
+        ...(inlineNodes.length > 0 ? { content: inlineNodes } : {}),
+      });
+    }
+  }
+
+  if (content.length === 0) {
+    const fallbackInline = parseInlineHtmlToProseMirrorNodes(source);
+    content.push({
+      type: 'paragraph',
+      ...(fallbackInline.length > 0 ? { content: fallbackInline } : {}),
+    });
+  }
+
+  return {
+    type: 'doc',
+    content,
+  };
+}
+
+/**
+ * Synchronizes an article's `body` JSON and `bodyHtml` so that at commit time both
+ * representations express the exact same scientific semantics.
+ */
+export function synchronizeArticleBodyRepresentations(
+  bodyJson: Record<string, unknown> | undefined,
+  sanitizedBodyHtml: string
+): {
+  body: Record<string, unknown>;
+  bodyHtml: string;
+  authoritativeSource: 'aligned' | 'html_authoritative';
+} {
+  if (areBodyJsonAndHtmlSemanticallyAligned(bodyJson, sanitizedBodyHtml) && bodyJson) {
+    return {
+      body: bodyJson,
+      bodyHtml: sanitizedBodyHtml,
+      authoritativeSource: 'aligned',
+    };
+  }
+  return {
+    body: deriveCanonicalBodyJsonFromHtml(sanitizedBodyHtml),
+    bodyHtml: sanitizedBodyHtml,
+    authoritativeSource: 'html_authoritative',
+  };
+}
+
+

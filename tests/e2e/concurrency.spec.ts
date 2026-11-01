@@ -66,19 +66,30 @@ async function readPersistedArticle(page: import('@playwright/test').Page) {
 
 async function readPersistedSnapshot(page: import('@playwright/test').Page) {
   return page.evaluate(async () => {
-    const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('scientificradar-studio-p0-db');
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    const snapshot = await new Promise<{ articles: Array<{ id: string; title: string; slug: string; version: number }>; revisions: Array<{ id: string; articleId: string; version: number; source: string }> }>((resolve, reject) => {
-      const tx = db.transaction('studio_state', 'readonly');
-      const request = tx.objectStore('studio_state').get('root_snapshot_v1');
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    db.close();
-    return snapshot;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('scientificradar-studio-p0-db');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      if (!db.objectStoreNames.contains('studio_state')) {
+        db.close();
+        await new Promise((r) => setTimeout(r, 50));
+        continue;
+      }
+      const snapshot = await new Promise<{ articles: Array<{ id: string; title: string; slug: string; version: number }>; revisions: Array<{ id: string; articleId: string; version: number; source: string }> } | undefined>((resolve, reject) => {
+        const tx = db.transaction('studio_state', 'readonly');
+        const request = tx.objectStore('studio_state').get('root_snapshot_v1');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      db.close();
+      if (snapshot && Array.isArray(snapshot.articles)) {
+        return snapshot;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error('Timed out waiting for studio_state root_snapshot_v1 in IndexedDB');
   });
 }
 

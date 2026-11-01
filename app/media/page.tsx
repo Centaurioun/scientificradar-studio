@@ -34,7 +34,7 @@ export default function MediaLibraryPage() {
   const selectedAsset: MediaAsset | undefined = media.find((m) => m.id === selectedAssetId) || media[0];
   const selectedPolicy = selectedAsset ? getMediaDisplayPolicy(selectedAsset) : null;
 
-  const handleCreateDemoAsset = (e: React.FormEvent) => {
+  const handleCreateDemoAsset = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim()) return;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420" width="800" height="420"><rect width="800" height="420" fill="#0f172a"/><polyline fill="none" stroke="#14b8a6" stroke-width="3" points="80,320 200,260 320,180 440,210 560,120 700,90"/><text x="80" y="60" fill="#f8fafc" font-family="monospace" font-size="15" font-weight="bold">${newTitle
@@ -51,6 +51,11 @@ export default function MediaLibraryPage() {
       credit: newCredit.trim(),
       licence: newLicence.trim(),
     });
+    const receipt = await created.committed;
+    if (!receipt.ok) {
+      setUploadError(receipt.error || 'Storage transaction failed; media asset was not saved.');
+      return;
+    }
     setSelectedAssetId(created.id);
     setNewTitle('');
     setNewFilename('');
@@ -146,7 +151,7 @@ export default function MediaLibraryPage() {
         return;
       }
       const probe = new window.Image();
-      probe.onload = () => {
+      probe.onload = async () => {
         if (!probe.naturalWidth || !probe.naturalHeight) {
           setUploadError('Corrupt or undecodable image file rejected (zero dimensions).');
           return;
@@ -164,6 +169,11 @@ export default function MediaLibraryPage() {
           credit: '',
           licence: '',
         });
+        const receipt = await created.committed;
+        if (!receipt.ok) {
+          setUploadError(receipt.error || 'Storage transaction failed; media file was not saved.');
+          return;
+        }
         setSelectedAssetId(created.id);
       };
       probe.onerror = () => {

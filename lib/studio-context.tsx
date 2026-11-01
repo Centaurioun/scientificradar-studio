@@ -56,11 +56,39 @@ import {
   DEFAULT_ADMIN_DATETIME_PREFS,
 } from './datetime/format';
 import { AuditReport, FixProposal } from './audit/types';
-import { computeArticleFingerprint, runArticleAudit } from './audit/run-article-audit';
+import {
+  computeArticleFingerprint,
+  getArticleLinkedMediaAndSources,
+  runArticleAudit,
+} from './audit/run-article-audit';
 import { evaluatePublishGate } from './audit/publish-policy';
 import { validateAndSanitizeSnapshot } from './backup-validation';
 import { trustedMediaSourceSet } from './html-security';
+import { synchronizeArticleBodyRepresentations } from './html-source';
 import { commitSnapshotMutation, createEntityWriteIntent } from './studio-persistence';
+
+export type DurableEntityReceipt<T = undefined> = Promise<{
+  ok: boolean;
+  entity?: T;
+  storageRevision?: number;
+  error?: string;
+}>;
+
+export type EntityWithDurableReceipt<T> = T & {
+  committed: DurableEntityReceipt<T>;
+};
+
+function attachDurableReceipt<T extends object>(
+  entity: T,
+  receiptPromise: DurableEntityReceipt<T>
+): EntityWithDurableReceipt<T> {
+  Object.defineProperty(entity, 'committed', {
+    value: receiptPromise,
+    enumerable: false,
+    configurable: true,
+  });
+  return entity as EntityWithDurableReceipt<T>;
+}
 
 const DB_NAME = 'scientificradar-studio-p0-db';
 const DB_VERSION = 1;
@@ -190,26 +218,26 @@ interface StudioContextValue extends StudioDatabaseSnapshot {
   applyQuickFixProposal: (proposal: FixProposal) => Promise<{ ok: boolean; error?: string; updatedArticle?: Article }>;
   // Pages CRUD
   savePage: (pageInput: Partial<EditorialPage> & { id?: string; title: string }) => Promise<EditorialPage>;
-  deletePage: (pageId: string) => void;
+  deletePage: (pageId: string) => DurableEntityReceipt;
   // Categories, Tags, Series, Authors
-  addCategory: (cat: Omit<Category, 'id' | 'slug'> & { slug?: string }) => Category;
-  deleteCategory: (id: string) => void;
-  addTag: (name: string, aliases?: string[]) => Tag;
-  deleteTag: (id: string) => void;
-  saveSeries: (seriesInput: Partial<Series> & { title: string }) => Series;
-  saveAuthor: (authorInput: Partial<AuthorProfile> & { displayName: string }) => AuthorProfile;
+  addCategory: (cat: Omit<Category, 'id' | 'slug'> & { slug?: string }) => EntityWithDurableReceipt<Category>;
+  deleteCategory: (id: string) => DurableEntityReceipt;
+  addTag: (name: string, aliases?: string[]) => EntityWithDurableReceipt<Tag>;
+  deleteTag: (id: string) => DurableEntityReceipt;
+  saveSeries: (seriesInput: Partial<Series> & { title: string }) => EntityWithDurableReceipt<Series>;
+  saveAuthor: (authorInput: Partial<AuthorProfile> & { displayName: string }) => EntityWithDurableReceipt<AuthorProfile>;
   // Sources & Knowledge Links
-  saveSource: (sourceInput: Partial<ScientificSource> & { title: string; url: string }) => ScientificSource;
-  updateSource: (sourceId: string, patch: Partial<ScientificSource>) => void;
-  deleteSource: (sourceId: string) => void;
-  saveKnowledgeLink: (klInput: Partial<KnowledgeLink> & { term: string; targetUrl: string }) => KnowledgeLink;
+  saveSource: (sourceInput: Partial<ScientificSource> & { title: string; url: string }) => EntityWithDurableReceipt<ScientificSource>;
+  updateSource: (sourceId: string, patch: Partial<ScientificSource>) => DurableEntityReceipt;
+  deleteSource: (sourceId: string) => DurableEntityReceipt;
+  saveKnowledgeLink: (klInput: Partial<KnowledgeLink> & { term: string; targetUrl: string }) => EntityWithDurableReceipt<KnowledgeLink>;
   // Media Library
-  addMediaAsset: (assetInput: Partial<MediaAsset> & { filename: string; title: string; src: string }) => MediaAsset;
-  updateMediaAsset: (id: string, patch: Partial<MediaAsset>) => void;
-  deleteMediaAsset: (id: string) => void;
+  addMediaAsset: (assetInput: Partial<MediaAsset> & { filename: string; title: string; src: string }) => EntityWithDurableReceipt<MediaAsset>;
+  updateMediaAsset: (id: string, patch: Partial<MediaAsset>) => DurableEntityReceipt;
+  deleteMediaAsset: (id: string) => DurableEntityReceipt;
   // Homepage & Menus
-  updateHomepageBlocks: (blocks: HomepageBlock[]) => void;
-  updateMenus: (menus: MenuConfig[]) => void;
+  updateHomepageBlocks: (blocks: HomepageBlock[]) => DurableEntityReceipt;
+  updateMenus: (menus: MenuConfig[]) => DurableEntityReceipt;
   // Backup / Reset
   exportSnapshotJson: () => string;
   importSnapshotJson: (rawJson: string) => Promise<{ ok: boolean; error?: string }>;
@@ -322,14 +350,18 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   );
 
   const updateState = useCallback(
-    (updater: (prev: StudioDatabaseSnapshot) => StudioDatabaseSnapshot) => {
+    (
+      updater: (prev: StudioDatabaseSnapshot) => StudioDatabaseSnapshot,
+      options?: { optimistic?: boolean }
+    ): Promise<boolean> => {
       if (simulateSaveFailure) {
         return Promise.resolve(false);
       }
-      // React updater functions must stay pure and use pre-generated EntityWriteIntent IDs/timestamps.
-      const optimistic = updater(stateRef.current);
-      stateRef.current = optimistic;
-      setState(optimistic);
+      if (options?.optimistic) {
+        const optimistic = updater(stateRef.current);
+        stateRef.current = optimistic;
+        setState(optimistic);
+      }
       const queued = mutationTailRef.current
         .then(async () => {
           if (simulateSaveFailure) {
@@ -601,6 +633,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const nextVersion = existing ? existing.version + 1 : 1;
 
       const normalizedTags = normalizeArticleTagIds(articleInput.tagIds ?? existing?.tagIds ?? []);
+      const syncedBody = synchronizeArticleBodyRepresentations(
+        articleInput.body ?? existing?.body ?? { type: 'doc', content: [] },
+        sanitized.sanitizedHtml
+      );
 
       const updatedArticle: Article = {
         id: existing?.id || articleInput.id || options?.intent?.id || `art-${Date.now()}`,
@@ -608,8 +644,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         title: articleInput.title.trim() || 'Untitled Scientific Article',
         slug: uniqueSlug,
         summary: articleInput.summary ?? existing?.summary ?? '',
-        body: articleInput.body ?? existing?.body ?? { type: 'doc', content: [] },
-        bodyHtml: sanitized.sanitizedHtml,
+        body: syncedBody.body,
+        bodyHtml: syncedBody.bodyHtml,
         status: articleInput.status ?? existing?.status ?? 'draft',
         primaryCategoryId: articleInput.primaryCategoryId ?? existing?.primaryCategoryId ?? 'cat-physics',
         categoryIds: articleInput.categoryIds ?? existing?.categoryIds ?? ['cat-physics'],
@@ -982,8 +1018,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           if (!article) {
             return { snapshot: prev, result: { error: 'Article not found' } };
           }
-          const articleMedia = prev.media.filter((m) => m.id === article.featuredMediaId);
-          const articleSources = prev.sources.filter((s) => article.sourceIds.includes(s.id));
+          const { articleMedia, articleSources } = getArticleLinkedMediaAndSources(
+            article,
+            prev.media,
+            prev.sources
+          );
           const currentFp = computeArticleFingerprint(article, articleMedia, articleSources);
           if (proposal.baseFingerprint && proposal.baseFingerprint !== currentFp) {
             return { snapshot: prev, result: { error: 'Article changed since this Quick Fix was generated. Re-run SEO Audit first.' } };
@@ -991,6 +1030,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
           const now = intent.timestamp;
           const nextVersion = article.version + 1;
+          let nextMedia = prev.media;
           const nextArticle: Article = {
             ...article,
             seo: { ...article.seo },
@@ -1009,7 +1049,16 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           } else if (proposal.targetPath === 'slug') {
             nextArticle.slug = ensureUniqueSlug(proposal.after, nextArticle.locale, prev.articles, nextArticle.id);
           } else if (proposal.targetPath === 'bodyHtml') {
-            nextArticle.bodyHtml = sanitizeAndDemoteBodyH1(proposal.after).sanitizedHtml;
+            const sanitizedHtml = sanitizeAndDemoteBodyH1(
+              proposal.after,
+              trustedMediaSourceSet(prev.media.map((m) => m.src))
+            ).sanitizedHtml;
+            const synced = synchronizeArticleBodyRepresentations(
+              nextArticle.body,
+              sanitizedHtml
+            );
+            nextArticle.body = synced.body;
+            nextArticle.bodyHtml = synced.bodyHtml;
           } else if (proposal.targetPath === 'categoryIds') {
             const validSubIds = new Set(
               prev.categories.filter((c) => c.parentId === nextArticle.primaryCategoryId).map((c) => c.id)
@@ -1021,7 +1070,17 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
               ])
             );
           } else if (proposal.targetPath === 'tagIds') {
-            nextArticle.tagIds = normalizeArticleTagIds(nextArticle.tagIds).normalizedIds;
+            const candidateIds = proposal.after
+              ? proposal.after
+                  .split(',')
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+              : nextArticle.tagIds;
+            nextArticle.tagIds = normalizeArticleTagIds(candidateIds).normalizedIds;
+          } else if (proposal.targetPath === 'media.altText' && nextArticle.featuredMediaId) {
+            nextMedia = prev.media.map((m) =>
+              m.id === nextArticle.featuredMediaId ? { ...m, altText: proposal.after } : m
+            );
           }
 
           const rev: ArticleRevision = {
@@ -1041,7 +1100,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             categories: prev.categories,
             tags: prev.tags,
             sources: prev.sources,
-            media: prev.media,
+            media: nextMedia,
             knowledgeLinks: prev.knowledgeLinks,
             integrations: prev.integrations,
             executedAt: now,
@@ -1051,6 +1110,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             snapshot: {
               ...prev,
               articles: nextArticles,
+              media: nextMedia,
               revisions: [rev, ...prev.revisions],
               auditReportsByArticleId: {
                 ...(prev.auditReportsByArticleId || {}),
@@ -1340,13 +1400,19 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
               return { snapshot: latest, result: { error: `Version conflict: stored article is v${current.version}; restore was based on v${expectedVersion}.` } };
             }
             const nextVersion = current.version + 1;
+            const sanitizedRestoredHtml = sanitizeAndDemoteBodyH1(
+              rev.snapshot.bodyHtml,
+              trustedMediaSourceSet(latest.media.map((media) => media.src))
+            ).sanitizedHtml;
+            const syncedRestored = synchronizeArticleBodyRepresentations(
+              rev.snapshot.body,
+              sanitizedRestoredHtml
+            );
             const restoredArticle: Article = {
               ...rev.snapshot,
               id: current.id,
-              bodyHtml: sanitizeAndDemoteBodyH1(
-                rev.snapshot.bodyHtml,
-                trustedMediaSourceSet(latest.media.map((media) => media.src))
-              ).sanitizedHtml,
+              body: syncedRestored.body,
+              bodyHtml: syncedRestored.bodyHtml,
               version: nextVersion,
               updatedAt: intent.timestamp,
             };
@@ -1475,12 +1541,18 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
           const now = intent.timestamp;
           const nextVersion = article.version + 1;
+          const sanitizedAssistantHtml = sanitizeAndDemoteBodyH1(
+            nextArticle.bodyHtml,
+            trustedMediaSourceSet(nextMedia.map((media) => media.src))
+          ).sanitizedHtml;
+          const syncedAssistant = synchronizeArticleBodyRepresentations(
+            nextArticle.body,
+            sanitizedAssistantHtml
+          );
           nextArticle = {
             ...nextArticle,
-            bodyHtml: sanitizeAndDemoteBodyH1(
-              nextArticle.bodyHtml,
-              trustedMediaSourceSet(nextMedia.map((media) => media.src))
-            ).sanitizedHtml,
+            body: syncedAssistant.body,
+            bodyHtml: syncedAssistant.bodyHtml,
             version: nextVersion,
             updatedAt: now,
           };
@@ -1598,9 +1670,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   );
 
   const deletePage = useCallback(
-    (pageId: string) => {
+    (pageId: string): DurableEntityReceipt => {
       const intent = createEntityWriteIntent('page', pageId);
-      updateState((prev) => {
+      return updateState((prev) => {
         const target = prev.pages.find((p) => p.id === pageId);
         if (!target) return prev;
         return {
@@ -1608,16 +1680,21 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           pages: prev.pages.filter((p) => p.id !== pageId),
           auditEvents: appendAudit(prev, 'Deleted page', 'page', target.title, `Removed /${target.slug}`, intent),
         };
-      });
+      }).then((ok) => ({
+        ok,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; page deletion was not persisted.',
+      }));
     },
     [updateState, appendAudit]
   );
 
   const addCategory = useCallback(
-    (catInput: Omit<Category, 'id' | 'slug'> & { slug?: string }): Category => {
+    (catInput: Omit<Category, 'id' | 'slug'> & { slug?: string }): EntityWithDurableReceipt<Category> => {
       const intent = createEntityWriteIntent('cat');
       const baseSlug = slugify(catInput.slug || catInput.name) || 'category';
-      let created: Category = {
+      const existingInitial = stateRef.current.categories.find((c) => c.slug === baseSlug);
+      let created: Category = existingInitial || {
         id: intent.id,
         name: catInput.name.trim(),
         slug: baseSlug,
@@ -1625,7 +1702,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         description: catInput.description || '',
         locale: catInput.locale || 'en',
       };
-      updateState((prev) => {
+      const receipt = updateState((prev) => {
         const existing = prev.categories.find((c) => c.slug === baseSlug);
         if (existing) {
           created = existing;
@@ -1643,33 +1720,45 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             intent
           ),
         };
-      });
-      return created;
+      }).then((ok) => ({
+        ok,
+        entity: ok ? created : undefined,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; category was not saved.',
+      }));
+      return attachDurableReceipt(created, receipt);
     },
     [updateState, appendAudit]
   );
 
   const deleteCategory = useCallback(
-    (id: string) => {
-      updateState((prev) => ({
+    (id: string): DurableEntityReceipt => {
+      return updateState((prev) => ({
         ...prev,
         categories: prev.categories.filter((c) => c.id !== id && c.parentId !== id),
+      })).then((ok) => ({
+        ok,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; category was not deleted.',
       }));
     },
     [updateState]
   );
 
   const addTag = useCallback(
-    (name: string, aliases?: string[]): Tag => {
+    (name: string, aliases?: string[]): EntityWithDurableReceipt<Tag> => {
       const intent = createEntityWriteIntent('tag');
       const cleaned = name.trim();
-      let resultTag: Tag = {
+      const existingInitial = stateRef.current.tags.find(
+        (t) => t.name.toLowerCase() === cleaned.toLowerCase()
+      );
+      let resultTag: Tag = existingInitial || {
         id: intent.id,
         name: cleaned,
         slug: slugify(cleaned),
         aliases: aliases || [],
       };
-      updateState((prev) => {
+      const receipt = updateState((prev) => {
         const existing = prev.tags.find((t) => t.name.toLowerCase() === cleaned.toLowerCase());
         if (existing) {
           resultTag = existing;
@@ -1687,27 +1776,47 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             intent
           ),
         };
-      });
-      return resultTag;
+      }).then((ok) => ({
+        ok,
+        entity: ok ? resultTag : undefined,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; tag was not saved.',
+      }));
+      return attachDurableReceipt(resultTag, receipt);
     },
     [updateState, appendAudit]
   );
 
   const deleteTag = useCallback(
-    (id: string) => {
-      updateState((prev) => ({
+    (id: string): DurableEntityReceipt => {
+      return updateState((prev) => ({
         ...prev,
         tags: prev.tags.filter((t) => t.id !== id),
+      })).then((ok) => ({
+        ok,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; tag was not deleted.',
       }));
     },
     [updateState]
   );
 
   const saveSeries = useCallback(
-    (seriesInput: Partial<Series> & { title: string }): Series => {
+    (seriesInput: Partial<Series> & { title: string }): EntityWithDurableReceipt<Series> => {
       const intent = createEntityWriteIntent('ser', seriesInput.id);
-      let saved!: Series;
-      updateState((prev) => {
+      const existingInitial = seriesInput.id
+        ? stateRef.current.series.find((s) => s.id === seriesInput.id)
+        : undefined;
+      let saved: Series = {
+        id: existingInitial?.id || intent.id,
+        title: seriesInput.title.trim(),
+        slug: slugify(seriesInput.slug || seriesInput.title),
+        description: seriesInput.description ?? existingInitial?.description ?? '',
+        locale: seriesInput.locale ?? existingInitial?.locale ?? 'en',
+        articleIds: seriesInput.articleIds ?? existingInitial?.articleIds ?? [],
+        updatedAt: intent.timestamp,
+      };
+      const receipt = updateState((prev) => {
         const existing = seriesInput.id ? prev.series.find((s) => s.id === seriesInput.id) : undefined;
         const item: Series = {
           id: existing?.id || intent.id,
@@ -1725,17 +1834,35 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             ? prev.series.map((s) => (s.id === existing.id ? item : s))
             : [item, ...prev.series],
         };
-      });
-      return saved;
+      }).then((ok) => ({
+        ok,
+        entity: ok ? saved : undefined,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; series was not saved.',
+      }));
+      return attachDurableReceipt(saved, receipt);
     },
     [updateState]
   );
 
   const saveAuthor = useCallback(
-    (authorInput: Partial<AuthorProfile> & { displayName: string }): AuthorProfile => {
+    (authorInput: Partial<AuthorProfile> & { displayName: string }): EntityWithDurableReceipt<AuthorProfile> => {
       const intent = createEntityWriteIntent('auth', authorInput.id);
-      let saved!: AuthorProfile;
-      updateState((prev) => {
+      const existingInitial = authorInput.id
+        ? stateRef.current.authors.find((a) => a.id === authorInput.id)
+        : undefined;
+      let saved: AuthorProfile = {
+        id: existingInitial?.id || intent.id,
+        displayName: authorInput.displayName.trim(),
+        slug: slugify(authorInput.slug || authorInput.displayName),
+        biography: authorInput.biography ?? existingInitial?.biography ?? '',
+        expertise: authorInput.expertise ?? existingInitial?.expertise ?? [],
+        affiliation: authorInput.affiliation ?? existingInitial?.affiliation ?? '',
+        orcid: authorInput.orcid ?? existingInitial?.orcid ?? '',
+        locale: authorInput.locale ?? existingInitial?.locale ?? 'en',
+        role: authorInput.role ?? existingInitial?.role ?? 'author',
+      };
+      const receipt = updateState((prev) => {
         const existing = authorInput.id ? prev.authors.find((a) => a.id === authorInput.id) : undefined;
         const item: AuthorProfile = {
           id: existing?.id || intent.id,
@@ -1755,17 +1882,40 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             ? prev.authors.map((a) => (a.id === existing.id ? item : a))
             : [...prev.authors, item],
         };
-      });
-      return saved;
+      }).then((ok) => ({
+        ok,
+        entity: ok ? saved : undefined,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; author profile was not saved.',
+      }));
+      return attachDurableReceipt(saved, receipt);
     },
     [updateState]
   );
 
   const saveSource = useCallback(
-    (sourceInput: Partial<ScientificSource> & { title: string; url: string }): ScientificSource => {
+    (sourceInput: Partial<ScientificSource> & { title: string; url: string }): EntityWithDurableReceipt<ScientificSource> => {
       const intent = createEntityWriteIntent('src', sourceInput.id);
-      let saved!: ScientificSource;
-      updateState((prev) => {
+      const existingInitial = sourceInput.id
+        ? stateRef.current.sources.find((s) => s.id === sourceInput.id)
+        : undefined;
+      let saved: ScientificSource = {
+        id: existingInitial?.id || intent.id,
+        articleId: sourceInput.articleId ?? existingInitial?.articleId,
+        title: sourceInput.title.trim(),
+        authors: sourceInput.authors ?? existingInitial?.authors ?? 'Unknown Authors',
+        journal: sourceInput.journal ?? existingInitial?.journal ?? 'Preprint / Journal',
+        year: sourceInput.year ?? existingInitial?.year ?? 2026,
+        doi: sourceInput.doi ?? existingInitial?.doi ?? '',
+        url: sourceInput.url.trim(),
+        sourceType: sourceInput.sourceType ?? existingInitial?.sourceType ?? 'peer_reviewed',
+        accessDate: sourceInput.accessDate ?? existingInitial?.accessDate ?? intent.timestamp.slice(0, 10),
+        verificationStatus: sourceInput.verificationStatus ?? existingInitial?.verificationStatus ?? 'unverified',
+        notes: sourceInput.notes ?? existingInitial?.notes ?? 'External verification not run (Offline P0 demo)',
+        linkedClaim: sourceInput.linkedClaim ?? existingInitial?.linkedClaim ?? '',
+        humanClaimVerified: sourceInput.humanClaimVerified ?? existingInitial?.humanClaimVerified ?? false,
+      };
+      const receipt = updateState((prev) => {
         const existing = sourceInput.id ? prev.sources.find((s) => s.id === sourceInput.id) : undefined;
         const item: ScientificSource = {
           id: existing?.id || intent.id,
@@ -1790,30 +1940,40 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             ? prev.sources.map((s) => (s.id === existing.id ? item : s))
             : [item, ...prev.sources],
         };
-      });
-      return saved;
+      }).then((ok) => ({
+        ok,
+        entity: ok ? saved : undefined,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; scientific source was not saved.',
+      }));
+      return attachDurableReceipt(saved, receipt);
     },
     [updateState]
   );
 
   const updateSource = useCallback(
-    (sourceId: string, patch: Partial<ScientificSource>) => {
-      updateState((prev) => ({
-        ...prev,
-        sources: prev.sources.map((s) => (s.id === sourceId ? { ...s, ...patch } : s)),
+    (sourceId: string, patch: Partial<ScientificSource>): DurableEntityReceipt => {
+      return updateState(
+        (prev) => ({
+          ...prev,
+          sources: prev.sources.map((s) => (s.id === sourceId ? { ...s, ...patch } : s)),
+        }),
+        { optimistic: true }
+      ).then((ok) => ({
+        ok,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; source update was not saved.',
       }));
     },
     [updateState]
   );
 
   const deleteSource = useCallback(
-    (sourceId: string) => {
+    (sourceId: string): DurableEntityReceipt => {
       const intent = createEntityWriteIntent('src-del', sourceId);
-      updateState((prev) => {
-        const nextAuditReports = { ...(prev.auditReportsByArticleId || {}) };
+      return updateState((prev) => {
         const nextArticles = prev.articles.map((a) => {
           if (!a.sourceIds.includes(sourceId)) return a;
-          delete nextAuditReports[a.id];
           return {
             ...a,
             sourceIds: a.sourceIds.filter((id) => id !== sourceId),
@@ -1825,21 +1985,45 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           ...prev,
           sources: prev.sources.filter((s) => s.id !== sourceId),
           articles: nextArticles,
-          auditReportsByArticleId: nextAuditReports,
         };
-      });
+      }).then((ok) => ({
+        ok,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; source deletion was not saved.',
+      }));
     },
     [updateState]
   );
 
   const saveKnowledgeLink = useCallback(
-    (klInput: Partial<KnowledgeLink> & { term: string; targetUrl: string }): KnowledgeLink => {
+    (klInput: Partial<KnowledgeLink> & { term: string; targetUrl: string }): EntityWithDurableReceipt<KnowledgeLink> => {
       if (!validateSafeUrl(klInput.targetUrl).valid) {
         throw new Error('Knowledge link target must be an HTTP(S) URL or same-application path');
       }
       const intent = createEntityWriteIntent('kl', klInput.id);
-      let saved!: KnowledgeLink;
-      updateState((prev) => {
+      const existingInitial = klInput.id
+        ? stateRef.current.knowledgeLinks.find((k) => k.id === klInput.id)
+        : undefined;
+      let saved: KnowledgeLink = {
+        id: existingInitial?.id || intent.id,
+        term: klInput.term.trim(),
+        targetType: klInput.targetType ?? existingInitial?.targetType ?? 'wikipedia',
+        targetUrl: klInput.targetUrl.trim(),
+        targetArticleId: klInput.targetArticleId ?? existingInitial?.targetArticleId,
+        locale: klInput.locale ?? existingInitial?.locale ?? 'en',
+        previewTitle: klInput.previewTitle || klInput.term.trim(),
+        previewExcerpt:
+          klInput.previewExcerpt ||
+          'Educational concept summary stored in local P0 demo knowledge repository.',
+        sourceAttribution:
+          klInput.sourceAttribution ||
+          (klInput.targetType === 'internal'
+            ? 'ScientificRadar Internal Reference'
+            : 'Wikipedia · CC BY-SA 4.0 (Demo sample)'),
+        reviewStatus: klInput.reviewStatus ?? existingInitial?.reviewStatus ?? 'approved',
+        isSampleDemoData: true,
+      };
+      const receipt = updateState((prev) => {
         const existing = klInput.id ? prev.knowledgeLinks.find((k) => k.id === klInput.id) : undefined;
         const item: KnowledgeLink = {
           id: existing?.id || intent.id,
@@ -1867,14 +2051,19 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             ? prev.knowledgeLinks.map((k) => (k.id === existing.id ? item : k))
             : [item, ...prev.knowledgeLinks],
         };
-      });
-      return saved;
+      }).then((ok) => ({
+        ok,
+        entity: ok ? saved : undefined,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; knowledge link was not saved.',
+      }));
+      return attachDurableReceipt(saved, receipt);
     },
     [updateState]
   );
 
   const addMediaAsset = useCallback(
-    (assetInput: Partial<MediaAsset> & { filename: string; title: string; src: string }): MediaAsset => {
+    (assetInput: Partial<MediaAsset> & { filename: string; title: string; src: string }): EntityWithDurableReceipt<MediaAsset> => {
       const intent = createEntityWriteIntent('media', assetInput.id);
       const kind = assetInput.kind || 'scientific_figure';
       const isFigure =
@@ -1899,7 +2088,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         createdAt: intent.timestamp,
         humanReviewedAlt: assetInput.humanReviewedAlt ?? false,
       };
-      updateState((prev) => ({
+      const receipt = updateState((prev) => ({
         ...prev,
         media: [created, ...prev.media.filter((m) => m.id !== created.id)],
         auditEvents: appendAudit(
@@ -1910,36 +2099,52 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           `Kind: ${created.kind} · Layout: ${created.layout} (Cloudflare R2 not connected)`,
           intent
         ),
+      })).then((ok) => ({
+        ok,
+        entity: ok ? created : undefined,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; media asset was not saved.',
       }));
-      return created;
+      return attachDurableReceipt(created, receipt);
     },
     [updateState, appendAudit]
   );
 
   const updateMediaAsset = useCallback(
-    (id: string, patch: Partial<MediaAsset>) => {
-      updateState((prev) => ({
-        ...prev,
-        media: prev.media.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+    (id: string, patch: Partial<MediaAsset>): DurableEntityReceipt => {
+      return updateState(
+        (prev) => ({
+          ...prev,
+          media: prev.media.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+        }),
+        { optimistic: true }
+      ).then((ok) => ({
+        ok,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; media update was not saved.',
       }));
     },
     [updateState]
   );
 
   const deleteMediaAsset = useCallback(
-    (id: string) => {
-      updateState((prev) => ({
+    (id: string): DurableEntityReceipt => {
+      return updateState((prev) => ({
         ...prev,
         media: prev.media.filter((m) => m.id !== id),
+      })).then((ok) => ({
+        ok,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; media asset was not deleted.',
       }));
     },
     [updateState]
   );
 
   const updateHomepageBlocks = useCallback(
-    (homepageBlocks: HomepageBlock[]) => {
+    (homepageBlocks: HomepageBlock[]): DurableEntityReceipt => {
       const intent = createEntityWriteIntent('home');
-      updateState((prev) => ({
+      return updateState((prev) => ({
         ...prev,
         homepageBlocks,
         auditEvents: appendAudit(
@@ -1950,15 +2155,19 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           'Updated local homepage preview blocks (not live on scientificradar.com)',
           intent
         ),
+      })).then((ok) => ({
+        ok,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; homepage blocks were not saved.',
       }));
     },
     [updateState, appendAudit]
   );
 
   const updateMenus = useCallback(
-    (menus: MenuConfig[]) => {
+    (menus: MenuConfig[]): DurableEntityReceipt => {
       const intent = createEntityWriteIntent('menu');
-      updateState((prev) => ({
+      return updateState((prev) => ({
         ...prev,
         menus,
         auditEvents: appendAudit(
@@ -1969,6 +2178,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           'Updated primary/footer menu configuration in local demo store',
           intent
         ),
+      })).then((ok) => ({
+        ok,
+        storageRevision: committedStateRef.current.storageRevision,
+        error: ok ? undefined : 'Storage transaction failed; menus were not saved.',
       }));
     },
     [updateState, appendAudit]

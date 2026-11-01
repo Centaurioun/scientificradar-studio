@@ -26,7 +26,7 @@ export default function CategoriesAndTagsPage() {
 
   const topCategories = categories.filter((c) => !c.parentId);
 
-  const handleAddCategory = (e: React.FormEvent) => {
+  const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!catName.trim()) return;
     const created = addCategory({
@@ -35,12 +35,17 @@ export default function CategoriesAndTagsPage() {
       description: catDescription,
       locale: 'en',
     });
+    const receipt = await created.committed;
+    if (!receipt.ok) {
+      setNotice(receipt.error || 'Storage transaction failed; category was not saved.');
+      return;
+    }
     setCatName('');
     setCatDescription('');
     setNotice(`Added category "${created.name}" (/${created.slug}) — immediately available in Article Editor selectors.`);
   };
 
-  const handleAddTag = (e: React.FormEvent) => {
+  const handleAddTag = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tagName.trim()) return;
     const aliasList = tagAliases
@@ -48,6 +53,11 @@ export default function CategoriesAndTagsPage() {
       .map((s) => s.trim())
       .filter(Boolean);
     const created = addTag(tagName, aliasList);
+    const receipt = await created.committed;
+    if (!receipt.ok) {
+      setNotice(receipt.error || 'Storage transaction failed; tag was not saved.');
+      return;
+    }
     setTagName('');
     setTagAliases('');
     setNotice(`Saved normalized tag "${created.name}" (#${created.slug}).`);

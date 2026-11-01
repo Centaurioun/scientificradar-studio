@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  areBodyJsonAndHtmlSemanticallyAligned,
+  deriveCanonicalBodyJsonFromHtml,
+  extractScientificSemanticsFromHtml,
+  extractScientificSemanticsFromJson,
   formatEditorialHtmlSource,
+  synchronizeArticleBodyRepresentations,
   validateAndAnalyzeHtmlSource,
   validateAndRenderLatex,
 } from './html-source';
@@ -99,4 +104,38 @@ test('cleanClipboardPasteHtml normalizes Google Docs wrapper, vertical-align sup
   assert.match(cleaned.html, /10<sup>-6<\/sup>/);
   assert.doesNotMatch(cleaned.html, /style=|docs-internal-guid/i);
 });
+
+test('synchronizeArticleBodyRepresentations keeps body ProseMirror JSON aligned with bodyHtml across equations, figures, tables, code blocks, and citations (SRS-HTML-002)', () => {
+  const richHtml = [
+    '<h2>Experimental Results</h2>',
+    '<p>Inline equation <span data-math-tex="\\alpha_s(M_Z) = 0.1179" data-math-display="inline">α</span> and citation <sup data-citation-source-id="src-nature-qec">[1]</sup>.</p>',
+    '<div data-math-tex="\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}" data-math-display="block">∫</div>',
+    '<figure data-media-id="med-fig-qec" data-figure-layout="locked" data-figure-credit="Nature" data-figure-licence="CC BY 4.0"><img src="/figures/quantum-ldpc-lattice.svg" alt="Lattice" /><figcaption>Figure 1</figcaption></figure>',
+    '<table><caption>Table 1: Thresholds</caption><thead><tr><th>Code</th><th>Rate</th></tr></thead><tbody><tr><td>LDPC</td><td>1/12</td></tr></tbody></table>',
+    '<pre><code>const distance = 12;\nconsole.log(distance);</code></pre>',
+  ].join('\n');
+
+  const staleSeedJson = {
+    type: 'doc',
+    content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Old seed placeholder' }] }],
+  };
+
+  assert.equal(areBodyJsonAndHtmlSemanticallyAligned(staleSeedJson, richHtml), false);
+
+  const synced = synchronizeArticleBodyRepresentations(staleSeedJson, richHtml);
+  assert.equal(areBodyJsonAndHtmlSemanticallyAligned(synced.body, synced.bodyHtml), true);
+
+  const htmlSig = extractScientificSemanticsFromHtml(richHtml);
+  const jsonSig = extractScientificSemanticsFromJson(synced.body);
+  assert.deepEqual(jsonSig.mathExpressions, htmlSig.mathExpressions);
+  assert.deepEqual(jsonSig.citationSourceIds, ['src-nature-qec']);
+  assert.equal(jsonSig.figureAssets[0]?.mediaId, 'med-fig-qec');
+  assert.equal(jsonSig.tableCount, 1);
+  assert.equal(jsonSig.codeBlocks.length, 1);
+  assert.match(jsonSig.codeBlocks[0], /const distance = 12;\nconsole\.log\(distance\);/);
+
+  const derivedAgain = deriveCanonicalBodyJsonFromHtml(richHtml);
+  assert.equal(areBodyJsonAndHtmlSemanticallyAligned(derivedAgain, richHtml), true);
+});
+
 

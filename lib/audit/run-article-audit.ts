@@ -77,6 +77,37 @@ export function computeArticleFingerprint(
   return `fp-${(hash >>> 0).toString(16)}-${payload.length}`;
 }
 
+/**
+ * Extracts all media assets and scientific sources linked to an article
+ * either via explicit metadata arrays/IDs or via inline body HTML attributes.
+ */
+export function getArticleLinkedMediaAndSources(
+  article: Article,
+  media: MediaAsset[] = [],
+  sources: ScientificSource[] = []
+): { articleMedia: MediaAsset[]; articleSources: ScientificSource[] } {
+  const inlineMediaIds = new Set<string>();
+  const mediaIdRegex = /data-media-id=["']([^"']+)["']/gi;
+  let mMatch: RegExpExecArray | null;
+  while ((mMatch = mediaIdRegex.exec(article.bodyHtml || '')) !== null) {
+    if (mMatch[1]) inlineMediaIds.add(mMatch[1]);
+  }
+  if (article.featuredMediaId) {
+    inlineMediaIds.add(article.featuredMediaId);
+  }
+
+  const inlineSourceIds = new Set<string>(article.sourceIds || []);
+  const sourceIdRegex = /data-citation-source-id=["']([^"']+)["']/gi;
+  let sMatch: RegExpExecArray | null;
+  while ((sMatch = sourceIdRegex.exec(article.bodyHtml || '')) !== null) {
+    if (sMatch[1]) inlineSourceIds.add(sMatch[1]);
+  }
+
+  const articleMedia = media.filter((m) => inlineMediaIds.has(m.id));
+  const articleSources = sources.filter((s) => inlineSourceIds.has(s.id));
+  return { articleMedia, articleSources };
+}
+
 export interface RunArticleAuditParams {
   article: Article;
   allArticles: Article[];
@@ -116,8 +147,11 @@ export function runArticleAudit(params: RunArticleAuditParams): AuditReport {
     executedAt = article.updatedAt || '2026-10-31T00:00:00.000Z',
   } = params;
 
-  const articleMedia = media.filter((m) => m.id === article.featuredMediaId);
-  const articleSources = sources.filter((s) => article.sourceIds.includes(s.id));
+  const { articleMedia, articleSources } = getArticleLinkedMediaAndSources(
+    article,
+    media,
+    sources
+  );
   const fingerprint = computeArticleFingerprint(article, articleMedia, articleSources);
 
   const findings: RawAuditFinding[] = [];
@@ -1026,8 +1060,11 @@ export function buildQuickFixProposal(
   const media = isDirectArticle ? [] : paramsOrArticle.media || [];
   const sources = isDirectArticle ? [] : paramsOrArticle.sources || [];
 
-  const articleMedia = media.filter((m) => m.id === article.featuredMediaId);
-  const articleSources = sources.filter((s) => article.sourceIds.includes(s.id));
+  const { articleMedia, articleSources } = getArticleLinkedMediaAndSources(
+    article,
+    media,
+    sources
+  );
   const fingerprint = computeArticleFingerprint(article, articleMedia, articleSources);
 
   if (findingId === 'content.h1.single' || findingId === 'heading.body_no_h1') {

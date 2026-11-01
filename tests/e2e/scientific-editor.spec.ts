@@ -35,10 +35,10 @@ test('S-ED-1 — inserts a clean empty 3x3 table, keeps contextual table control
 
   // Add a semantic table caption
   await page.getByRole('button', { name: 'Table Caption' }).click();
-  const captionInput = page.getByPlaceholder('Table 1: Experimental parameters and uncertainty bounds...');
+  const captionInput = page.getByLabel('Table caption text');
   await expect(captionInput).toBeVisible();
   await captionInput.fill('Table 1: Cryogenic resonator quality factors');
-  await page.getByRole('button', { name: 'Save Caption' }).click();
+  await page.getByRole('button', { name: 'Apply Caption' }).click();
   await expect(table.locator('caption')).toContainText('Table 1: Cryogenic resonator quality factors');
 
   await expectNoFatalBrowserFailures(diagnostics);
@@ -165,3 +165,116 @@ test('S-MED-1 — rejects SVG/corrupt uploads in Media Library and defaults new 
 
   await expectNoFatalBrowserFailures(diagnostics);
 });
+
+test('S-BODY-SYNC-1 — synchronizes persisted article.body ProseMirror JSON with article.bodyHtml on visual edits, HTML Source Apply, and revision restore (P0-B / SRS-HTML-002)', async ({
+  page,
+  diagnostics,
+}) => {
+  await page.goto('/articles/art-quantum-repeater/edit');
+  await page.getByRole('button', { name: 'HTML Source' }).click();
+
+  const sourceBox = page.getByRole('textbox', { name: 'Manuscript Body HTML Source Editor' });
+  await expect(sourceBox).toBeVisible();
+  await sourceBox.fill(
+    '<h2>Synchronized Body JSON Section</h2><p>Equation <span data-math-tex="E = \\hbar \\omega" data-math-display="inline">E = ħω</span> and citation <sup data-citation-source-id="src-nature-qec">[1]</sup>.</p>'
+  );
+  await page.getByRole('button', { name: 'Apply HTML Source Changes' }).click();
+
+  await expect(page.getByTestId('editor-save-indicator')).toContainText(/Saved \(Local\)/i);
+
+  const persisted = await page.evaluate(async () => {
+    const dbReq = indexedDB.open('scientificradar-studio-p0-db');
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      dbReq.onsuccess = () => resolve(dbReq.result);
+      dbReq.onerror = () => reject(dbReq.error);
+    });
+    const tx = db.transaction('studio_state', 'readonly');
+    const store = tx.objectStore('studio_state');
+    const getReq = store.get('root_snapshot_v1');
+    const snapshot = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      getReq.onsuccess = () => resolve(getReq.result as Record<string, unknown>);
+      getReq.onerror = () => reject(getReq.error);
+    });
+    db.close();
+    const articles = (snapshot.articles || []) as Array<Record<string, unknown>>;
+    return articles.find((a) => a.id === 'art-quantum-repeater') || null;
+  });
+
+  expect(persisted).not.toBeNull();
+  const bodyJsonStr = JSON.stringify(persisted?.body || {});
+  expect(bodyJsonStr).toContain('Synchronized Body JSON Section');
+  expect(bodyJsonStr).toContain('scientificMathInline');
+  expect(bodyJsonStr).toContain('E = \\\\hbar \\\\omega');
+  expect(bodyJsonStr).toContain('scientificCitation');
+  expect(bodyJsonStr).toContain('src-nature-qec');
+
+  await expectNoFatalBrowserFailures(diagnostics);
+});
+
+test('S-DURABLE-ENTITY-1 — does not render or announce supporting taxonomy category as saved while IndexedDB write is held open, and commits cleanly upon release (P0-A / SRS-DATA-003)', async ({
+  page,
+  diagnostics,
+}) => {
+  await page.addInitScript(() => {
+    const originalPut = IDBObjectStore.prototype.put;
+    const win = window as typeof window & {
+      __holdStudioWrite?: boolean;
+      __releaseStudioWrite?: boolean;
+      __abortHeldStudioWrite?: boolean;
+    };
+    win.__holdStudioWrite = false;
+    win.__releaseStudioWrite = false;
+    win.__abortHeldStudioWrite = false;
+    IDBObjectStore.prototype.put = function (...args) {
+      const request = originalPut.apply(this, args);
+      if (win.__holdStudioWrite && this.name === 'studio_state' && args[1] === 'root_snapshot_v1') {
+        win.__holdStudioWrite = false;
+        const keepAlive = () => {
+          if (win.__releaseStudioWrite) {
+            if (win.__abortHeldStudioWrite) this.transaction.abort();
+            return;
+          }
+          const next = this.get('root_snapshot_v1');
+          next.onsuccess = keepAlive;
+        };
+        const next = this.get('root_snapshot_v1');
+        next.onsuccess = keepAlive;
+      }
+      return request;
+    };
+  });
+
+  await page.goto('/categories');
+  await expect(page.getByRole('heading', { name: /Scientific Taxonomy/i })).toBeVisible();
+
+  await page.evaluate(() => {
+    const win = window as typeof window & {
+      __holdStudioWrite?: boolean;
+      __releaseStudioWrite?: boolean;
+    };
+    win.__holdStudioWrite = true;
+    win.__releaseStudioWrite = false;
+  });
+
+  await page.getByLabel('Category Name *').fill('Cryogenic Metrology');
+  await page.getByRole('button', { name: 'Add Category' }).click();
+
+  // While the IndexedDB write transaction is held open, the category must NOT appear as a ghost row or success notice
+  await expect(page.getByRole('status')).toHaveCount(0);
+  await expect(page.getByText('/cryogenic-metrology')).toHaveCount(0);
+
+  // Release the held IndexedDB transaction and verify durable commit
+  await page.evaluate(() => {
+    const win = window as typeof window & { __releaseStudioWrite?: boolean };
+    win.__releaseStudioWrite = true;
+  });
+
+  await expect(page.getByRole('status')).toContainText('Added category "Cryogenic Metrology"');
+  await expect(page.getByText('/cryogenic-metrology').first()).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByText('/cryogenic-metrology').first()).toBeVisible();
+
+  await expectNoFatalBrowserFailures(diagnostics);
+});
+

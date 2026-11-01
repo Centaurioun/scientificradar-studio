@@ -90,7 +90,7 @@ export default function ArticleSeoAuditPage() {
   }
 
   const storedReport = auditReportsByArticleId?.[article.id];
-  const currentFp = computeArticleFingerprint(article);
+  const currentFp = liveReport.articleFingerprint;
   const isStoredReportStale =
     storedReport && storedReport.articleFingerprint !== currentFp;
 
