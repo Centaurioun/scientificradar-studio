@@ -129,6 +129,18 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>(
     existingArticle?.sourceIds || []
   );
+  // Keep editor dependency identities stable across unrelated React state updates.
+  // Otherwise CKEditor's external-content sync effect sees a fresh Set/array on
+  // every parent render, calls onSyncJson again, and can enter an update loop.
+  const editorAvailableSources = useMemo(
+    () => sources.filter((source) => selectedSourceIds.includes(source.id)),
+    [sources, selectedSourceIds]
+  );
+  const editorTrustedImageSources = useMemo(
+    () => new Set(media.map((asset) => asset.src)),
+    [media]
+  );
+
   const [featuredMediaId, setFeaturedMediaId] = useState<string>(
     existingArticle?.featuredMediaId || ''
   );
@@ -1023,8 +1035,8 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 <ArticleCKEditor
                   contentHtml={bodyHtml}
                   knowledgeLinks={knowledgeLinks}
-                  availableSources={sources.filter((s) => selectedSourceIds.includes(s.id))}
-                  trustedImageSources={new Set(media.map((m) => m.src))}
+                  availableSources={editorAvailableSources}
+                  trustedImageSources={editorTrustedImageSources}
                   pendingFigureInsert={pendingFigureInsert}
                   onFigureInserted={() => setPendingFigureInsert(null)}
                   onRequestMediaInsert={() => setFigurePickerOpen(true)}
@@ -1057,8 +1069,8 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 <ArticleTiptapEditor
                   contentHtml={bodyHtml}
                   knowledgeLinks={knowledgeLinks}
-                  availableSources={sources.filter((s) => selectedSourceIds.includes(s.id))}
-                  trustedImageSources={new Set(media.map((m) => m.src))}
+                  availableSources={editorAvailableSources}
+                  trustedImageSources={editorTrustedImageSources}
                   pendingFigureInsert={pendingFigureInsert}
                   onFigureInserted={() => setPendingFigureInsert(null)}
                   onRequestMediaInsert={() => setFigurePickerOpen(true)}
