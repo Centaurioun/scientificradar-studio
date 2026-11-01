@@ -14,4 +14,6 @@ Console warnings (two observations after editor navigation and reload):
 
 Measured dashboard viewport: `innerWidth=2520`, `innerHeight=1187`, `clientWidth=2520`, `scrollWidth=2520`. This is not one of the required target sizes.
 
+Source candidate: [`components/editor/article-tiptap-editor.tsx` (lines 57–72)](https://github.com/Centaurioun/scientificradar-studio/blob/083b30a6ea9070372ca86484994ca5ccb0bef12d/components/editor/article-tiptap-editor.tsx#L57-L72) registers `Underline` and `LinkExtension` alongside `StarterKit`; root cause remains a candidate pending controlled confirmation.
+
 Safety: the browser profile was `Personal` and contained existing local app records. This continuation was read-only; no editor fields, role selector, schedule, upload or import was changed. No production/external URL was opened.
