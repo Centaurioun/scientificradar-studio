@@ -54,7 +54,7 @@ Local PR-C verification on Bun 1.4.0 / Node.js 26.12.1, macOS Brave 156.1.98.60 
 | `bun run typecheck` | Pass |
 | `bun run lint` | Pass, 0 errors; one pre-existing `<img>` warning in `components/editor/article-workspace.tsx:1454` |
 | `bun run build` | Pass |
-| `bun run test:e2e` | 16 passed, 0 failed, using isolated Brave contexts on `127.0.0.1:4175` |
+| `bun run test:e2e` | 16 passed, 0 failed on isolated Brave and pinned Playwright Chromium contexts on `127.0.0.1:4175` |
 
 The two concurrency browser tests were also copied unchanged to an isolated worktree at baseline `4f756294a81531b39d1fd9dfc68c68e29b3dd668`; both failed there because the stale editor save and old Quick Fix were acknowledged without a conflict. Both pass on PR-C. Hosted Chromium CI is required after the implementation branch is pushed and is reported separately from these local results.
 
@@ -65,7 +65,7 @@ The two concurrency browser tests were also copied unchanged to an isolated work
 3. **Cycle 3 — persistence tests:** Added deterministic tests for serialized concurrent mutation, transaction completion, rejected no-op behavior, and aborted writes. Added browser regressions before the repair and confirmed baseline failures.
 4. **Cycle 4 — application integration:** Article draft saves now compare an exact persisted article version and increment that version on every committed save; Quick Fix checks its complete article fingerprint against persisted article/media/source data and records a revision only after a successful commit. Calendar saves, status transitions, and assistant changes await their durable transaction before reporting success. Other root mutations replay their functional updater against the latest stored snapshot instead of writing stale full-root copies.
 5. **Cycle 5 — adversarial verification:** Brave exercised two-tab stale writes, stale and valid SEO proposals (including linked media/source fingerprints), direct persisted-state checks after reload, and a controlled native IDB abort. Existing backup-security and smoke suites passed in the same run.
-6. **Cycle 6 — final review:** Reviewed all root-record write sites, transaction acknowledgment, article-version/history separation, historical records, import revision handling, empty-collection loading, and PR-B sanitizer/import behavior. Local acceptance passed. Hosted Chromium CI remains pending until PR creation and must pass on the exact PR head before READY.
+6. **Cycle 6 — final review:** Reviewed all root-record write sites, transaction acknowledgment, article-version/history separation, historical records, import revision handling, empty-collection loading, and PR-B sanitizer/import behavior. The first hosted Chromium run exposed a race in an existing test helper that could create the versioned database without its object store; the helper now creates the same store as the application during upgrade. The corrected helper passes locally in pinned Playwright Chromium; the new hosted result is tracked on the PR's updated exact head.
 
 ## PR-A refinement record
 
