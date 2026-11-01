@@ -244,35 +244,70 @@ export function InteractiveArticleBodyRenderer({
     return nodes;
   };
 
-  // Match top-level block elements (<p>, <h2>, <h3>, <blockquote>, <ul>, <ol>)
-  const blockRegex = /<(p|h2|h3|blockquote|ul|ol)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  const getAlignClass = (attrSource: string) => {
+    const m = attrSource.match(/\bdata-text-align="(left|center|right|justify)"/i);
+    if (!m) return '';
+    const align = m[1].toLowerCase();
+    if (align === 'center') return ' text-center';
+    if (align === 'right') return ' text-right';
+    if (align === 'justify') return ' text-justify';
+    return '';
+  };
+
+  // Match top-level block elements (<p>, <h2>, <h3>, <h4>, <blockquote>, <ul>, <ol>, <pre>, <figure>, <table>, <div>, <hr>)
+  const blockRegex =
+    /<(hr)\b[^>]*\/?>|<(p|h2|h3|h4|blockquote|ul|ol|pre|figure|table|div)\b([^>]*)>([\s\S]*?)<\/\2>/gi;
   const blocks: React.ReactNode[] = [];
   let blockMatch: RegExpExecArray | null;
   let idx = 0;
 
   while ((blockMatch = blockRegex.exec(safeHtml)) !== null) {
-    const [, tag, inner] = blockMatch;
-    const tagLower = tag.toLowerCase();
+    const [, hrTag, pairedTag, attrStr = '', inner = ''] = blockMatch;
     const key = `blk-${idx++}`;
+
+    if (hrTag) {
+      blocks.push(
+        <hr key={key} className="my-6 border-slate-200 dark:border-slate-800" />
+      );
+      continue;
+    }
+
+    const tagLower = pairedTag.toLowerCase();
+    const alignClass = getAlignClass(attrStr);
 
     if (tagLower === 'h2') {
       blocks.push(
-        <h2 key={key} className="text-xl sm:text-2xl font-bold mt-7 mb-3 text-slate-900 dark:text-slate-100">
+        <h2
+          key={key}
+          className={`text-xl sm:text-2xl font-bold mt-7 mb-3 text-slate-900 dark:text-slate-100${alignClass}`}
+        >
           {renderInlineWithKnowledgeLinks(inner, key)}
         </h2>
       );
     } else if (tagLower === 'h3') {
       blocks.push(
-        <h3 key={key} className="text-lg sm:text-xl font-semibold mt-5 mb-2 text-slate-900 dark:text-slate-100">
+        <h3
+          key={key}
+          className={`text-lg sm:text-xl font-semibold mt-5 mb-2 text-slate-900 dark:text-slate-100${alignClass}`}
+        >
           {renderInlineWithKnowledgeLinks(inner, key)}
         </h3>
       );
+    } else if (tagLower === 'h4') {
+      blocks.push(
+        <h4
+          key={key}
+          className={`text-base sm:text-lg font-semibold mt-4 mb-2 text-slate-900 dark:text-slate-100${alignClass}`}
+        >
+          {renderInlineWithKnowledgeLinks(inner, key)}
+        </h4>
+      );
     } else if (tagLower === 'blockquote') {
-      const cleanQuote = inner.replace(/^<p>|<\/p>$/gi, '');
+      const cleanQuote = inner.replace(/^<p\b[^>]*>|<\/p>$/gi, '');
       blocks.push(
         <blockquote
           key={key}
-          className="border-y border-slate-200 dark:border-slate-800 py-4 px-5 my-5 italic text-slate-600 dark:text-slate-300"
+          className={`border-y border-slate-200 dark:border-slate-800 py-4 px-5 my-5 italic text-slate-600 dark:text-slate-300${alignClass}`}
         >
           {renderInlineWithKnowledgeLinks(cleanQuote, key)}
         </blockquote>
@@ -293,9 +328,48 @@ export function InteractiveArticleBodyRenderer({
           dangerouslySetInnerHTML={{ __html: safeFragment(inner) }}
         />
       );
+    } else if (tagLower === 'pre') {
+      blocks.push(
+        <pre
+          key={key}
+          className="my-4 overflow-x-auto rounded-lg border border-slate-200 bg-slate-900 p-4 font-mono text-xs text-slate-100 dark:border-slate-800"
+          dangerouslySetInnerHTML={{ __html: safeFragment(inner) }}
+        />
+      );
+    } else if (tagLower === 'table') {
+      blocks.push(
+        <div
+          key={key}
+          className="my-5 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800"
+        >
+          <table
+            className="w-full border-collapse text-left text-sm [&_th]:border-b [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-3 [&_th]:py-2 [&_th]:font-semibold dark:[&_th]:border-slate-800 dark:[&_th]:bg-slate-900 [&_td]:border-b [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-2 dark:[&_td]:border-slate-800"
+            dangerouslySetInnerHTML={{ __html: safeFragment(inner) }}
+          />
+        </div>
+      );
+    } else if (tagLower === 'figure') {
+      blocks.push(
+        <figure
+          key={key}
+          className="my-6 overflow-hidden rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-900/60 [&_img]:mx-auto [&_img]:max-h-96 [&_img]:w-auto [&_img]:object-contain [&_figcaption]:mt-2.5 [&_figcaption]:text-center [&_figcaption]:text-xs [&_figcaption]:text-slate-600 dark:[&_figcaption]:text-slate-400"
+          dangerouslySetInnerHTML={{ __html: safeFragment(inner) }}
+        />
+      );
+    } else if (tagLower === 'div') {
+      blocks.push(
+        <div
+          key={key}
+          className="my-4 overflow-x-auto rounded-lg border border-indigo-200/70 bg-indigo-50/40 px-4 py-3 text-center font-serif text-base text-slate-900 dark:border-indigo-900/50 dark:bg-indigo-950/30 dark:text-slate-100"
+          dangerouslySetInnerHTML={{ __html: safeFragment(inner) }}
+        />
+      );
     } else {
       blocks.push(
-        <p key={key} className="leading-relaxed text-[17px] mb-4 text-slate-800 dark:text-slate-200">
+        <p
+          key={key}
+          className={`leading-relaxed text-[17px] mb-4 text-slate-800 dark:text-slate-200${alignClass}`}
+        >
           {renderInlineWithKnowledgeLinks(inner, key)}
         </p>
       );
@@ -316,4 +390,5 @@ export function InteractiveArticleBodyRenderer({
     </div>
   );
 }
+
 

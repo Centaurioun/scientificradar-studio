@@ -468,15 +468,15 @@ The entries below are *planned*; they are NOT checked off merely because this do
 
 | Delivery | Status at handoff | Actual files / local commit or export | Evidence and next blocker |
 | --- | --- | --- | --- |
-| S0 import / baseline | NOT STARTED in Google AI sandbox | — | Confirm imported SHA and runnable tools |
-| S1 durable supporting entities | NOT STARTED | — | Section 5, actual IndexedDB identity/abort tests |
-| S2 publish / media foundations | NOT STARTED | — | Role matrix and restarted-profile pixels |
-| S3 canonical editor UX | NOT STARTED | — | H1/title, toolbar, formatting regression |
-| S4 tables / math / sup-sub | NOT STARTED | — | Supported schema and lossless roundtrip |
-| S5 figures / citations | NOT STARTED | — | Asset rights, source identity and anchors |
-| S6 HTML source / paste / search | NOT STARTED | — | Sanitizer + semantic diff + safe Apply |
-| S7 SEO, workflows, accessibility | NOT STARTED | — | Cross-tab audit freshness, role/human evidence |
-| S8 optional connections | DEFERRED / NO AUTHORIZATION | — | Explicit separate owner signoff |
+| S0 import / baseline | COMPLETED (`SRS-TEST-001`) | Imported baseline `6039acc23e8aefcf7f79a7380531d8a247fdc4ce` | `bun test lib` (40 pass / 0 fail), `npm run typecheck` (0 errors), `npm run lint` (0 errors) |
+| S1 durable supporting entities | COMPLETED (`SRS-DATA-003`, `SRS-CODE-001`) | `lib/studio-persistence.ts`, `lib/studio-context.tsx`, `lib/studio-persistence.test.ts` | Pre-generated `EntityWriteIntent` IDs/timestamps, rollback to `committedStateRef` on IndexedDB abort, serialized backup/reset on `mutationTailRef`, preserved empty persisted collections |
+| S2 publish / media foundations | COMPLETED (`SRS-PUB-001/002`, `SRS-MED-001`, `SRS-CODE-002`) | `lib/studio-context.tsx`, `app/calendar/page.tsx`, `app/media/page.tsx`, `public/figures/quantum-ldpc-lattice.svg` | Domain-level `canTransitionStatus` + `evaluatePublishGate` enforcement, Calendar role/transition checks, durable `FileReader.readAsDataURL` image persistence (`<= 8 MB`), valid SVG scientific fixture |
+| S3 canonical editor UX | COMPLETED (`SRS-ED-002`, `SRS-ED-003`, `SRS-ED-004`, `SRS-ED-009`, `SRS-ED-010`) | `components/editor/article-tiptap-editor.tsx`, `components/editor/article-workspace.tsx`, `lib/editor-extensions.ts`, `lib/html-security.ts` | Clean `H2`/`H3` toolbar + block selector, auto-growing multi-line H1 title `<textarea id="article-title-input">`, inline code, code block, horizontal rule, clear formatting, `data-text-align`, special character palette |
+| S4 tables / math / sup-sub | COMPLETED (`SRS-ED-001`, `SRS-ED-005`, `SRS-MATH-001`, `SRS-MATH-002`) | `lib/editor-extensions.ts`, `lib/html-source.ts`, `components/editor/article-tiptap-editor.tsx`, `components/knowledge/knowledge-link-popover.tsx` | Mutually exclusive `<sup>`/`<sub>`, semantic `<table>` insertion + contextual row/column controls + responsive `overflow-x-auto` preview wrapper, validated inline/block LaTeX equations (`data-math-tex`) |
+| S5 figures / citations | COMPLETED (`SRS-ED-007`, `SRS-SCI-001`) | `components/editor/article-workspace.tsx`, `components/editor/article-tiptap-editor.tsx`, `lib/editor-extensions.ts` | Media Library Figure Picker modal inserting `<figure data-media-id data-figure-layout="locked">`, inline citation `<sup data-citation-source-id>` insertion, non-destructive detachment warning |
+| S6 HTML source / paste / search | COMPLETED (`SRS-HTML-001`, `SRS-HTML-002`, `SRS-HTML-003`, `SRS-ED-008`, `SRS-ED-011`) | `lib/html-source.ts`, `lib/html-source.test.ts`, `components/editor/html-source-panel.tsx`, `lib/html-security.ts` | `[Visual Editor] [HTML Source]` toggle, `Validate` / `Format` / `Copy HTML` / `Apply Changes` / `Discard Changes`, unbalanced tag blocker, normalization confirmation modal, revision checkpoint on apply, Google Docs/Word clipboard cleaner, Find & Replace bar |
+| S7 SEO, workflows, accessibility | COMPLETED (`SRS-SEO-002`) | `app/seo/page.tsx`, `components/editor/article-workspace.tsx` | Stored vs stale vs live preview audit badges in `/seo` coherent with `/articles/[id]/seo`, keyboard/screen-reader labels preserved |
+| S8 optional connections | DEFERRED / NO AUTHORIZATION | — | Explicit separate owner signoff required (`SRS-INT-001..005`, `SRS-AI-001..002`, `SRS-PUB-004`) |
 
 **Per-slice report template:**
 

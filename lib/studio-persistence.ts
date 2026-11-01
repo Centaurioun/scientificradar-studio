@@ -2,6 +2,33 @@ export interface RevisionedSnapshot {
   storageRevision?: number;
 }
 
+export interface EntityWriteIntent {
+  id: string;
+  timestamp: string;
+  auditId: string;
+}
+
+export function createEntityWriteIntent(
+  prefix: string,
+  existingId?: string,
+  now = new Date()
+): EntityWriteIntent {
+  const randomSuffix =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
+  const auditSuffix =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
+  const iso = now.toISOString();
+  return {
+    id: existingId || `${prefix}-${randomSuffix}`,
+    timestamp: iso,
+    auditId: `aud-${now.getTime()}-${auditSuffix}`,
+  };
+}
+
 export interface SnapshotCommit<T, R = unknown> {
   snapshot: T;
   storageRevision: number;

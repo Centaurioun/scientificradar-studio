@@ -1,386 +1,899 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import Underline from '@tiptap/extension-underline';
 import LinkExtension from '@tiptap/extension-link';
-import ImageExtension from '@tiptap/extension-image';
+import Underline from '@tiptap/extension-underline';
 import Placeholder from '@tiptap/extension-placeholder';
-import {
-  sanitizeAndDemoteBodyH1,
-  convertMarkdownPasteToSafeHtml,
-  validateSafeUrl,
-} from '@/lib/editorial-rules';
 import {
   Bold,
   Italic,
   Underline as UnderlineIcon,
   Strikethrough,
-  Heading2,
-  Heading3,
   List,
   ListOrdered,
   Quote,
-  Link as LinkIcon,
+  Link2,
+  Sparkles,
   Image as ImageIcon,
-  Undo,
-  Redo,
+  Undo2,
+  Redo2,
   AlertCircle,
+  Check,
+  X,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  AlignJustify,
+  Code,
+  FileCode2,
+  Minus,
+  Eraser,
+  Table as TableIcon,
+  Sigma,
+  BookOpen,
+  Search,
+  Superscript as SuperscriptIcon,
+  Subscript as SubscriptIcon,
+  Omega,
 } from 'lucide-react';
-import { KnowledgeLink } from '@/lib/types';
+import {
+  convertMarkdownPasteToSafeHtml,
+  sanitizeAndDemoteBodyH1,
+  validateSafeUrl,
+} from '@/lib/editorial-rules';
+import { cleanClipboardPasteHtml, trustedMediaSourceSet } from '@/lib/html-security';
+import { useStudio } from '@/lib/studio-context';
+import { KnowledgeLink, MediaAsset, ScientificSource } from '@/lib/types';
+import {
+  SuperscriptMark,
+  SubscriptMark,
+  SafeTextAlignExtension,
+  ScientificCitationNode,
+  ScientificMathInlineNode,
+  ScientificMathBlockNode,
+  ScientificFigureNode,
+  ScientificTableNode,
+  ScientificTableRowNode,
+  ScientificTableHeaderNode,
+  ScientificTableCellNode,
+  setBlockTextAlign,
+  getActiveBlockTextAlign,
+  insertScientificTable,
+  addTableRowToActiveTable,
+  addTableColumnToActiveTable,
+  deleteActiveTableRow,
+  deleteActiveTable,
+  isSelectionInsideTable,
+  TextAlignValue,
+} from '@/lib/editor-extensions';
+import {
+  formatEditorialHtmlSource,
+  validateAndRenderLatex,
+} from '@/lib/html-source';
+import { HtmlSourcePanel } from './html-source-panel';
+
+const SCIENTIFIC_SYMBOLS: Array<{ symbol: string; name: string }> = [
+  { symbol: '±', name: 'Plus-minus (±)' },
+  { symbol: 'µ', name: 'Micro (µ)' },
+  { symbol: 'Δ', name: 'Delta / Change (Δ)' },
+  { symbol: 'α', name: 'Alpha (α)' },
+  { symbol: 'β', name: 'Beta (β)' },
+  { symbol: 'γ', name: 'Gamma (γ)' },
+  { symbol: 'λ', name: 'Lambda / Wavelength (λ)' },
+  { symbol: 'σ', name: 'Sigma / Standard Deviation (σ)' },
+  { symbol: 'Ω', name: 'Omega / Ohm (Ω)' },
+  { symbol: '≤', name: 'Less than or equal (≤)' },
+  { symbol: '≥', name: 'Greater than or equal (≥)' },
+  { symbol: '≠', name: 'Not equal (≠)' },
+  { symbol: '≈', name: 'Approximately equal (≈)' },
+  { symbol: '×', name: 'Multiplication (×)' },
+  { symbol: '−', name: 'Minus sign (−)' },
+  { symbol: '→', name: 'Right arrow (→)' },
+  { symbol: '⇌', name: 'Equilibrium harpoons (⇌)' },
+  { symbol: '°', name: 'Degree (°)' },
+  { symbol: 'Å', name: 'Angstrom (Å)' },
+  { symbol: '∞', name: 'Infinity (∞)' },
+];
 
 interface ArticleTiptapEditorProps {
   initialHtml?: string;
   contentHtml?: string;
   knowledgeLinks?: KnowledgeLink[];
-  onChange?: (html: string, json: Record<string, unknown>, demotedH1Alert?: number) => void;
+  trustedImageSources?: ReadonlySet<string>;
+  onChange?: (
+    nextHtml: string,
+    nextJson: Record<string, unknown>,
+    demotedH1Count: number
+  ) => void;
   onChangeHtml?: (html: string) => void;
   onDemotedH1?: (count: number) => void;
+  onOpenCodexDrawer?: () => void;
   onRequestMediaInsert?: () => void;
+  /** Optional linked scientific sources for inline citation insertion (`SRS-SCI-001`) */
+  availableSources?: ScientificSource[];
+  /** Optional media asset queued by the parent Figure Picker modal to insert at the caret (`SRS-ED-007`) */
+  pendingFigureInsert?: MediaAsset | null;
+  onFigureInserted?: () => void;
+  /** Optional callback when HTML Source changes are explicitly applied (`SRS-HTML-003`) */
+  onApplyHtmlSource?: (sanitizedHtml: string, summaryNote: string) => void;
 }
 
 export function ArticleTiptapEditor({
   initialHtml,
   contentHtml,
+  trustedImageSources,
   onChange,
   onChangeHtml,
   onDemotedH1,
+  onOpenCodexDrawer,
   onRequestMediaInsert,
+  availableSources = [],
+  pendingFigureInsert,
+  onFigureInserted,
+  onApplyHtmlSource,
 }: ArticleTiptapEditorProps) {
+  const { media } = useStudio();
   const effectiveHtml = contentHtml ?? initialHtml ?? '<p></p>';
-  const [pasteNotice, setPasteNotice] = useState<string | null>(null);
-  const [linkInputOpen, setLinkInputOpen] = useState(false);
-  const [linkUrl, setLinkUrl] = useState('');
+  const trustedSources = React.useMemo(
+    () =>
+      trustedImageSources ||
+      trustedMediaSourceSet(media.map((item) => item.src)),
+    [media, trustedImageSources]
+  );
+
+  const [editorMode, setEditorMode] = useState<'visual' | 'html_source'>('visual');
+  const [rawHtmlBuffer, setRawHtmlBuffer] = useState<string>(() =>
+    formatEditorialHtmlSource(effectiveHtml)
+  );
+
+  const [linkBarOpen, setLinkBarOpen] = useState(false);
+  const [linkUrlInput, setLinkUrlInput] = useState('');
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [pasteNotice, setPasteNotice] = useState<string | null>(null);
+
+  // Special character popover state
+  const [symbolMenuOpen, setSymbolMenuOpen] = useState(false);
+
+  // LaTeX Equation bar state
+  const [equationBarOpen, setEquationBarOpen] = useState(false);
+  const [equationTex, setEquationTex] = useState('\\mathcal{L}_{\\text{eff}} = \\frac{1}{2} \\partial_\\mu \\phi \\partial^\\mu \\phi');
+  const [equationDisplay, setEquationDisplay] = useState<'inline' | 'block'>('inline');
+  const [equationError, setEquationError] = useState<string | null>(null);
+
+  // Citation popover state
+  const [citationMenuOpen, setCitationMenuOpen] = useState(false);
+
+  // Find & Replace bar state
+  const [findBarOpen, setFindBarOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [replaceQuery, setReplaceQuery] = useState('');
+  const [findStatus, setFindStatus] = useState<string | null>(null);
 
   const editor = useEditor({
+    immediatelyRender: false,
     extensions: [
       StarterKit.configure({
-        // Enforce H2 and H3 only in body; Article Title is the single rendered H1 (Spec §6)
         heading: {
+          // Enforce Spec §8: Title is sole H1; body supports H2 and H3 only.
           levels: [2, 3],
         },
-        // These standalone extensions are configured below; disable StarterKit's bundled copies.
         link: false,
         underline: false,
       }),
       Underline,
+      SuperscriptMark,
+      SubscriptMark,
+      SafeTextAlignExtension,
+      ScientificCitationNode,
+      ScientificMathInlineNode,
+      ScientificMathBlockNode,
+      ScientificFigureNode,
+      ScientificTableNode,
+      ScientificTableRowNode,
+      ScientificTableHeaderNode,
+      ScientificTableCellNode,
       LinkExtension.configure({
         openOnClick: false,
+        autolink: true,
         HTMLAttributes: {
           rel: 'noopener noreferrer',
+          class:
+            'text-[#087f83] dark:text-teal-400 underline decoration-teal-500/50 underline-offset-2',
         },
+        validate: (href) => validateSafeUrl(href).valid,
       }),
-      ImageExtension,
       Placeholder.configure({
         placeholder:
-          'Write or paste your scientific manuscript here. Top-level # H1 headings pasted into the body are automatically proposed as H2 sections so the article title remains the single rendered H1...',
+          'Write your scientific article here. Use Heading 2 and Heading 3 for sections, insert LaTeX equations, tables, citations, or switch to HTML Source...',
       }),
     ],
-    content: effectiveHtml,
-    immediatelyRender: false,
+    content: sanitizeAndDemoteBodyH1(effectiveHtml, trustedSources).sanitizedHtml,
     editorProps: {
       attributes: {
-        'aria-label': 'Article body editor',
         class:
-          'prose prose-slate dark:prose-invert max-w-none focus:outline-none min-h-[480px] px-6 py-5 text-[16px] leading-relaxed',
+          'prose prose-slate dark:prose-invert max-w-none min-h-[520px] px-6 py-5 focus:outline-none text-slate-800 dark:text-slate-100 leading-relaxed',
+        'aria-label': 'Article body editor',
       },
       handlePaste: (_view, event) => {
-        const htmlData = event.clipboardData?.getData('text/html');
-        const textData = event.clipboardData?.getData('text/plain') || '';
+        const htmlData = event.clipboardData?.getData('text/html') || '';
+        const text = event.clipboardData?.getData('text/plain') || '';
 
-        // Check if pasted plain text looks like Markdown with # headings
-        if (!htmlData && /^#{1,3}\s+/m.test(textData)) {
+        if (htmlData && htmlData.trim()) {
+          const cleaned = cleanClipboardPasteHtml(htmlData, trustedSources);
+          if (
+            cleaned.demotedH1Count > 0 ||
+            /mso-|docs-internal-guid|vertical-align/i.test(htmlData)
+          ) {
+            event.preventDefault();
+            if (cleaned.demotedH1Count > 0) {
+              setPasteNotice(
+                `Normalized ${cleaned.demotedH1Count} pasted H1 heading(s) to H2 so the Article Title remains the single page H1.`
+              );
+              onDemotedH1?.(cleaned.demotedH1Count);
+            } else {
+              setPasteNotice('Cleaned rich clipboard formatting for scientific manuscript consistency.');
+            }
+            editor?.commands.insertContent(cleaned.html);
+            return true;
+          }
+        }
+
+        if (text && /^#{1,4}\s+/m.test(text) && !htmlData) {
           event.preventDefault();
-          const converted = convertMarkdownPasteToSafeHtml(textData);
+          const converted = convertMarkdownPasteToSafeHtml(text);
           if (converted.demotedH1Count > 0) {
             setPasteNotice(
-              `Converted ${converted.demotedH1Count} pasted Markdown "# H1" heading(s) into H2 so the Article Title remains the single rendered H1.`
+              `Demoted ${converted.demotedH1Count} pasted Markdown "# H1" heading(s) to H2 so the Article Title remains the single page H1.`
             );
             onDemotedH1?.(converted.demotedH1Count);
           }
           editor?.commands.insertContent(converted.html);
           return true;
         }
-
-        // Route all rich HTML through the same parser-based allowlist before
-        // Tiptap parses it, including markup without obvious attack tokens.
-        if (htmlData) {
-          event.preventDefault();
-          const sanitized = sanitizeAndDemoteBodyH1(htmlData);
-          const notices: string[] = [];
-          if (sanitized.demotedH1Count > 0) {
-            notices.push(
-              `Demoted ${sanitized.demotedH1Count} pasted <h1> heading(s) to <h2> (Title is the sole H1)`
-            );
-            onDemotedH1?.(sanitized.demotedH1Count);
-          }
-          if (sanitized.removedUnsafeCount > 0) {
-            notices.push(
-              `Sanitized ${sanitized.removedUnsafeCount} unsafe script/handler attribute(s)`
-            );
-          }
-          if (notices.length > 0) {
-            setPasteNotice(notices.join(' · '));
-          }
-          editor?.commands.insertContent(sanitized.sanitizedHtml);
-          return true;
-        }
-
         return false;
       },
     },
     onUpdate: ({ editor: ed }) => {
       const rawHtml = ed.getHTML();
-      const sanitized = sanitizeAndDemoteBodyH1(rawHtml);
+      const sanitized = sanitizeAndDemoteBodyH1(rawHtml, trustedSources);
+      if (sanitized.demotedH1Count > 0) {
+        setPasteNotice(
+          `Normalized ${sanitized.demotedH1Count} body H1 tag(s) to H2 to preserve single-H1 hierarchy.`
+        );
+        onDemotedH1?.(sanitized.demotedH1Count);
+      }
       onChange?.(
         sanitized.sanitizedHtml,
         ed.getJSON() as Record<string, unknown>,
         sanitized.demotedH1Count
       );
       onChangeHtml?.(sanitized.sanitizedHtml);
-      if (sanitized.demotedH1Count > 0) {
-        onDemotedH1?.(sanitized.demotedH1Count);
-      }
     },
   });
 
-  // Sync external updates (e.g., when version restored or local assistant check accepted)
+  // Sync external content changes (e.g., version restore or assistant apply)
   useEffect(() => {
-    if (editor && effectiveHtml !== editor.getHTML()) {
-      editor.commands.setContent(effectiveHtml, { emitUpdate: false });
-    }
-  }, [effectiveHtml, editor]);
-
-  const handleApplyLink = () => {
     if (!editor) return;
-    if (!linkUrl.trim()) {
-      editor.chain().focus().extendMarkRange('link').unsetLink().run();
-      setLinkInputOpen(false);
-      setLinkError(null);
+    const current = editor.getHTML();
+    const cleaned = sanitizeAndDemoteBodyH1(effectiveHtml, trustedSources).sanitizedHtml;
+    if (cleaned !== current && Math.abs(cleaned.length - current.length) > 4) {
+      editor.commands.setContent(cleaned, { emitUpdate: false });
+    }
+  }, [effectiveHtml, editor, trustedSources]);
+
+  // Insert figure queued by parent ArticleWorkspace Media Picker (`SRS-ED-007`)
+  useEffect(() => {
+    if (!editor || !pendingFigureInsert) return;
+    editor
+      .chain()
+      .focus()
+      .insertContent({
+        type: 'scientificFigure',
+        attrs: {
+          mediaId: pendingFigureInsert.id,
+          layout: pendingFigureInsert.layout || 'locked',
+          src: pendingFigureInsert.src,
+          alt: pendingFigureInsert.altText || pendingFigureInsert.title,
+          caption:
+            pendingFigureInsert.caption ||
+            `${pendingFigureInsert.title} (${pendingFigureInsert.credit || 'ScientificRadar'} · ${
+              pendingFigureInsert.licence || 'CC BY 4.0'
+            })`,
+        },
+      })
+      .run();
+    onFigureInserted?.();
+  }, [editor, pendingFigureInsert, onFigureInserted]);
+
+  const handleApplyLink = useCallback(() => {
+    if (!editor) return;
+    setLinkError(null);
+    const trimmed = linkUrlInput.trim();
+    if (!trimmed) {
+      editor.chain().focus().unsetLink().run();
+      setLinkBarOpen(false);
       return;
     }
-    const validation = validateSafeUrl(linkUrl);
+
+    const validation = validateSafeUrl(trimmed);
     if (!validation.valid) {
-      setLinkError(validation.reason || 'Invalid or unsafe URL');
+      setLinkError(validation.reason || 'Invalid URL');
       return;
     }
+
     editor
       .chain()
       .focus()
       .extendMarkRange('link')
-      .setLink({ href: linkUrl.trim(), target: linkUrl.startsWith('/') ? '_self' : '_blank' })
+      .setLink({ href: trimmed, target: trimmed.startsWith('/') ? '_self' : '_blank' })
       .run();
-    setLinkUrl('');
-    setLinkError(null);
-    setLinkInputOpen(false);
-  };
+    setLinkBarOpen(false);
+    setLinkUrlInput('');
+  }, [editor, linkUrlInput]);
+
+  const handleInsertSymbol = useCallback(
+    (symbol: string) => {
+      if (!editor) return;
+      editor.chain().focus().insertContent(symbol).run();
+      setSymbolMenuOpen(false);
+    },
+    [editor]
+  );
+
+  const handleInsertEquation = useCallback(() => {
+    if (!editor) return;
+    setEquationError(null);
+    const check = validateAndRenderLatex(equationTex, equationDisplay);
+    if (!check.valid) {
+      setEquationError(check.error || 'Invalid LaTeX syntax.');
+      return;
+    }
+    if (equationDisplay === 'block') {
+      editor
+        .chain()
+        .focus()
+        .insertContent({
+          type: 'scientificMathBlock',
+          attrs: { tex: equationTex.trim() },
+        })
+        .run();
+    } else {
+      editor
+        .chain()
+        .focus()
+        .insertContent({
+          type: 'scientificMathInline',
+          attrs: { tex: equationTex.trim() },
+        })
+        .run();
+    }
+    setEquationBarOpen(false);
+  }, [editor, equationTex, equationDisplay]);
+
+  const handleInsertCitation = useCallback(
+    (source: ScientificSource, index: number) => {
+      if (!editor) return;
+      editor
+        .chain()
+        .focus()
+        .insertContent({
+          type: 'scientificCitation',
+          attrs: {
+            sourceId: source.id,
+            label: `[${index + 1}]`,
+          },
+        })
+        .run();
+      setCitationMenuOpen(false);
+    },
+    [editor]
+  );
+
+  // Count matches in manuscript text nodes for Find & Replace (`SRS-ED-009`)
+  const findMatchesCount = React.useMemo(() => {
+    if (!editor || !findQuery.trim()) return 0;
+    const needle = findQuery;
+    let count = 0;
+    editor.state.doc.descendants((node) => {
+      if (node.isText && node.text) {
+        let idx = node.text.indexOf(needle);
+        while (idx !== -1) {
+          count += 1;
+          idx = node.text.indexOf(needle, idx + needle.length);
+        }
+      }
+    });
+    return count;
+  }, [editor, findQuery]);
+
+  const handleReplaceMatches = useCallback(
+    (replaceAll: boolean) => {
+      if (!editor || !findQuery) return;
+      const needle = findQuery;
+      const replacement = replaceQuery;
+      let replacedCount = 0;
+
+      editor
+        .chain()
+        .focus()
+        .command(({ state, tr, dispatch }) => {
+          const matches: Array<{ from: number; to: number }> = [];
+          state.doc.descendants((node, pos) => {
+            if (node.isText && node.text) {
+              let idx = node.text.indexOf(needle);
+              while (idx !== -1) {
+                matches.push({
+                  from: pos + idx,
+                  to: pos + idx + needle.length,
+                });
+                if (!replaceAll) return false;
+                idx = node.text.indexOf(needle, idx + needle.length);
+              }
+            }
+            return true;
+          });
+
+          if (matches.length === 0) return false;
+          const targets = replaceAll ? [...matches].reverse() : [matches[0]];
+          for (const m of targets) {
+            if (replacement) {
+              tr.insertText(replacement, m.from, m.to);
+            } else {
+              tr.delete(m.from, m.to);
+            }
+            replacedCount += 1;
+          }
+          if (dispatch) dispatch(tr);
+          return true;
+        })
+        .run();
+
+      setFindStatus(
+        replacedCount > 0
+          ? `Replaced ${replacedCount} occurrence(s) of "${needle}" (Undo Ctrl/Cmd+Z reverts in one step).`
+          : `No occurrences of "${needle}" found.`
+      );
+    },
+    [editor, findQuery, replaceQuery]
+  );
 
   if (!editor) {
     return (
-      <div className="min-h-[480px] border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-[#111c22] p-6 text-sm text-slate-400">
-        Initializing scientific manuscript editor...
+      <div className="min-h-[520px] rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111c22] p-6 animate-pulse">
+        <div className="h-8 bg-slate-200 dark:bg-slate-800 rounded w-2/3 mb-4" />
+        <div className="h-4 bg-slate-100 dark:bg-slate-800/70 rounded w-full mb-2.5" />
+        <div className="h-4 bg-slate-100 dark:bg-slate-800/70 rounded w-5/6" />
       </div>
     );
   }
 
+  const activeBlockStyle = editor.isActive('heading', { level: 2 })
+    ? 'h2'
+    : editor.isActive('heading', { level: 3 })
+    ? 'h3'
+    : 'p';
+
+  const activeAlign: TextAlignValue = getActiveBlockTextAlign(editor);
+  const inTable = isSelectionInsideTable(editor);
+  const latexPreview = validateAndRenderLatex(equationTex, equationDisplay);
+
+  const handleBlockStyleChange = (value: string) => {
+    if (value === 'h2') {
+      editor.chain().focus().setHeading({ level: 2 }).run();
+    } else if (value === 'h3') {
+      editor.chain().focus().setHeading({ level: 3 }).run();
+    } else {
+      editor.chain().focus().setParagraph().run();
+    }
+  };
+
+  const handleSwitchToHtmlSource = () => {
+    const currentHtml = sanitizeAndDemoteBodyH1(editor.getHTML(), trustedSources).sanitizedHtml;
+    setRawHtmlBuffer(formatEditorialHtmlSource(currentHtml));
+    setEditorMode('html_source');
+  };
+
   return (
-    <div className="border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-[#111c22] overflow-hidden">
-      {/* Formatting Toolbar */}
+    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111c22] shadow-xs overflow-hidden flex flex-col">
+      {/* Sticky Formatting Toolbar */}
       <div
         role="toolbar"
-        aria-label="Manuscript formatting toolbar (H2/H3 enforced; Title is H1)"
-        className="px-3 py-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#15222a] flex flex-wrap items-center justify-between gap-2"
+        aria-label="Manuscript formatting toolbar (Title is sole H1)"
+        className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-1.5 px-3 py-2 bg-slate-50/95 dark:bg-[#15222a]/95 backdrop-blur border-b border-slate-200 dark:border-slate-800"
       >
-        <div className="flex flex-wrap items-center gap-1">
-          <button
-            type="button"
-            onClick={() => editor.chain().focus().setParagraph().run()}
-            className={`px-2 py-1 rounded text-xs font-medium ${
-              editor.isActive('paragraph')
-                ? 'bg-[#087f83] text-white'
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
-            }`}
-            title="Paragraph text"
+        {/* Left group: Visual Formatting Controls (disabled when in HTML Source mode) */}
+        <div
+          className={`flex flex-wrap items-center gap-1 ${
+            editorMode === 'html_source' ? 'opacity-40 pointer-events-none' : ''
+          }`}
+        >
+          {/* Single Block Style Selector + Single-Label H2/H3 Quick Toggles (SRS-ED-002: no duplicate H₂ H2) */}
+          <select
+            aria-label="Block text style"
+            value={activeBlockStyle}
+            onChange={(e) => handleBlockStyleChange(e.target.value)}
+            className="px-2 py-1 rounded text-xs font-medium border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200"
           >
-            Paragraph
-          </button>
+            <option value="p">Paragraph</option>
+            <option value="h2">Heading 2 (Section)</option>
+            <option value="h3">Heading 3 (Subsection)</option>
+          </select>
 
           <button
             type="button"
             onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-            aria-label="Heading 2 (Section)"
-            className={`p-1.5 rounded flex items-center gap-1 text-xs font-semibold ${
+            aria-label="Heading 2"
+            aria-pressed={editor.isActive('heading', { level: 2 })}
+            title="Toggle Section Heading 2 (Title above is sole H1)"
+            className={`px-2 py-1 rounded text-xs font-mono font-semibold transition-colors ${
               editor.isActive('heading', { level: 2 })
                 ? 'bg-[#087f83] text-white'
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
             }`}
-            title="Heading 2 (H2) — Primary body section"
           >
-            <Heading2 className="w-4 h-4" />
-            <span>H2</span>
+            H2
           </button>
 
           <button
             type="button"
             onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-            aria-label="Heading 3 (Subsection)"
-            className={`p-1.5 rounded flex items-center gap-1 text-xs font-semibold ${
+            aria-label="Heading 3"
+            aria-pressed={editor.isActive('heading', { level: 3 })}
+            title="Toggle Subsection Heading 3"
+            className={`px-2 py-1 rounded text-xs font-mono font-semibold transition-colors ${
               editor.isActive('heading', { level: 3 })
                 ? 'bg-[#087f83] text-white'
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
             }`}
-            title="Heading 3 (H3) — Subsection"
           >
-            <Heading3 className="w-4 h-4" />
-            <span>H3</span>
+            H3
           </button>
 
-          <span className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
+          <div className="w-px h-5 bg-slate-200 dark:bg-slate-700 mx-0.5" />
 
+          {/* Inline Marks: Bold, Italic, Underline, Strikethrough, Superscript, Subscript, Inline Code */}
           <button
             type="button"
             onClick={() => editor.chain().focus().toggleBold().run()}
             aria-label="Bold"
-            className={`p-1.5 rounded ${
+            aria-pressed={editor.isActive('bold')}
+            title="Bold (Ctrl/Cmd+B)"
+            className={`p-1.5 rounded transition-colors ${
               editor.isActive('bold')
                 ? 'bg-[#087f83] text-white'
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
             }`}
-            title="Bold (Ctrl+B)"
           >
-            <Bold className="w-4 h-4" />
+            <Bold className="w-3.5 h-3.5" />
           </button>
 
           <button
             type="button"
             onClick={() => editor.chain().focus().toggleItalic().run()}
             aria-label="Italic"
-            className={`p-1.5 rounded ${
+            aria-pressed={editor.isActive('italic')}
+            title="Italic (Ctrl/Cmd+I)"
+            className={`p-1.5 rounded transition-colors ${
               editor.isActive('italic')
                 ? 'bg-[#087f83] text-white'
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
             }`}
-            title="Italic (Ctrl+I)"
           >
-            <Italic className="w-4 h-4" />
+            <Italic className="w-3.5 h-3.5" />
           </button>
 
           <button
             type="button"
             onClick={() => editor.chain().focus().toggleUnderline().run()}
             aria-label="Underline"
-            className={`p-1.5 rounded ${
+            aria-pressed={editor.isActive('underline')}
+            title="Underline (Ctrl/Cmd+U)"
+            className={`p-1.5 rounded transition-colors ${
               editor.isActive('underline')
                 ? 'bg-[#087f83] text-white'
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
             }`}
-            title="Underline (Ctrl+U)"
           >
-            <UnderlineIcon className="w-4 h-4" />
+            <UnderlineIcon className="w-3.5 h-3.5" />
           </button>
 
           <button
             type="button"
             onClick={() => editor.chain().focus().toggleStrike().run()}
             aria-label="Strikethrough"
-            className={`p-1.5 rounded ${
+            aria-pressed={editor.isActive('strike')}
+            title="Strikethrough"
+            className={`p-1.5 rounded transition-colors ${
               editor.isActive('strike')
                 ? 'bg-[#087f83] text-white'
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
             }`}
-            title="Strikethrough"
           >
-            <Strikethrough className="w-4 h-4" />
+            <Strikethrough className="w-3.5 h-3.5" />
           </button>
-
-          <span className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
 
           <button
             type="button"
+            onClick={() => editor.chain().focus().toggleMark('superscript').run()}
+            aria-label="Superscript"
+            aria-pressed={editor.isActive('superscript')}
+            title="Superscript (x² — mutually exclusive with Subscript)"
+            className={`p-1.5 rounded transition-colors ${
+              editor.isActive('superscript')
+                ? 'bg-[#087f83] text-white'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
+            }`}
+          >
+            <SuperscriptIcon className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleMark('subscript').run()}
+            aria-label="Subscript"
+            aria-pressed={editor.isActive('subscript')}
+            title="Subscript (H₂O — mutually exclusive with Superscript)"
+            className={`p-1.5 rounded transition-colors ${
+              editor.isActive('subscript')
+                ? 'bg-[#087f83] text-white'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
+            }`}
+          >
+            <SubscriptIcon className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleCode().run()}
+            aria-label="Inline Code"
+            aria-pressed={editor.isActive('code')}
+            title="Inline Code"
+            className={`p-1.5 rounded transition-colors ${
+              editor.isActive('code')
+                ? 'bg-[#087f83] text-white'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Code className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().unsetAllMarks().run()}
+            aria-label="Clear Formatting"
+            title="Clear inline formatting on selection"
+            className="p-1.5 rounded text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800 transition-colors"
+          >
+            <Eraser className="w-3.5 h-3.5" />
+          </button>
+
+          <div className="w-px h-5 bg-slate-200 dark:bg-slate-700 mx-0.5" />
+
+          {/* Text Alignment: Left, Center, Right, Justify */}
+          {(
+            [
+              { align: 'left', label: 'Align Left', Icon: AlignLeft },
+              { align: 'center', label: 'Align Center', Icon: AlignCenter },
+              { align: 'right', label: 'Align Right', Icon: AlignRight },
+              { align: 'justify', label: 'Align Justify', Icon: AlignJustify },
+            ] as const
+          ).map(({ align, label, Icon }) => (
+            <button
+              key={align}
+              type="button"
+              onClick={() => setBlockTextAlign(editor, align)}
+              aria-label={label}
+              aria-pressed={activeAlign === align}
+              title={label}
+              className={`p-1.5 rounded transition-colors ${
+                activeAlign === align
+                  ? 'bg-[#087f83] text-white'
+                  : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+            </button>
+          ))}
+
+          <div className="w-px h-5 bg-slate-200 dark:bg-slate-700 mx-0.5" />
+
+          {/* Lists, Blockquote, Code Block, Horizontal Rule */}
+          <button
+            type="button"
             onClick={() => editor.chain().focus().toggleBulletList().run()}
-            aria-label="Bullet list"
-            className={`p-1.5 rounded ${
+            aria-label="Bullet List"
+            aria-pressed={editor.isActive('bulletList')}
+            title="Bullet List"
+            className={`p-1.5 rounded transition-colors ${
               editor.isActive('bulletList')
                 ? 'bg-[#087f83] text-white'
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
             }`}
-            title="Bullet List"
           >
-            <List className="w-4 h-4" />
+            <List className="w-3.5 h-3.5" />
           </button>
 
           <button
             type="button"
             onClick={() => editor.chain().focus().toggleOrderedList().run()}
-            aria-label="Numbered list"
-            className={`p-1.5 rounded ${
+            aria-label="Numbered List"
+            aria-pressed={editor.isActive('orderedList')}
+            title="Numbered List"
+            className={`p-1.5 rounded transition-colors ${
               editor.isActive('orderedList')
                 ? 'bg-[#087f83] text-white'
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
             }`}
-            title="Numbered List"
           >
-            <ListOrdered className="w-4 h-4" />
+            <ListOrdered className="w-3.5 h-3.5" />
           </button>
 
           <button
             type="button"
             onClick={() => editor.chain().focus().toggleBlockquote().run()}
             aria-label="Blockquote"
-            className={`p-1.5 rounded ${
+            aria-pressed={editor.isActive('blockquote')}
+            title="Blockquote / Callout"
+            className={`p-1.5 rounded transition-colors ${
               editor.isActive('blockquote')
                 ? 'bg-[#087f83] text-white'
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
             }`}
-            title="Blockquote"
           >
-            <Quote className="w-4 h-4" />
+            <Quote className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleCodeBlock().run()}
+            aria-label="Code Block"
+            aria-pressed={editor.isActive('codeBlock')}
+            title="Code Block (<pre><code>)"
+            className={`p-1.5 rounded transition-colors ${
+              editor.isActive('codeBlock')
+                ? 'bg-[#087f83] text-white'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
+            }`}
+          >
+            <FileCode2 className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().setHorizontalRule().run()}
+            aria-label="Insert Horizontal Rule"
+            title="Insert Section Divider (<hr>)"
+            className="p-1.5 rounded text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800 transition-colors"
+          >
+            <Minus className="w-3.5 h-3.5" />
+          </button>
+
+          <div className="w-px h-5 bg-slate-200 dark:bg-slate-700 mx-0.5" />
+
+          {/* Link, Symbol, Table, Equation, Citation, Figure */}
+          <button
+            type="button"
+            onClick={() => {
+              const prev = editor.getAttributes('link').href || '';
+              setLinkUrlInput(prev);
+              setLinkError(null);
+              setLinkBarOpen((v) => !v);
+            }}
+            aria-label="Insert or edit safe link"
+            aria-pressed={editor.isActive('link') || linkBarOpen}
+            title="Insert or edit safe link"
+            className={`p-1.5 rounded transition-colors ${
+              editor.isActive('link') || linkBarOpen
+                ? 'bg-[#087f83] text-white'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Link2 className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSymbolMenuOpen((v) => !v)}
+            aria-label="Insert Scientific Symbol"
+            aria-pressed={symbolMenuOpen}
+            title="Insert Scientific Unicode Symbol (± µ Δ α β γ ≤ ≥ ×)"
+            className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 transition-colors ${
+              symbolMenuOpen
+                ? 'bg-[#087f83] text-white'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Omega className="w-3.5 h-3.5" />
+            <span className="hidden xl:inline">Symbol</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => insertScientificTable(editor, 3, 3)}
+            aria-label="Insert Scientific Table"
+            title="Insert 3×3 Scientific Data Table"
+            className="px-2 py-1 rounded text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800 flex items-center gap-1"
+          >
+            <TableIcon className="w-3.5 h-3.5" />
+            <span className="hidden xl:inline">Table</span>
           </button>
 
           <button
             type="button"
             onClick={() => {
-              const previousUrl = editor.getAttributes('link').href || '';
-              setLinkUrl(previousUrl);
-              setLinkInputOpen((prev) => !prev);
+              setEquationError(null);
+              setEquationBarOpen((v) => !v);
             }}
-            aria-label="Insert or edit safe link"
-            className={`p-1.5 rounded ${
-              editor.isActive('link') || linkInputOpen
+            aria-label="Insert LaTeX Equation"
+            aria-pressed={equationBarOpen}
+            title="Insert Inline or Block LaTeX Equation"
+            className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 transition-colors ${
+              equationBarOpen
                 ? 'bg-[#087f83] text-white'
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
             }`}
-            title="Insert or edit link (validates safe URL scheme)"
           >
-            <LinkIcon className="w-4 h-4" />
+            <Sigma className="w-3.5 h-3.5" />
+            <span className="hidden xl:inline">Equation</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setCitationMenuOpen((v) => !v)}
+            aria-label="Insert Citation"
+            aria-pressed={citationMenuOpen}
+            title="Insert linked Scientific Source citation ([1])"
+            className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 transition-colors ${
+              citationMenuOpen
+                ? 'bg-[#087f83] text-white'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
+            }`}
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            <span className="hidden xl:inline">Cite</span>
           </button>
 
           {onRequestMediaInsert && (
             <button
               type="button"
               onClick={onRequestMediaInsert}
-              aria-label="Insert figure from Media Library"
-              className="p-1.5 rounded text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 flex items-center gap-1 text-xs"
-              title="Insert figure from Media Library"
+              aria-label="Insert Scientific Figure"
+              title="Insert Scientific Figure from Media Library (Default Locked Contain)"
+              className="px-2 py-1 rounded text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800 flex items-center gap-1"
             >
-              <ImageIcon className="w-4 h-4" />
+              <ImageIcon className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Figure</span>
             </button>
           )}
 
-          <span className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
+          <button
+            type="button"
+            onClick={() => setFindBarOpen((v) => !v)}
+            aria-label="Find and Replace"
+            aria-pressed={findBarOpen}
+            title="Find and Replace in manuscript"
+            className={`p-1.5 rounded transition-colors ${
+              findBarOpen
+                ? 'bg-[#087f83] text-white'
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
+          </button>
+
+          <div className="w-px h-5 bg-slate-200 dark:bg-slate-700 mx-0.5" />
 
           <button
             type="button"
             onClick={() => editor.chain().focus().undo().run()}
             disabled={!editor.can().undo()}
             aria-label="Undo"
-            className="p-1.5 rounded text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 disabled:opacity-40"
-            title="Undo (Ctrl+Z)"
+            title="Undo (Ctrl/Cmd+Z)"
+            className="p-1.5 rounded text-slate-600 dark:text-slate-400 hover:bg-slate-200/70 dark:hover:bg-slate-800 disabled:opacity-40"
           >
-            <Undo className="w-4 h-4" />
+            <Undo2 className="w-3.5 h-3.5" />
           </button>
 
           <button
@@ -388,84 +901,445 @@ export function ArticleTiptapEditor({
             onClick={() => editor.chain().focus().redo().run()}
             disabled={!editor.can().redo()}
             aria-label="Redo"
-            className="p-1.5 rounded text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 disabled:opacity-40"
-            title="Redo (Ctrl+Y)"
+            title="Redo (Ctrl/Cmd+Shift+Z)"
+            className="p-1.5 rounded text-slate-600 dark:text-slate-400 hover:bg-slate-200/70 dark:hover:bg-slate-800 disabled:opacity-40"
           >
-            <Redo className="w-4 h-4" />
+            <Redo2 className="w-3.5 h-3.5" />
           </button>
         </div>
 
+        {/* Right group: Visual Editor / HTML Source Switch + Prepare with Codex */}
         <div className="flex items-center gap-2">
-          <span className="text-[11px] text-slate-400 dark:text-slate-500 hidden sm:inline">
-            Title = Sole H1 · Body = H2/H3
-          </span>
+          <div
+            role="group"
+            aria-label="Editor surface mode"
+            className="inline-flex rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 p-0.5 text-[11px] font-semibold"
+          >
+            <button
+              type="button"
+              onClick={() => setEditorMode('visual')}
+              aria-pressed={editorMode === 'visual'}
+              className={`px-2.5 py-1 rounded transition-colors ${
+                editorMode === 'visual'
+                  ? 'bg-[#087f83] text-white'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+              }`}
+            >
+              Visual Editor
+            </button>
+            <button
+              type="button"
+              onClick={handleSwitchToHtmlSource}
+              aria-pressed={editorMode === 'html_source'}
+              className={`px-2.5 py-1 rounded transition-colors ${
+                editorMode === 'html_source'
+                  ? 'bg-[#087f83] text-white'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+              }`}
+            >
+              HTML Source
+            </button>
+          </div>
+
+          {onOpenCodexDrawer && (
+            <button
+              type="button"
+              onClick={onOpenCodexDrawer}
+              className="px-2.5 py-1 rounded-md bg-teal-50 dark:bg-teal-950/60 border border-teal-200 dark:border-teal-800 text-[#087f83] dark:text-teal-300 hover:bg-teal-100/70 text-xs font-medium flex items-center gap-1.5 transition-colors"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Prepare with Codex</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Inline Safe Link Input Bar */}
-      {linkInputOpen && (
-        <div className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800/90 border-b border-slate-200 dark:border-slate-700 flex flex-wrap items-center gap-2">
-          <label htmlFor="editor-link-url" className="text-xs font-medium text-slate-700 dark:text-slate-300">
-            Destination URL:
-          </label>
+      {/* Contextual Table Editing Bar when selection is inside a scientificTable */}
+      {editorMode === 'visual' && inTable && (
+        <div
+          role="region"
+          aria-label="Table structure controls"
+          className="px-4 py-1.5 bg-indigo-50/80 dark:bg-indigo-950/30 border-b border-indigo-200 dark:border-indigo-900/60 flex flex-wrap items-center justify-between gap-2 text-xs"
+        >
+          <span className="font-semibold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+            <TableIcon className="w-3.5 h-3.5" />
+            <span>Scientific Table Active</span>
+          </span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => addTableRowToActiveTable(editor)}
+              className="px-2 py-0.5 rounded border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-indigo-800 dark:text-indigo-200 font-medium"
+            >
+              + Add Row
+            </button>
+            <button
+              type="button"
+              onClick={() => addTableColumnToActiveTable(editor)}
+              className="px-2 py-0.5 rounded border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-indigo-800 dark:text-indigo-200 font-medium"
+            >
+              + Add Column
+            </button>
+            <button
+              type="button"
+              onClick={() => deleteActiveTableRow(editor)}
+              className="px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300"
+            >
+              Delete Row
+            </button>
+            <button
+              type="button"
+              onClick={() => deleteActiveTable(editor)}
+              className="px-2 py-0.5 rounded border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300"
+            >
+              Delete Table
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Scientific Symbol Palette */}
+      {editorMode === 'visual' && symbolMenuOpen && (
+        <div
+          role="region"
+          aria-label="Scientific Unicode symbol palette"
+          className="px-4 py-2.5 bg-slate-100/90 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 space-y-2 text-xs"
+        >
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-slate-700 dark:text-slate-200">
+              Insert Scientific Unicode Symbol at Cursor
+            </span>
+            <button
+              type="button"
+              onClick={() => setSymbolMenuOpen(false)}
+              className="text-slate-400 hover:text-slate-700"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {SCIENTIFIC_SYMBOLS.map((item) => (
+              <button
+                key={item.symbol}
+                type="button"
+                onClick={() => handleInsertSymbol(item.symbol)}
+                title={item.name}
+                aria-label={`Insert symbol ${item.name}`}
+                className="w-8 h-8 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-[#087f83] hover:bg-teal-50 dark:hover:bg-teal-950/40 font-mono text-sm font-semibold text-slate-900 dark:text-slate-100 flex items-center justify-center"
+              >
+                {item.symbol}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* LaTeX Equation Composer Bar (SRS-MATH-001/002) */}
+      {editorMode === 'visual' && equationBarOpen && (
+        <div
+          role="region"
+          aria-label="LaTeX Equation Composer"
+          className="px-4 py-3 bg-slate-100/90 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 space-y-2.5 text-xs"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+              <Sigma className="w-4 h-4 text-[#087f83]" />
+              <span>Insert Scientific LaTeX Equation (Canonical TeX Preserved)</span>
+            </span>
+            <div className="flex items-center gap-2">
+              <label className="inline-flex items-center gap-1 cursor-pointer">
+                <input
+                  type="radio"
+                  name="math-display-mode"
+                  checked={equationDisplay === 'inline'}
+                  onChange={() => setEquationDisplay('inline')}
+                />
+                <span>Inline Equation</span>
+              </label>
+              <label className="inline-flex items-center gap-1 cursor-pointer">
+                <input
+                  type="radio"
+                  name="math-display-mode"
+                  checked={equationDisplay === 'block'}
+                  onChange={() => setEquationDisplay('block')}
+                />
+                <span>Block Equation</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              aria-label="LaTeX Expression"
+              value={equationTex}
+              onChange={(e) => {
+                setEquationTex(e.target.value);
+                setEquationError(null);
+              }}
+              placeholder="e.g., E = mc^2 or \frac{\hbar^2}{2m}\nabla^2\psi"
+              className="flex-1 min-w-[260px] px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 font-mono text-xs"
+            />
+            <button
+              type="button"
+              onClick={handleInsertEquation}
+              aria-label="Insert Equation"
+              className="px-3 py-1.5 rounded bg-[#087f83] hover:bg-[#086b70] text-white font-semibold"
+            >
+              Insert Equation
+            </button>
+            <button
+              type="button"
+              onClick={() => setEquationBarOpen(false)}
+              className="px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <div className="p-2 rounded bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+            <span className="text-[11px] text-slate-500">Rendered Preview:</span>
+            {latexPreview.valid ? (
+              <span
+                className="font-serif text-sm text-slate-900 dark:text-slate-100"
+                data-testid="latex-live-preview"
+              >
+                {latexPreview.renderedText}
+              </span>
+            ) : (
+              <span className="text-red-600 dark:text-red-400 font-medium">
+                {latexPreview.error}
+              </span>
+            )}
+          </div>
+
+          {equationError && (
+            <p role="alert" className="text-red-600 dark:text-red-400 font-medium">
+              {equationError}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Citation Picker Bar (SRS-SCI-001) */}
+      {editorMode === 'visual' && citationMenuOpen && (
+        <div
+          role="region"
+          aria-label="Scientific Source Citation Picker"
+          className="px-4 py-2.5 bg-slate-100/90 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 space-y-2 text-xs"
+        >
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-slate-700 dark:text-slate-200">
+              Insert Inline Citation Linked to Article Sources
+            </span>
+            <button
+              type="button"
+              onClick={() => setCitationMenuOpen(false)}
+              className="text-slate-400 hover:text-slate-700"
+            >
+              ✕
+            </button>
+          </div>
+          {availableSources.length === 0 ? (
+            <p className="text-slate-500">
+              No scientific sources are attached to this article yet. Attach or add a citation in
+              the Sources tab on the right inspector first.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {availableSources.map((src, idx) => (
+                <button
+                  key={src.id}
+                  type="button"
+                  onClick={() => handleInsertCitation(src, idx)}
+                  className="text-left px-2.5 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-[#087f83] flex items-center justify-between gap-2"
+                >
+                  <span className="truncate">
+                    <strong className="font-mono text-[#087f83] dark:text-teal-400 mr-1.5">
+                      [{idx + 1}]
+                    </strong>
+                    <span className="font-medium text-slate-900 dark:text-slate-100">
+                      {src.title}
+                    </span>{' '}
+                    <span className="text-slate-500">
+                      ({src.authors}, {src.year})
+                    </span>
+                  </span>
+                  {src.doi && (
+                    <span className="font-mono text-[10px] text-slate-500 shrink-0">
+                      DOI: {src.doi}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Find & Replace Bar (SRS-ED-009) */}
+      {editorMode === 'visual' && findBarOpen && (
+        <div
+          role="region"
+          aria-label="Manuscript Find and Replace"
+          className="px-4 py-2.5 bg-slate-100/90 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center gap-2 text-xs"
+        >
           <input
-            id="editor-link-url"
             type="text"
-            value={linkUrl}
+            aria-label="Find text in manuscript"
+            value={findQuery}
             onChange={(e) => {
-              setLinkUrl(e.target.value);
-              setLinkError(null);
+              setFindQuery(e.target.value);
+              setFindStatus(null);
             }}
-            placeholder="https://doi.org/10.1038/... or /preview/articles/..."
-            className="flex-1 min-w-[240px] px-2.5 py-1 rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs"
+            placeholder="Find in manuscript..."
+            className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
           />
+          <input
+            type="text"
+            aria-label="Replace with text"
+            value={replaceQuery}
+            onChange={(e) => setReplaceQuery(e.target.value)}
+            placeholder="Replace with..."
+            className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+          />
+          <span className="font-mono text-[11px] text-slate-600 dark:text-slate-400">
+            {findQuery ? `${findMatchesCount} match(es)` : 'Enter search term'}
+          </span>
           <button
             type="button"
-            onClick={handleApplyLink}
-            className="px-3 py-1 rounded bg-[#087f83] text-white text-xs font-medium hover:bg-[#086b70]"
+            disabled={findMatchesCount === 0}
+            onClick={() => handleReplaceMatches(false)}
+            className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-medium disabled:opacity-40"
           >
-            Apply Link
+            Replace Next
+          </button>
+          <button
+            type="button"
+            disabled={findMatchesCount === 0}
+            onClick={() => handleReplaceMatches(true)}
+            className="px-2.5 py-1 rounded bg-[#087f83] text-white font-semibold disabled:opacity-40"
+          >
+            Replace All
           </button>
           <button
             type="button"
             onClick={() => {
-              setLinkInputOpen(false);
-              setLinkError(null);
+              setFindBarOpen(false);
+              setFindStatus(null);
             }}
-            className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-600 text-xs"
+            className="p-1 text-slate-400 hover:text-slate-700"
           >
-            Cancel
+            <X className="w-3.5 h-3.5" />
           </button>
-          {linkError && (
-            <span className="w-full text-xs text-red-600 dark:text-red-400 font-medium">
-              {linkError}
+          {findStatus && (
+            <span className="w-full text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">
+              {findStatus}
             </span>
           )}
         </div>
       )}
 
-      {/* H1 Demotion / Sanitization Warning Notice */}
+      {/* Safe Link Validation Sub-bar */}
+      {editorMode === 'visual' && linkBarOpen && (
+        <div className="px-4 py-2.5 bg-slate-100/90 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center gap-2 text-xs">
+          <label
+            htmlFor="tiptap-link-url"
+            className="font-medium text-slate-700 dark:text-slate-300"
+          >
+            Destination URL:
+          </label>
+          <input
+            id="tiptap-link-url"
+            type="text"
+            value={linkUrlInput}
+            onChange={(e) => setLinkUrlInput(e.target.value)}
+            placeholder="https://doi.org/10.1038/... or /preview/articles/..."
+            className="flex-1 min-w-[240px] px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-mono text-xs"
+          />
+          <button
+            type="button"
+            onClick={handleApplyLink}
+            className="px-2.5 py-1 rounded bg-[#087f83] text-white font-medium flex items-center gap-1"
+          >
+            <Check className="w-3.5 h-3.5" />
+            <span>Apply Link</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              editor.chain().focus().unsetLink().run();
+              setLinkBarOpen(false);
+            }}
+            className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300"
+          >
+            Remove
+          </button>
+          <button
+            type="button"
+            onClick={() => setLinkBarOpen(false)}
+            className="p-1 text-slate-400 hover:text-slate-600"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+          {linkError && (
+            <div className="w-full text-red-600 dark:text-red-400 flex items-center gap-1.5 font-medium mt-1">
+              <AlertCircle className="w-3.5 h-3.5" />
+              <span>{linkError}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* H1 Demotion / Paste Safety Notice */}
       {pasteNotice && (
-        <div
-          role="status"
-          className="px-4 py-2 bg-amber-50 dark:bg-amber-950/60 border-b border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-200 flex items-center justify-between gap-2"
-        >
+        <div className="px-4 py-2 bg-amber-50 dark:bg-amber-950/60 border-b border-amber-200 dark:border-amber-800/80 flex items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-200">
           <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
             <span>{pasteNotice}</span>
           </div>
           <button
             type="button"
             onClick={() => setPasteNotice(null)}
-            className="text-[11px] underline shrink-0"
+            className="text-amber-700 dark:text-amber-300 hover:underline text-[11px] font-medium"
           >
             Dismiss
           </button>
         </div>
       )}
 
-      {/* Tiptap Writing Canvas */}
-      <EditorContent editor={editor} />
+      {/* Main Writing Canvas or HTML Source Panel */}
+      {editorMode === 'html_source' ? (
+        <HtmlSourcePanel
+          canonicalBodyHtml={sanitizeAndDemoteBodyH1(editor.getHTML(), trustedSources).sanitizedHtml}
+          trustedImageSources={trustedSources}
+          rawBuffer={rawHtmlBuffer}
+          onChangeRawBuffer={setRawHtmlBuffer}
+          onApplyValidatedHtml={(sanitizedHtml, demotedH1Count, summaryNote) => {
+            editor.commands.setContent(sanitizedHtml, { emitUpdate: false });
+            setRawHtmlBuffer(formatEditorialHtmlSource(sanitizedHtml));
+            if (demotedH1Count > 0) {
+              setPasteNotice(
+                `Normalized ${demotedH1Count} body <h1> tag(s) to <h2> when applying HTML Source.`
+              );
+              onDemotedH1?.(demotedH1Count);
+            } else {
+              setPasteNotice('Applied HTML Source changes to Visual Editor.');
+            }
+            onChange?.(
+              sanitizedHtml,
+              editor.getJSON() as Record<string, unknown>,
+              demotedH1Count
+            );
+            onChangeHtml?.(sanitizedHtml);
+            onApplyHtmlSource?.(sanitizedHtml, summaryNote);
+            setEditorMode('visual');
+          }}
+          onExitToVisual={() => setEditorMode('visual')}
+        />
+      ) : (
+        <EditorContent editor={editor} />
+      )}
     </div>
   );
 }

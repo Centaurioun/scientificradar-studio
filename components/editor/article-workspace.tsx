@@ -27,7 +27,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { useStudio } from '@/lib/studio-context';
-import { Article, ArticleStatus, SaveState } from '@/lib/types';
+import { Article, ArticleStatus, MediaAsset, SaveState } from '@/lib/types';
 import {
   MAX_EDITORIAL_TAGS,
   calculateReadingTimeMinutes,
@@ -154,6 +154,9 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   // Navigation Guard & Pre-Publish Dialog
   const [pendingNavHref, setPendingNavHref] = useState<string | null>(null);
   const [prePublishOpen, setPrePublishOpen] = useState(false);
+  const [figurePickerOpen, setFigurePickerOpen] = useState(false);
+  const [pendingFigureInsert, setPendingFigureInsert] = useState<MediaAsset | null>(null);
+  const titleTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Inline creation inputs
   const [newTagName, setNewTagName] = useState('');
@@ -166,6 +169,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
 
   const isDirty = saveState === 'dirty' || saveState === 'failed';
   const lastSyncedVersionRef = useRef<number | undefined>(existingArticle?.version);
+
+  // Auto-grow Article Title (H1) textarea whenever title or mode changes
+  useEffect(() => {
+    const el = titleTextareaRef.current;
+    if (!el) return;
+    el.style.height = '0px';
+    el.style.height = `${Math.max(44, el.scrollHeight)}px`;
+  }, [title, activeMode]);
 
   // Sync when switching article ID or when external version updates (e.g. Quick Fix / Revision Restore)
   useEffect(() => {
@@ -823,21 +834,34 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 </div>
               </div>
 
-              {/* Article Title (The ONLY H1) */}
+              {/* Article Title (The ONLY H1) — Auto-growing multi-line textarea (SRS-ED-003) */}
               <div>
-                <label htmlFor="article-title-input" className="sr-only">
-                  Article Title (H1)
-                </label>
-                <input
+                <div className="mb-1 flex items-center justify-between text-[11px] text-slate-400">
+                  <label htmlFor="article-title-input" className="font-semibold uppercase tracking-wider text-slate-500">
+                    Article Title (H1)
+                  </label>
+                  <span data-testid="article-title-char-count" className="font-mono">
+                    {title.trim().length} chars
+                  </span>
+                </div>
+                <textarea
+                  ref={titleTextareaRef}
                   id="article-title-input"
-                  type="text"
+                  aria-label="Article Title (H1)"
+                  rows={1}
                   value={title}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                    }
+                  }}
                   onChange={(e) => {
-                    setTitle(e.target.value);
+                    const normalized = e.target.value.replace(/[\r\n]+/g, ' ');
+                    setTitle(normalized);
                     markDirty();
                   }}
                   placeholder="Enter scientific article title (sole page H1)…"
-                  className="w-full rounded-lg border border-transparent bg-transparent px-2 py-1.5 font-serif text-3xl font-bold tracking-tight text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white focus:outline-hidden dark:text-white dark:focus:bg-slate-900"
+                  className="w-full resize-none overflow-hidden rounded-lg border border-transparent bg-transparent px-2 py-1.5 font-serif text-2xl sm:text-3xl font-bold leading-snug tracking-tight text-slate-900 break-words placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white focus:outline-hidden dark:text-white dark:focus:bg-slate-900"
                 />
               </div>
 
@@ -889,6 +913,19 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
               <ArticleTiptapEditor
                 contentHtml={bodyHtml}
                 knowledgeLinks={knowledgeLinks}
+                availableSources={sources.filter((s) => selectedSourceIds.includes(s.id))}
+                trustedImageSources={new Set(media.map((m) => m.src))}
+                pendingFigureInsert={pendingFigureInsert}
+                onFigureInserted={() => setPendingFigureInsert(null)}
+                onRequestMediaInsert={() => setFigurePickerOpen(true)}
+                onApplyHtmlSource={(sanitizedHtml) => {
+                  setBodyHtml(sanitizedHtml);
+                  markDirty();
+                  void performSave(
+                    true,
+                    `Applied sanitized HTML Source edits by ${activeRole}`
+                  );
+                }}
                 onChangeHtml={(html) => {
                   setBodyHtml(html);
                   markDirty();
@@ -1308,6 +1345,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                                 type="checkbox"
                                 checked={checked}
                                 onChange={() => {
+                                  if (
+                                    checked &&
+                                    bodyHtml.includes(`data-citation-source-id="${src.id}"`)
+                                  ) {
+                                    setWorkflowFeedback(
+                                      `Warning: Source "${src.title}" is cited inline in the manuscript body. Detaching it leaves an unlinked citation marker until resolved.`
+                                    );
+                                  }
                                   setSelectedSourceIds((prev) =>
                                     checked
                                       ? prev.filter((id) => id !== src.id)
@@ -1922,6 +1967,81 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
               >
                 Save & Leave
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Media Library Figure Insertion Modal (SRS-ED-007) */}
+      {figurePickerOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="figure-picker-modal-title"
+        >
+          <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-5 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
+              <div>
+                <h3
+                  id="figure-picker-modal-title"
+                  className="text-sm font-bold text-slate-900 dark:text-white"
+                >
+                  Insert Scientific Figure into Manuscript Body
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Select a figure from the local Media Library. Scientific diagrams and charts default to{' '}
+                  <code className="font-mono font-bold">layout=&quot;locked&quot;</code>.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFigurePickerOpen(false)}
+                className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 grid max-h-96 grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2">
+              {media.map((asset) => (
+                <div
+                  key={asset.id}
+                  className="flex flex-col justify-between rounded-xl border border-slate-200 p-3 dark:border-slate-800"
+                >
+                  <div>
+                    <div className="mb-2 flex h-24 flex-col items-center justify-center overflow-hidden rounded-lg bg-slate-950 p-3 text-center">
+                      <ImageIcon className="h-6 w-6 text-indigo-400" />
+                      <span className="mt-1 truncate max-w-full font-mono text-[10px] text-slate-300">
+                        {asset.filename}
+                      </span>
+                    </div>
+                    <p className="text-xs font-bold text-slate-900 dark:text-white">
+                      {asset.title}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-slate-500 line-clamp-2">
+                      {asset.caption || asset.altText}
+                    </p>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-2 dark:border-slate-800">
+                    <span className="rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                      {asset.kind} · {asset.layout}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingFigureInsert(asset);
+                        setWorkflowFeedback(
+                          `Inserted figure "${asset.title}" with non-destructive ${asset.layout || 'locked'} layout policy.`
+                        );
+                        setFigurePickerOpen(false);
+                      }}
+                      className="rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-indigo-700"
+                    >
+                      Insert Figure
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>

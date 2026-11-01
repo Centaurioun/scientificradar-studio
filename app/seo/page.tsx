@@ -28,6 +28,7 @@ export default function SeoCenterPage() {
     media,
     knowledgeLinks,
     integrations,
+    auditReportsByArticleId,
     runAndStoreArticleAudit,
   } = useStudio();
 
@@ -39,6 +40,7 @@ export default function SeoCenterPage() {
 
   const auditedArticles = useMemo(() => {
     return articles.map((article) => {
+      const storedReport = auditReportsByArticleId?.[article.id];
       const report = runArticleAudit({
         article,
         allArticles: articles,
@@ -49,6 +51,11 @@ export default function SeoCenterPage() {
         knowledgeLinks,
         integrations,
       });
+      const storedStatus: 'current' | 'stale' | 'none' = !storedReport
+        ? 'none'
+        : storedReport.articleFingerprint === report.articleFingerprint
+        ? 'current'
+        : 'stale';
 
       const titleLenFinding = report.findings.find(
         (f) => f.ruleId === 'metadata.seo_title.length' || f.ruleId === 'seo.title.length'
@@ -76,6 +83,8 @@ export default function SeoCenterPage() {
       return {
         article,
         report,
+        storedReport,
+        storedStatus,
         overallStatus,
         titleLenFinding,
         descLenFinding,
@@ -84,7 +93,7 @@ export default function SeoCenterPage() {
         tagFinding,
       };
     });
-  }, [articles, categories, tags, sources, media, knowledgeLinks, integrations]);
+  }, [articles, categories, tags, sources, media, knowledgeLinks, integrations, auditReportsByArticleId]);
 
   const filteredItems = useMemo(() => {
     return auditedArticles.filter((item) => {
@@ -339,6 +348,8 @@ export default function SeoCenterPage() {
                   ({
                     article: art,
                     report,
+                    storedReport,
+                    storedStatus,
                     overallStatus,
                     titleLenFinding,
                     descLenFinding,
@@ -469,6 +480,21 @@ export default function SeoCenterPage() {
                             <div className="text-[11px] text-slate-500 font-mono">
                               {report.counts.error}E · {report.counts.warning}W ·{' '}
                               {report.counts.pass}P · {report.counts.unverified}U
+                            </div>
+                            <div>
+                              {storedStatus === 'current' ? (
+                                <span className="inline-block rounded bg-emerald-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+                                  Stored Audit Current (v{art.version})
+                                </span>
+                              ) : storedStatus === 'stale' ? (
+                                <span className="inline-block rounded bg-amber-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+                                  Stored Audit Stale (Draft v{art.version})
+                                </span>
+                              ) : (
+                                <span className="inline-block rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                                  Live Preview (Unsaved Audit)
+                                </span>
+                              )}
                             </div>
                           </div>
                         </td>

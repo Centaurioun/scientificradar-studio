@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { commitSnapshotMutation } from './studio-persistence';
+import { commitSnapshotMutation, createEntityWriteIntent } from './studio-persistence';
 
 type Snapshot = { storageRevision?: number; values: string[] };
 
@@ -91,4 +91,44 @@ describe('commitSnapshotMutation', () => {
     );
     assert.deepEqual(db.value?.values, ['committed']);
   });
+
+  it('keeps pre-generated EntityWriteIntent IDs identical across optimistic and committed replays (SRS-DATA-003)', async () => {
+    const db = new SerializedMemoryDb();
+    db.value = { storageRevision: 1, values: [] };
+    const intent = createEntityWriteIntent('cat', undefined, new Date('2026-11-01T12:00:00.000Z'));
+    assert.match(intent.id, /^cat-[a-z0-9-]+$/i);
+    assert.equal(intent.timestamp, '2026-11-01T12:00:00.000Z');
+
+    const applyUpdate = (state: Snapshot): Snapshot => ({
+      ...state,
+      values: [...state.values, `${intent.id}@${intent.timestamp}`],
+    });
+
+    const optimistic = applyUpdate(db.value);
+    const committed = await commitSnapshotMutation<Snapshot, string>(
+      db,
+      'studio_state',
+      'root',
+      { values: ['seed-should-not-be-used'] },
+      (latest) => ({ snapshot: applyUpdate(latest), result: intent.id })
+    );
+
+    assert.deepEqual(optimistic.values, committed.snapshot.values);
+    assert.equal(committed.result, intent.id);
+  });
+
+  it('preserves an intentionally empty persisted array rather than re-seeding fallback values (SRS-CODE-001)', async () => {
+    const db = new SerializedMemoryDb();
+    db.value = { storageRevision: 2, values: [] };
+    const committed = await commitSnapshotMutation<Snapshot, number>(
+      db,
+      'studio_state',
+      'root',
+      { values: ['seed-article-1', 'seed-article-2'] },
+      (latest) => ({ snapshot: latest, result: latest.values.length })
+    );
+    assert.equal(committed.result, 0);
+    assert.deepEqual(committed.snapshot.values, []);
+  });
 });
+

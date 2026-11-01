@@ -57,9 +57,10 @@ import {
 } from './datetime/format';
 import { AuditReport, FixProposal } from './audit/types';
 import { computeArticleFingerprint, runArticleAudit } from './audit/run-article-audit';
+import { evaluatePublishGate } from './audit/publish-policy';
 import { validateAndSanitizeSnapshot } from './backup-validation';
 import { trustedMediaSourceSet } from './html-security';
-import { commitSnapshotMutation } from './studio-persistence';
+import { commitSnapshotMutation, createEntityWriteIntent } from './studio-persistence';
 
 const DB_NAME = 'scientificradar-studio-p0-db';
 const DB_VERSION = 1;
@@ -211,12 +212,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const [persistenceMode, setPersistenceMode] = useState<'indexeddb' | 'memory_fallback'>('indexeddb');
   const [simulateSaveFailure, setSimulateSaveFailure] = useState(false);
   const stateRef = useRef<StudioDatabaseSnapshot>(state);
+  const committedStateRef = useRef<StudioDatabaseSnapshot>(state);
   const mutationTailRef = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
 
-  // Load persisted state from IndexedDB (with localStorage backup sync for instant read)
+  // Load persisted state from IndexedDB (preserving intentionally empty collections on reload per SRS-CODE-001)
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -234,17 +236,21 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             if (!validated.snapshot) throw new Error(validated.error || 'Persisted snapshot is invalid');
             const migrated = validated.snapshot as unknown as StudioDatabaseSnapshot;
             if (!cancelled) {
+              committedStateRef.current = migrated;
+              stateRef.current = migrated;
               setState(migrated);
               document.documentElement.classList.toggle('dark', migrated.theme === 'dark');
               setIsHydrated(true);
             }
             return;
           }
-          // Seed initial DB
+          // Seed initial DB only when no root record exists yet
           const seed = getInitialSeedSnapshot();
           await transaction.store.put(seed, STATE_KEY);
           await transaction.done;
           if (!cancelled) {
+            committedStateRef.current = seed;
+            stateRef.current = seed;
             setState(seed);
             document.documentElement.classList.toggle('dark', seed.theme === 'dark');
             setIsHydrated(true);
@@ -285,6 +291,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             getInitialSeedSnapshot(),
             () => ({ snapshot: nextState, result: undefined })
           );
+          committedStateRef.current = committed.snapshot;
           stateRef.current = committed.snapshot;
           return { ok: true, volatileMemoryOnly: false };
         } else {
@@ -305,32 +312,45 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const updateState = useCallback(
     (updater: (prev: StudioDatabaseSnapshot) => StudioDatabaseSnapshot) => {
-      // React updater functions must stay pure. Apply optimistically, then replay
-      // the same functional mutation against the authoritative IDB record.
+      if (simulateSaveFailure) {
+        return Promise.resolve(false);
+      }
+      // React updater functions must stay pure and use pre-generated EntityWriteIntent IDs/timestamps.
       const optimistic = updater(stateRef.current);
       stateRef.current = optimistic;
       setState(optimistic);
-      const queued = mutationTailRef.current.then(async () => {
-        if (simulateSaveFailure) return false;
-        const db = await getDb();
-        if (!db) {
+      const queued = mutationTailRef.current
+        .then(async () => {
+          if (simulateSaveFailure) {
+            stateRef.current = committedStateRef.current;
+            setState(committedStateRef.current);
+            return false;
+          }
+          const db = await getDb();
+          if (!db) {
+            setPersistenceMode('memory_fallback');
+            stateRef.current = committedStateRef.current;
+            setState(committedStateRef.current);
+            return false;
+          }
+          const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, undefined>(
+            db,
+            STORE_NAME,
+            STATE_KEY,
+            getInitialSeedSnapshot(),
+            (latest) => ({ snapshot: updater(latest), result: undefined })
+          );
+          committedStateRef.current = committed.snapshot;
+          stateRef.current = committed.snapshot;
+          setState(committed.snapshot);
+          return true;
+        })
+        .catch(() => {
           setPersistenceMode('memory_fallback');
+          stateRef.current = committedStateRef.current;
+          setState(committedStateRef.current);
           return false;
-        }
-        const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, undefined>(
-          db,
-          STORE_NAME,
-          STATE_KEY,
-          getInitialSeedSnapshot(),
-          (latest) => ({ snapshot: updater(latest), result: undefined })
-        );
-        stateRef.current = committed.snapshot;
-        setState(committed.snapshot);
-        return true;
-      }).catch(() => {
-        setPersistenceMode('memory_fallback');
-        return false;
-      });
+        });
       mutationTailRef.current = queued.then(() => undefined);
       return queued;
     },
@@ -343,7 +363,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       action: string,
       targetType: AuditEvent['targetType'],
       targetTitle: string,
-      details: string
+      details: string,
+      intent?: { auditId?: string; timestamp?: string }
     ): AuditEvent[] => {
       const actorMap: Record<UserRole, string> = {
         owner: 'Admin Owner (Demo)',
@@ -352,8 +373,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         reviewer: 'Prof. Marcus Thorne (Reviewer)',
       };
       const event: AuditEvent = {
-        id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        timestamp: new Date().toISOString(),
+        id: intent?.auditId || `aud-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        timestamp: intent?.timestamp || new Date().toISOString(),
         actor: actorMap[prev.activeRole],
         role: prev.activeRole,
         action,
@@ -378,6 +399,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const setActiveRole = useCallback(
     (activeRole: UserRole) => {
+      const intent = createEntityWriteIntent('role');
       updateState((prev) => ({
         ...prev,
         activeRole,
@@ -386,7 +408,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           `Switched demo role to ${activeRole.toUpperCase()}`,
           'system',
           'Role Switcher (Demo)',
-          'Simulated editorial permission profile changed'
+          'Simulated editorial permission profile changed',
+          intent
         ),
       }));
     },
@@ -395,6 +418,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const setDateTimePreferences = useCallback(
     (prefs: Partial<DateTimePreferences>) => {
+      const intent = createEntityWriteIntent('dt');
       updateState((prev) => {
         const nextPrefs: DateTimePreferences = {
           ...(prev.dateTimePreferences || DEFAULT_ADMIN_DATETIME_PREFS),
@@ -408,7 +432,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             'Updated Date & Time localization preferences',
             'system',
             'Date & Time Settings',
-            `Locale: ${nextPrefs.locale} · Time Zone: ${nextPrefs.timeZone} · Clock: ${nextPrefs.hourCycle}`
+            `Locale: ${nextPrefs.locale} · Time Zone: ${nextPrefs.timeZone} · Clock: ${nextPrefs.hourCycle}`,
+            intent
           ),
         };
       });
@@ -418,6 +443,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const setNavPreset = useCallback(
     (preset: NavPreset) => {
+      const intent = createEntityWriteIntent('nav');
       updateState((prev) => ({
         ...prev,
         navigation: {
@@ -430,7 +456,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           `Applied navigation preset: ${preset}`,
           'navigation',
           'Sidebar Navigation',
-          `Preset set to ${preset}`
+          `Preset set to ${preset}`,
+          intent
         ),
       }));
     },
@@ -439,6 +466,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const toggleNavItemVisibility = useCallback(
     (id: NavItemId) => {
+      const intent = createEntityWriteIntent('nav');
       updateState((prev) => {
         const nextVal = !prev.navigation.visibleItems[id];
         return {
@@ -456,7 +484,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             `${nextVal ? 'Showed' : 'Hid'} sidebar item: ${id}`,
             'navigation',
             id,
-            'UI menu visibility changed (records remain preserved in local store)'
+            'UI menu visibility changed (records remain preserved in local store)',
+            intent
           ),
         };
       });
@@ -510,6 +539,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   );
 
   const resetNavigationToBalanced = useCallback(() => {
+    const intent = createEntityWriteIntent('nav');
     updateState((prev) => ({
       ...prev,
       navigation: getDefaultNavigationPreference(),
@@ -518,7 +548,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         'Restored default Balanced navigation',
         'navigation',
         'Sidebar & Dashboard',
-        'Reset all menu visibility and widget toggles to Balanced defaults'
+        'Reset all menu visibility and widget toggles to Balanced defaults',
+        intent
       ),
     }));
   }, [updateState, appendAudit]);
@@ -531,9 +562,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         createRevision?: boolean;
         revisionSource?: ArticleRevision['source'];
         revisionSummary?: string;
+        intent?: { id: string; timestamp: string; auditId: string; revisionSuffix?: string };
       }
     ): { nextState: StudioDatabaseSnapshot; updatedArticle: Article; demotedH1Count: number } => {
-      const now = new Date().toISOString();
+      const now = options?.intent?.timestamp || new Date().toISOString();
       const existing = articleInput.id
         ? prev.articles.find((a) => a.id === articleInput.id)
         : undefined;
@@ -561,7 +593,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const normalizedTags = normalizeArticleTagIds(articleInput.tagIds ?? existing?.tagIds ?? []);
 
       const updatedArticle: Article = {
-        id: existing?.id || articleInput.id || `art-${Date.now()}`,
+        id: existing?.id || articleInput.id || options?.intent?.id || `art-${Date.now()}`,
         locale,
         title: articleInput.title.trim() || 'Untitled Scientific Article',
         slug: uniqueSlug,
@@ -601,8 +633,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
       let nextRevisions = prev.revisions;
       if (options?.createRevision || !existing) {
+        const revSuffix = options?.intent?.revisionSuffix || String(Date.now());
         const rev: ArticleRevision = {
-          id: `rev-${updatedArticle.id}-v${updatedArticle.version}-${Date.now()}`,
+          id: `rev-${updatedArticle.id}-v${updatedArticle.version}-${revSuffix}`,
           articleId: updatedArticle.id,
           version: updatedArticle.version,
           snapshot: updatedArticle,
@@ -624,7 +657,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           existing ? 'Updated article' : 'Created new article',
           'article',
           updatedArticle.title,
-          `Slug: /${updatedArticle.slug} · Status: ${updatedArticle.status} · v${updatedArticle.version}`
+          `Slug: /${updatedArticle.slug} · Status: ${updatedArticle.status} · v${updatedArticle.version}`,
+          options?.intent
         ),
       };
 
@@ -645,6 +679,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (simulateSaveFailure) throw new Error('Simulated storage write failure; changes remain unsaved.');
       const db = await getDb();
       if (!db) throw new Error('IndexedDB is unavailable; changes remain unsaved.');
+      const intent = createEntityWriteIntent('art', articleInput.id);
       type Result = { conflict: string } | { built: ReturnType<typeof buildUpdatedArticleSnapshot> };
       const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, Result>(db, STORE_NAME, STATE_KEY, getInitialSeedSnapshot(), (latest) => {
         const existing = articleInput.id ? latest.articles.find((a) => a.id === articleInput.id) : undefined;
@@ -654,10 +689,58 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         if (existing && articleInput.version !== undefined && existing.version !== articleInput.version) {
           return { snapshot: latest, result: { conflict: `Article changed in another tab (stored v${existing.version}; expected v${articleInput.version}).` } };
         }
-        const built = buildUpdatedArticleSnapshot(latest, articleInput, options);
+        const targetStatus = articleInput.status ?? existing?.status ?? 'draft';
+        if (existing && articleInput.status && articleInput.status !== existing.status) {
+          const roleCheck = canTransitionStatus(existing.status, articleInput.status, latest.activeRole);
+          if (!roleCheck.allowed) {
+            return { snapshot: latest, result: { conflict: roleCheck.reason || 'Workflow status transition not permitted.' } };
+          }
+        } else if (existing && articleInput.status === 'scheduled' && existing.status === 'scheduled') {
+          if (latest.activeRole === 'author' || latest.activeRole === 'reviewer') {
+            return { snapshot: latest, result: { conflict: 'Only Editors or Owners can reschedule articles.' } };
+          }
+        }
+        const built = buildUpdatedArticleSnapshot(latest, articleInput, {
+          ...options,
+          intent: { ...intent, revisionSuffix: intent.id },
+        });
+        if (
+          (targetStatus === 'published' || targetStatus === 'scheduled') &&
+          (!existing || existing.status !== targetStatus)
+        ) {
+          const auditReport = runArticleAudit({
+            article: built.updatedArticle,
+            allArticles: built.nextState.articles,
+            categories: latest.categories,
+            tags: latest.tags,
+            sources: latest.sources,
+            media: latest.media,
+            knowledgeLinks: latest.knowledgeLinks,
+            integrations: latest.integrations,
+            executedAt: intent.timestamp,
+          });
+          const gate = evaluatePublishGate({
+            report: auditReport,
+            currentStatus: existing?.status || 'draft',
+            targetStatus,
+            activeRole: latest.activeRole,
+          });
+          if (gate.isBlocked) {
+            return {
+              snapshot: latest,
+              result: {
+                conflict:
+                  gate.roleError ||
+                  gate.blockers[0]?.title ||
+                  'Article has publication blockers that must be resolved before publishing or scheduling.',
+              },
+            };
+          }
+        }
         return { snapshot: built.nextState, result: { built } };
       });
       if ('conflict' in committed.result) throw new Error(committed.result.conflict);
+      committedStateRef.current = committed.snapshot;
       stateRef.current = committed.snapshot;
       setState(committed.snapshot);
       return { article: committed.result.built.updatedArticle, demotedH1Count: committed.result.built.demotedH1Count };
@@ -683,6 +766,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         setPersistenceMode('memory_fallback');
         return { ok: false, savedAt: new Date().toISOString(), version: options?.expectedVersion || 1, demotedH1Count: 0, volatileMemoryOnly: true, error: 'IndexedDB is unavailable. Draft remains unsaved in this tab.' };
       }
+      const intent = createEntityWriteIntent('art', articleInput.id);
       try {
         type ArticleSaveResult = { conflict: string; version: number; savedAt: string; demotedH1Count: number } | { built: ReturnType<typeof buildUpdatedArticleSnapshot> };
         const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, ArticleSaveResult>(
@@ -693,12 +777,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           (latest) => {
             const existing = articleInput.id ? latest.articles.find((a) => a.id === articleInput.id) : undefined;
             if (articleInput.id && !existing && options?.expectedVersion !== undefined) {
-              return { snapshot: latest, result: { conflict: `Article ${articleInput.id} was removed from storage while this draft was open.`, version: options.expectedVersion, savedAt: new Date().toISOString(), demotedH1Count: 0 } };
+              return { snapshot: latest, result: { conflict: `Article ${articleInput.id} was removed from storage while this draft was open.`, version: options.expectedVersion, savedAt: intent.timestamp, demotedH1Count: 0 } };
             }
             if (existing && options?.expectedVersion !== undefined && existing.version !== options.expectedVersion) {
               return { snapshot: latest, result: { conflict: `Version conflict: stored article is v${existing.version} while editor base was v${options.expectedVersion}.`, version: existing.version, savedAt: existing.updatedAt, demotedH1Count: 0 } };
             }
-            const built = buildUpdatedArticleSnapshot(latest, articleInput, options);
+            const built = buildUpdatedArticleSnapshot(latest, articleInput, {
+              ...options,
+              intent: { ...intent, revisionSuffix: intent.id },
+            });
             return { snapshot: built.nextState, result: { built } };
           }
         );
@@ -706,13 +793,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           return { ok: false, savedAt: committed.result.savedAt, version: committed.result.version, demotedH1Count: 0, volatileMemoryOnly: false, error: committed.result.conflict };
         }
         const built = committed.result.built;
+        committedStateRef.current = committed.snapshot;
         stateRef.current = committed.snapshot;
         setState(committed.snapshot);
         return { ok: true, savedAt: built.updatedArticle.updatedAt, version: built.updatedArticle.version, demotedH1Count: built.demotedH1Count, volatileMemoryOnly: false };
       } catch (err) {
         return {
           ok: false,
-          savedAt: new Date().toISOString(),
+          savedAt: intent.timestamp,
           version: options?.expectedVersion || 1,
           demotedH1Count: 0,
           volatileMemoryOnly: false,
@@ -725,6 +813,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const runAndStoreArticleAudit = useCallback(
     async (articleId: string): Promise<{ ok: boolean; persisted: boolean; report?: AuditReport; error?: string }> => {
+      const intent = createEntityWriteIntent('audit', articleId);
       const calculate = (snapshot: StudioDatabaseSnapshot) => {
         const target = snapshot.articles.find((article) => article.id === articleId);
         if (!target) return undefined;
@@ -737,7 +826,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           media: snapshot.media,
           knowledgeLinks: snapshot.knowledgeLinks,
           integrations: snapshot.integrations,
-          executedAt: new Date().toISOString(),
+          executedAt: intent.timestamp,
         });
       };
       const inMemoryReport = calculate(stateRef.current);
@@ -768,7 +857,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
               media: latest.media,
               knowledgeLinks: latest.knowledgeLinks,
               integrations: latest.integrations,
-              executedAt: new Date().toISOString(),
+              executedAt: intent.timestamp,
             });
             return {
               snapshot: {
@@ -779,7 +868,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
                   'Executed SEO & Editorial Quality Audit',
                   'article',
                   target.title,
-                  `Pass: ${report.counts.pass} · Warn: ${report.counts.warning} · Error: ${report.counts.error} · Unverified: ${report.counts.unverified}`
+                  `Pass: ${report.counts.pass} · Warn: ${report.counts.warning} · Error: ${report.counts.error} · Unverified: ${report.counts.unverified}`,
+                  intent
                 ),
               },
               result: { report, title: target.title },
@@ -787,6 +877,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           }
         );
         if ('error' in committed.result) return { ok: false, persisted: false, error: committed.result.error };
+        committedStateRef.current = committed.snapshot;
         stateRef.current = committed.snapshot;
         setState(committed.snapshot);
         return { ok: true, persisted: true, report: committed.result.report };
@@ -810,95 +901,102 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         setPersistenceMode('memory_fallback');
         return { ok: false, error: 'IndexedDB is unavailable; Quick Fix was not saved.' };
       }
+      const intent = createEntityWriteIntent('qf');
       try {
         type QuickFixResult = { error: string } | { updatedArticle: Article };
         const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, QuickFixResult>(db, STORE_NAME, STATE_KEY, getInitialSeedSnapshot(), (prev) => {
-        const article = prev.articles.find((a) => a.id === proposal.articleId);
-        if (!article) {
-          return { snapshot: prev, result: { error: 'Article not found' } };
-        }
-        const articleMedia = prev.media.filter((m) => m.id === article.featuredMediaId);
-        const articleSources = prev.sources.filter((s) => article.sourceIds.includes(s.id));
-        const currentFp = computeArticleFingerprint(article, articleMedia, articleSources);
-        if (proposal.baseFingerprint && proposal.baseFingerprint !== currentFp) {
-          return { snapshot: prev, result: { error: 'Article changed since this Quick Fix was generated. Re-run SEO Audit first.' } };
-        }
+          const article = prev.articles.find((a) => a.id === proposal.articleId);
+          if (!article) {
+            return { snapshot: prev, result: { error: 'Article not found' } };
+          }
+          const articleMedia = prev.media.filter((m) => m.id === article.featuredMediaId);
+          const articleSources = prev.sources.filter((s) => article.sourceIds.includes(s.id));
+          const currentFp = computeArticleFingerprint(article, articleMedia, articleSources);
+          if (proposal.baseFingerprint && proposal.baseFingerprint !== currentFp) {
+            return { snapshot: prev, result: { error: 'Article changed since this Quick Fix was generated. Re-run SEO Audit first.' } };
+          }
 
-        const now = new Date().toISOString();
-        const nextVersion = article.version + 1;
-        let nextArticle: Article = {
-          ...article,
-          seo: { ...article.seo },
-          categoryIds: [...article.categoryIds],
-          tagIds: [...article.tagIds],
-          version: nextVersion,
-          updatedAt: now,
-        };
+          const now = intent.timestamp;
+          const nextVersion = article.version + 1;
+          const nextArticle: Article = {
+            ...article,
+            seo: { ...article.seo },
+            categoryIds: [...article.categoryIds],
+            tagIds: [...article.tagIds],
+            version: nextVersion,
+            updatedAt: now,
+          };
 
-        if (proposal.targetPath === 'seo.title') {
-          nextArticle.seo.title = proposal.after;
-        } else if (proposal.targetPath === 'seo.description') {
-          nextArticle.seo.description = proposal.after;
-        } else if (proposal.targetPath === 'seo.canonical') {
-          nextArticle.seo.canonical = proposal.after;
-        } else if (proposal.targetPath === 'slug') {
-          nextArticle.slug = ensureUniqueSlug(proposal.after, nextArticle.locale, prev.articles, nextArticle.id);
-        } else if (proposal.targetPath === 'bodyHtml') {
-          nextArticle.bodyHtml = sanitizeAndDemoteBodyH1(proposal.after).sanitizedHtml;
-        } else if (proposal.targetPath === 'categoryIds') {
-          const validSubIds = new Set(
-            prev.categories.filter((c) => c.parentId === nextArticle.primaryCategoryId).map((c) => c.id)
-          );
-          nextArticle.categoryIds = Array.from(
-            new Set([
-              ...(nextArticle.primaryCategoryId ? [nextArticle.primaryCategoryId] : []),
-              ...nextArticle.categoryIds.filter((id) => validSubIds.has(id)),
-            ])
-          );
-        } else if (proposal.targetPath === 'tagIds') {
-          nextArticle.tagIds = normalizeArticleTagIds(nextArticle.tagIds).normalizedIds;
-        }
+          if (proposal.targetPath === 'seo.title') {
+            nextArticle.seo.title = proposal.after;
+          } else if (proposal.targetPath === 'seo.description') {
+            nextArticle.seo.description = proposal.after;
+          } else if (proposal.targetPath === 'seo.canonical') {
+            nextArticle.seo.canonical = proposal.after;
+          } else if (proposal.targetPath === 'slug') {
+            nextArticle.slug = ensureUniqueSlug(proposal.after, nextArticle.locale, prev.articles, nextArticle.id);
+          } else if (proposal.targetPath === 'bodyHtml') {
+            nextArticle.bodyHtml = sanitizeAndDemoteBodyH1(proposal.after).sanitizedHtml;
+          } else if (proposal.targetPath === 'categoryIds') {
+            const validSubIds = new Set(
+              prev.categories.filter((c) => c.parentId === nextArticle.primaryCategoryId).map((c) => c.id)
+            );
+            nextArticle.categoryIds = Array.from(
+              new Set([
+                ...(nextArticle.primaryCategoryId ? [nextArticle.primaryCategoryId] : []),
+                ...nextArticle.categoryIds.filter((id) => validSubIds.has(id)),
+              ])
+            );
+          } else if (proposal.targetPath === 'tagIds') {
+            nextArticle.tagIds = normalizeArticleTagIds(nextArticle.tagIds).normalizedIds;
+          }
 
-        const rev: ArticleRevision = {
-          id: `rev-${nextArticle.id}-v${nextVersion}-${Date.now()}`,
-          articleId: nextArticle.id,
-          version: nextVersion,
-          snapshot: nextArticle,
-          source: 'assistant_review',
-          createdAt: now,
-          summary: `Quick Fix applied (${proposal.ruleId}): ${proposal.label}`,
-        };
+          const rev: ArticleRevision = {
+            id: `rev-${nextArticle.id}-v${nextVersion}-${intent.id}`,
+            articleId: nextArticle.id,
+            version: nextVersion,
+            snapshot: nextArticle,
+            source: 'assistant_review',
+            createdAt: now,
+            summary: `Quick Fix applied (${proposal.ruleId}): ${proposal.label}`,
+          };
 
-        const nextArticles = prev.articles.map((a) => (a.id === nextArticle.id ? nextArticle : a));
-        const updatedReport = runArticleAudit({
-          article: nextArticle,
-          allArticles: nextArticles,
-          categories: prev.categories,
-          tags: prev.tags,
-          sources: prev.sources,
-          media: prev.media,
-          knowledgeLinks: prev.knowledgeLinks,
-          integrations: prev.integrations,
-        });
+          const nextArticles = prev.articles.map((a) => (a.id === nextArticle.id ? nextArticle : a));
+          const updatedReport = runArticleAudit({
+            article: nextArticle,
+            allArticles: nextArticles,
+            categories: prev.categories,
+            tags: prev.tags,
+            sources: prev.sources,
+            media: prev.media,
+            knowledgeLinks: prev.knowledgeLinks,
+            integrations: prev.integrations,
+            executedAt: now,
+          });
 
-        return { snapshot: {
-          ...prev,
-          articles: nextArticles,
-          revisions: [rev, ...prev.revisions],
-          auditReportsByArticleId: {
-            ...(prev.auditReportsByArticleId || {}),
-            [nextArticle.id]: updatedReport,
-          },
-          auditEvents: appendAudit(
-            prev,
-            `Applied deterministic Quick Fix (${proposal.ruleId})`,
-            'article',
-            nextArticle.title,
-            `${proposal.label} -> saved as v${nextVersion}`
-          ),
-        }, result: { updatedArticle: nextArticle } };
+          return {
+            snapshot: {
+              ...prev,
+              articles: nextArticles,
+              revisions: [rev, ...prev.revisions],
+              auditReportsByArticleId: {
+                ...(prev.auditReportsByArticleId || {}),
+                [nextArticle.id]: updatedReport,
+              },
+              auditEvents: appendAudit(
+                prev,
+                `Applied deterministic Quick Fix (${proposal.ruleId})`,
+                'article',
+                nextArticle.title,
+                `${proposal.label} -> saved as v${nextVersion}`,
+                intent
+              ),
+            },
+            result: { updatedArticle: nextArticle },
+          };
         });
         if ('error' in committed.result) return { ok: false, error: committed.result.error };
+        committedStateRef.current = committed.snapshot;
         stateRef.current = committed.snapshot;
         setState(committed.snapshot);
         return { ok: true, updatedArticle: committed.result.updatedArticle };
@@ -914,8 +1012,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (simulateSaveFailure) return { ok: false, error: 'Storage transaction failed; duplicate was not saved.' };
       const db = await getDb();
       if (!db) return { ok: false, error: 'IndexedDB is unavailable; duplicate was not saved.' };
-      const duplicateId = `art-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const now = new Date().toISOString();
+      const intent = createEntityWriteIntent('art');
       try {
         const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, { article?: Article; error?: string }>(
           db,
@@ -927,27 +1024,35 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             if (!orig) return { snapshot: latest, result: { error: 'Article not found.' } };
             const copy: Article = {
               ...orig,
-              id: duplicateId,
+              id: intent.id,
               title: `${orig.title} (Copy)`,
               slug: ensureUniqueSlug(`${orig.slug}-copy`, orig.locale, latest.articles),
               status: 'draft',
               publishedAt: undefined,
               scheduledAt: undefined,
-              createdAt: now,
-              updatedAt: now,
+              createdAt: intent.timestamp,
+              updatedAt: intent.timestamp,
               version: 1,
             };
             return {
               snapshot: {
                 ...latest,
                 articles: [copy, ...latest.articles],
-                auditEvents: appendAudit(latest, 'Duplicated article', 'article', copy.title, `Cloned from "${orig.title}" with unique slug /${copy.slug}`),
+                auditEvents: appendAudit(
+                  latest,
+                  'Duplicated article',
+                  'article',
+                  copy.title,
+                  `Cloned from "${orig.title}" with unique slug /${copy.slug}`,
+                  intent
+                ),
               },
               result: { article: copy },
             };
           }
         );
         if (committed.result.error || !committed.result.article) return { ok: false, error: committed.result.error || 'Duplicate was not saved.' };
+        committedStateRef.current = committed.snapshot;
         stateRef.current = committed.snapshot;
         setState(committed.snapshot);
         return { ok: true, article: committed.result.article };
@@ -964,6 +1069,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       nextStatus: ArticleStatus,
       note?: string
     ): Promise<{ ok: boolean; error?: string }> => {
+      if (simulateSaveFailure) {
+        return { ok: false, error: 'Storage transaction failed; article status was not saved.' };
+      }
+      const intent = createEntityWriteIntent('rn');
       let outcome: { ok: boolean; error?: string } = { ok: true };
       const committed = await updateState((prev) => {
         const article = prev.articles.find((a) => a.id === articleId);
@@ -977,12 +1086,42 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           return prev;
         }
 
-        const now = new Date().toISOString();
+        if (nextStatus === 'published' || nextStatus === 'scheduled') {
+          const auditReport = runArticleAudit({
+            article,
+            allArticles: prev.articles,
+            categories: prev.categories,
+            tags: prev.tags,
+            sources: prev.sources,
+            media: prev.media,
+            knowledgeLinks: prev.knowledgeLinks,
+            integrations: prev.integrations,
+            executedAt: intent.timestamp,
+          });
+          const gate = evaluatePublishGate({
+            report: auditReport,
+            currentStatus: article.status,
+            targetStatus: nextStatus,
+            activeRole: prev.activeRole,
+          });
+          if (gate.isBlocked) {
+            outcome = {
+              ok: false,
+              error:
+                gate.roleError ||
+                gate.blockers[0]?.title ||
+                'Article has publication blockers that must be resolved before publishing or scheduling.',
+            };
+            return prev;
+          }
+        }
+
+        const now = intent.timestamp;
         const nextVersion = article.version + 1;
         const reviewNotes = [...(article.reviewNotes || [])];
         if (note && note.trim()) {
           reviewNotes.unshift({
-            id: `rn-${Date.now()}`,
+            id: intent.id,
             articleId: article.id,
             authorName: `${prev.activeRole.toUpperCase()} (Demo)`,
             role: prev.activeRole,
@@ -1010,7 +1149,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         };
 
         const rev: ArticleRevision = {
-          id: `rev-${updated.id}-v${nextVersion}-${Date.now()}`,
+          id: `rev-${updated.id}-v${nextVersion}-${intent.id}`,
           articleId: updated.id,
           version: nextVersion,
           snapshot: updated,
@@ -1030,14 +1169,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             updated.title,
             nextStatus === 'published'
               ? 'Published in local demo store only — scientificradar.com remains untouched'
-              : `Transitioned ${article.status} -> ${nextStatus}`
+              : `Transitioned ${article.status} -> ${nextStatus}`,
+            intent
           ),
         };
       });
       if (!committed) return { ok: false, error: 'Storage transaction failed; article status was not saved.' };
       return outcome;
     },
-    [updateState, appendAudit]
+    [updateState, appendAudit, simulateSaveFailure]
   );
 
   const deleteArticle = useCallback(
@@ -1045,6 +1185,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (simulateSaveFailure) return { ok: false, error: 'Storage transaction failed; article was not deleted.' };
       const db = await getDb();
       if (!db) return { ok: false, error: 'IndexedDB is unavailable; article was not deleted.' };
+      const intent = createEntityWriteIntent('del', articleId);
       try {
         const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, { ok: boolean; error?: string }>(
           db,
@@ -1058,13 +1199,21 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
               snapshot: {
                 ...latest,
                 articles: latest.articles.filter((article) => article.id !== articleId),
-                auditEvents: appendAudit(latest, 'Deleted article', 'article', target.title, `Removed article /${target.slug} from local demo store`),
+                auditEvents: appendAudit(
+                  latest,
+                  'Deleted article',
+                  'article',
+                  target.title,
+                  `Removed article /${target.slug} from local demo store`,
+                  intent
+                ),
               },
               result: { ok: true },
             };
           }
         );
         if (!committed.result.ok) return committed.result;
+        committedStateRef.current = committed.snapshot;
         stateRef.current = committed.snapshot;
         setState(committed.snapshot);
         return { ok: true };
@@ -1080,8 +1229,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (simulateSaveFailure) return { ok: false, error: 'Storage transaction failed; revision was not restored.' };
       const db = await getDb();
       if (!db) return { ok: false, error: 'IndexedDB is unavailable; revision was not restored.' };
-      const now = new Date().toISOString();
-      const newRevisionId = `rev-restore-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const intent = createEntityWriteIntent('rev-restore');
       try {
         const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, { article?: Article; error?: string }>(
           db,
@@ -1105,15 +1253,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
                 trustedMediaSourceSet(latest.media.map((media) => media.src))
               ).sanitizedHtml,
               version: nextVersion,
-              updatedAt: now,
+              updatedAt: intent.timestamp,
             };
             const newRevision: ArticleRevision = {
-              id: newRevisionId,
+              id: intent.id,
               articleId: restoredArticle.id,
               version: nextVersion,
               snapshot: restoredArticle,
               source: 'restore',
-              createdAt: now,
+              createdAt: intent.timestamp,
               summary: `Restored from snapshot v${rev.version} (${rev.summary})`,
             };
             return {
@@ -1121,13 +1269,21 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
                 ...latest,
                 articles: latest.articles.map((article) => (article.id === restoredArticle.id ? restoredArticle : article)),
                 revisions: [newRevision, ...latest.revisions],
-                auditEvents: appendAudit(latest, `Restored version v${rev.version} as new v${nextVersion}`, 'article', restoredArticle.title, `Non-destructive version restore created v${nextVersion}`),
+                auditEvents: appendAudit(
+                  latest,
+                  `Restored version v${rev.version} as new v${nextVersion}`,
+                  'article',
+                  restoredArticle.title,
+                  `Non-destructive version restore created v${nextVersion}`,
+                  intent
+                ),
               },
               result: { article: restoredArticle },
             };
           }
         );
         if (committed.result.error || !committed.result.article) return { ok: false, error: committed.result.error || 'Revision was not restored.' };
+        committedStateRef.current = committed.snapshot;
         stateRef.current = committed.snapshot;
         setState(committed.snapshot);
         return { ok: true, article: committed.result.article };
@@ -1143,6 +1299,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       articleId: string,
       acceptedChanges: EditorialChange[]
     ): Promise<{ ok: boolean; error?: string; updatedArticle?: Article }> => {
+      if (simulateSaveFailure) {
+        return { ok: false, error: 'Storage transaction failed; accepted changes were not saved.' };
+      }
+      const intent = createEntityWriteIntent('assist');
       let result: { ok: boolean; error?: string; updatedArticle?: Article } = { ok: false };
       const committed = await updateState((prev) => {
         const article = prev.articles.find((a) => a.id === articleId);
@@ -1154,7 +1314,6 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           result = { ok: false, error: 'No changes selected to apply' };
           return prev;
         }
-        // Version conflict guard per Section 12
         const stale = acceptedChanges.some((c) => c.baseVersion !== article.version);
         if (stale) {
           result = {
@@ -1212,7 +1371,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        const now = new Date().toISOString();
+        const now = intent.timestamp;
         const nextVersion = article.version + 1;
         nextArticle = {
           ...nextArticle,
@@ -1225,7 +1384,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         };
 
         const rev: ArticleRevision = {
-          id: `rev-${nextArticle.id}-v${nextVersion}-${Date.now()}`,
+          id: `rev-${nextArticle.id}-v${nextVersion}-${intent.id}`,
           articleId: nextArticle.id,
           version: nextVersion,
           snapshot: nextArticle,
@@ -1248,28 +1407,32 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             `Applied ${acceptedChanges.length} reviewed local check change(s)`,
             'assistant',
             nextArticle.title,
-            `Saved as new version v${nextVersion} (previous version recoverable)`
+            `Saved as new version v${nextVersion} (previous version recoverable)`,
+            intent
           ),
         };
       });
       if (!committed) return { ok: false, error: 'Storage transaction failed; accepted changes were not saved.' };
       return result;
     },
-    [updateState, appendAudit]
+    [updateState, appendAudit, simulateSaveFailure]
   );
 
   const savePage = useCallback(
     async (pageInput: Partial<EditorialPage> & { id?: string; title: string }): Promise<EditorialPage> => {
+      if (simulateSaveFailure) {
+        throw new Error('Storage transaction failed; page changes were not saved.');
+      }
+      const intent = createEntityWriteIntent('page', pageInput.id);
       let savedPage!: EditorialPage;
       const committed = await updateState((prev) => {
-        const now = new Date().toISOString();
         const existing = pageInput.id ? prev.pages.find((p) => p.id === pageInput.id) : undefined;
         const sanitized = sanitizeAndDemoteBodyH1(
           pageInput.bodyHtml ?? existing?.bodyHtml ?? '<p></p>',
           trustedMediaSourceSet(prev.media.map((media) => media.src))
         );
         const page: EditorialPage = {
-          id: existing?.id || pageInput.id || `page-${Date.now()}`,
+          id: existing?.id || intent.id,
           title: pageInput.title.trim() || 'Untitled Page',
           slug: slugify(pageInput.slug || existing?.slug || pageInput.title) || 'untitled-page',
           locale: pageInput.locale || existing?.locale || 'en',
@@ -1285,7 +1448,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             description: pageInput.seo?.description ?? existing?.seo?.description ?? '',
             noindex: true,
           },
-          updatedAt: now,
+          updatedAt: intent.timestamp,
         };
         savedPage = page;
         return {
@@ -1298,25 +1461,27 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
             existing ? 'Updated static page' : 'Created static page',
             'page',
             page.title,
-            `Slug: /${page.slug} · Template: ${page.template}`
+            `Slug: /${page.slug} · Template: ${page.template}`,
+            intent
           ),
         };
       });
       if (!committed) throw new Error('Storage transaction failed; page changes were not saved.');
       return savedPage;
     },
-    [updateState, appendAudit]
+    [updateState, appendAudit, simulateSaveFailure]
   );
 
   const deletePage = useCallback(
     (pageId: string) => {
+      const intent = createEntityWriteIntent('page', pageId);
       updateState((prev) => {
         const target = prev.pages.find((p) => p.id === pageId);
         if (!target) return prev;
         return {
           ...prev,
           pages: prev.pages.filter((p) => p.id !== pageId),
-          auditEvents: appendAudit(prev, 'Deleted page', 'page', target.title, `Removed /${target.slug}`),
+          auditEvents: appendAudit(prev, 'Deleted page', 'page', target.title, `Removed /${target.slug}`, intent),
         };
       });
     },
@@ -1325,32 +1490,32 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const addCategory = useCallback(
     (catInput: Omit<Category, 'id' | 'slug'> & { slug?: string }): Category => {
-      let created!: Category;
+      const intent = createEntityWriteIntent('cat');
+      const baseSlug = slugify(catInput.slug || catInput.name) || 'category';
+      let created: Category = {
+        id: intent.id,
+        name: catInput.name.trim(),
+        slug: baseSlug,
+        parentId: catInput.parentId || undefined,
+        description: catInput.description || '',
+        locale: catInput.locale || 'en',
+      };
       updateState((prev) => {
-        const baseSlug = slugify(catInput.slug || catInput.name) || 'category';
         const existing = prev.categories.find((c) => c.slug === baseSlug);
         if (existing) {
           created = existing;
           return prev;
         }
-        const cat: Category = {
-          id: `cat-${Date.now()}`,
-          name: catInput.name.trim(),
-          slug: baseSlug,
-          parentId: catInput.parentId || undefined,
-          description: catInput.description || '',
-          locale: catInput.locale || 'en',
-        };
-        created = cat;
         return {
           ...prev,
-          categories: [...prev.categories, cat],
+          categories: [...prev.categories, created],
           auditEvents: appendAudit(
             prev,
             'Added taxonomy category',
             'taxonomy',
-            cat.name,
-            `Slug: ${cat.slug}${cat.parentId ? ` (parent: ${cat.parentId})` : ''}`
+            created.name,
+            `Slug: ${created.slug}${created.parentId ? ` (parent: ${created.parentId})` : ''}`,
+            intent
           ),
         };
       });
@@ -1371,30 +1536,30 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const addTag = useCallback(
     (name: string, aliases?: string[]): Tag => {
-      let resultTag!: Tag;
+      const intent = createEntityWriteIntent('tag');
+      const cleaned = name.trim();
+      let resultTag: Tag = {
+        id: intent.id,
+        name: cleaned,
+        slug: slugify(cleaned),
+        aliases: aliases || [],
+      };
       updateState((prev) => {
-        const cleaned = name.trim();
         const existing = prev.tags.find((t) => t.name.toLowerCase() === cleaned.toLowerCase());
         if (existing) {
           resultTag = existing;
           return prev;
         }
-        const newTag: Tag = {
-          id: `tag-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-          name: cleaned,
-          slug: slugify(cleaned),
-          aliases: aliases || [],
-        };
-        resultTag = newTag;
         return {
           ...prev,
-          tags: [...prev.tags, newTag],
+          tags: [...prev.tags, resultTag],
           auditEvents: appendAudit(
             prev,
             'Created taxonomy tag',
             'taxonomy',
-            newTag.name,
-            `Normalized slug: #${newTag.slug}`
+            resultTag.name,
+            `Normalized slug: #${resultTag.slug}`,
+            intent
           ),
         };
       });
@@ -1415,17 +1580,18 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const saveSeries = useCallback(
     (seriesInput: Partial<Series> & { title: string }): Series => {
+      const intent = createEntityWriteIntent('ser', seriesInput.id);
       let saved!: Series;
       updateState((prev) => {
         const existing = seriesInput.id ? prev.series.find((s) => s.id === seriesInput.id) : undefined;
         const item: Series = {
-          id: existing?.id || `ser-${Date.now()}`,
+          id: existing?.id || intent.id,
           title: seriesInput.title.trim(),
           slug: slugify(seriesInput.slug || seriesInput.title),
           description: seriesInput.description ?? existing?.description ?? '',
           locale: seriesInput.locale ?? existing?.locale ?? 'en',
           articleIds: seriesInput.articleIds ?? existing?.articleIds ?? [],
-          updatedAt: new Date().toISOString(),
+          updatedAt: intent.timestamp,
         };
         saved = item;
         return {
@@ -1442,11 +1608,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const saveAuthor = useCallback(
     (authorInput: Partial<AuthorProfile> & { displayName: string }): AuthorProfile => {
+      const intent = createEntityWriteIntent('auth', authorInput.id);
       let saved!: AuthorProfile;
       updateState((prev) => {
         const existing = authorInput.id ? prev.authors.find((a) => a.id === authorInput.id) : undefined;
         const item: AuthorProfile = {
-          id: existing?.id || `auth-${Date.now()}`,
+          id: existing?.id || intent.id,
           displayName: authorInput.displayName.trim(),
           slug: slugify(authorInput.slug || authorInput.displayName),
           biography: authorInput.biography ?? existing?.biography ?? '',
@@ -1471,11 +1638,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const saveSource = useCallback(
     (sourceInput: Partial<ScientificSource> & { title: string; url: string }): ScientificSource => {
+      const intent = createEntityWriteIntent('src', sourceInput.id);
       let saved!: ScientificSource;
       updateState((prev) => {
         const existing = sourceInput.id ? prev.sources.find((s) => s.id === sourceInput.id) : undefined;
         const item: ScientificSource = {
-          id: existing?.id || `src-${Date.now()}`,
+          id: existing?.id || intent.id,
           articleId: sourceInput.articleId ?? existing?.articleId,
           title: sourceInput.title.trim(),
           authors: sourceInput.authors ?? existing?.authors ?? 'Unknown Authors',
@@ -1484,7 +1652,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           doi: sourceInput.doi ?? existing?.doi ?? '',
           url: sourceInput.url.trim(),
           sourceType: sourceInput.sourceType ?? existing?.sourceType ?? 'peer_reviewed',
-          accessDate: sourceInput.accessDate ?? existing?.accessDate ?? new Date().toISOString().slice(0, 10),
+          accessDate: sourceInput.accessDate ?? existing?.accessDate ?? intent.timestamp.slice(0, 10),
           verificationStatus: sourceInput.verificationStatus ?? existing?.verificationStatus ?? 'unverified',
           notes: sourceInput.notes ?? existing?.notes ?? 'External verification not run (Offline P0 demo)',
           linkedClaim: sourceInput.linkedClaim ?? existing?.linkedClaim ?? '',
@@ -1532,11 +1700,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!validateSafeUrl(klInput.targetUrl).valid) {
         throw new Error('Knowledge link target must be an HTTP(S) URL or same-application path');
       }
+      const intent = createEntityWriteIntent('kl', klInput.id);
       let saved!: KnowledgeLink;
       updateState((prev) => {
         const existing = klInput.id ? prev.knowledgeLinks.find((k) => k.id === klInput.id) : undefined;
         const item: KnowledgeLink = {
-          id: existing?.id || `kl-${Date.now()}`,
+          id: existing?.id || intent.id,
           term: klInput.term.trim(),
           targetType: klInput.targetType ?? existing?.targetType ?? 'wikipedia',
           targetUrl: klInput.targetUrl.trim(),
@@ -1569,44 +1738,42 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const addMediaAsset = useCallback(
     (assetInput: Partial<MediaAsset> & { filename: string; title: string; src: string }): MediaAsset => {
-      let created!: MediaAsset;
-      updateState((prev) => {
-        const kind = assetInput.kind || 'scientific_figure';
-        const isFigure =
-          kind === 'scientific_figure' || kind === 'chart' || kind === 'diagram';
-        const item: MediaAsset = {
-          id: `media-${Date.now()}`,
-          filename: assetInput.filename,
-          title: assetInput.title,
-          kind,
-          src: assetInput.src,
-          mime: assetInput.mime || 'image/svg+xml',
-          width: assetInput.width || 1200,
-          height: assetInput.height || 675,
-          byteSize: assetInput.byteSize || 38400,
-          altText: assetInput.altText || '',
-          caption: assetInput.caption || '',
-          credit: assetInput.credit || 'Local Demo Upload',
-          licence: assetInput.licence || 'CC BY 4.0',
-          sourceUrl: assetInput.sourceUrl || '',
-          layout: assetInput.layout || (isFigure ? 'locked' : 'auto'),
-          focalPoint: assetInput.focalPoint || { x: 0.5, y: 0.5 },
-          createdAt: new Date().toISOString(),
-          humanReviewedAlt: assetInput.humanReviewedAlt ?? false,
-        };
-        created = item;
-        return {
-          ...prev,
-          media: [item, ...prev.media],
-          auditEvents: appendAudit(
-            prev,
-            'Added media asset to Local Demo Storage',
-            'media',
-            item.title,
-            `Kind: ${item.kind} · Layout: ${item.layout} (Cloudflare R2 not connected)`
-          ),
-        };
-      });
+      const intent = createEntityWriteIntent('media', assetInput.id);
+      const kind = assetInput.kind || 'scientific_figure';
+      const isFigure =
+        kind === 'scientific_figure' || kind === 'chart' || kind === 'diagram';
+      const created: MediaAsset = {
+        id: intent.id,
+        filename: assetInput.filename,
+        title: assetInput.title,
+        kind,
+        src: assetInput.src,
+        mime: assetInput.mime || 'image/svg+xml',
+        width: assetInput.width || 1200,
+        height: assetInput.height || 675,
+        byteSize: assetInput.byteSize || 38400,
+        altText: assetInput.altText || '',
+        caption: assetInput.caption || '',
+        credit: assetInput.credit || 'Local Demo Upload',
+        licence: assetInput.licence || 'CC BY 4.0',
+        sourceUrl: assetInput.sourceUrl || '',
+        layout: assetInput.layout || (isFigure ? 'locked' : 'auto'),
+        focalPoint: assetInput.focalPoint || { x: 0.5, y: 0.5 },
+        createdAt: intent.timestamp,
+        humanReviewedAlt: assetInput.humanReviewedAlt ?? false,
+      };
+      updateState((prev) => ({
+        ...prev,
+        media: [created, ...prev.media.filter((m) => m.id !== created.id)],
+        auditEvents: appendAudit(
+          prev,
+          'Added media asset to Local Demo Storage',
+          'media',
+          created.title,
+          `Kind: ${created.kind} · Layout: ${created.layout} (Cloudflare R2 not connected)`,
+          intent
+        ),
+      }));
       return created;
     },
     [updateState, appendAudit]
@@ -1634,6 +1801,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const updateHomepageBlocks = useCallback(
     (homepageBlocks: HomepageBlock[]) => {
+      const intent = createEntityWriteIntent('home');
       updateState((prev) => ({
         ...prev,
         homepageBlocks,
@@ -1642,7 +1810,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           'Updated homepage block layout',
           'navigation',
           'Homepage Configuration',
-          'Updated local homepage preview blocks (not live on scientificradar.com)'
+          'Updated local homepage preview blocks (not live on scientificradar.com)',
+          intent
         ),
       }));
     },
@@ -1651,6 +1820,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const updateMenus = useCallback(
     (menus: MenuConfig[]) => {
+      const intent = createEntityWriteIntent('menu');
       updateState((prev) => ({
         ...prev,
         menus,
@@ -1659,7 +1829,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           'Updated site navigation menus',
           'navigation',
           'Site Menus',
-          'Updated primary/footer menu configuration in local demo store'
+          'Updated primary/footer menu configuration in local demo store',
+          intent
         ),
       }));
     },
@@ -1687,35 +1858,57 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         tagIds: normalizeArticleTagIds(article.tagIds || []).tagIds,
       }));
 
-      try {
-        const db = await getDb();
-        if (!db) return { ok: false, error: 'IndexedDB is unavailable; backup was not restored' };
-        const transaction = db.transaction(STORE_NAME, 'readwrite');
-        const current = (await transaction.store.get(STATE_KEY)) as StudioDatabaseSnapshot | undefined;
-        candidate.storageRevision = (current?.storageRevision || 0) + 1;
-        await transaction.store.put(candidate, STATE_KEY);
-        await transaction.done;
-        stateRef.current = candidate;
-        setState(candidate);
-        setPersistenceMode('indexeddb');
-        document.documentElement.classList.toggle('dark', candidate.theme === 'dark');
-        return { ok: true };
-      } catch (error) {
-        return {
-          ok: false,
-          error: error instanceof Error ? error.message : 'IndexedDB write failed; previous state remains active',
-        };
-      }
+      const runImport = mutationTailRef.current.then(async (): Promise<{ ok: boolean; error?: string }> => {
+        if (simulateSaveFailure) {
+          return { ok: false, error: 'Persistence failure is enabled; no data was restored' };
+        }
+        try {
+          const db = await getDb();
+          if (!db) return { ok: false, error: 'IndexedDB is unavailable; backup was not restored' };
+          const committed = await commitSnapshotMutation<StudioDatabaseSnapshot, undefined>(
+            db,
+            STORE_NAME,
+            STATE_KEY,
+            getInitialSeedSnapshot(),
+            () => ({ snapshot: candidate, result: undefined })
+          );
+          committedStateRef.current = committed.snapshot;
+          stateRef.current = committed.snapshot;
+          setState(committed.snapshot);
+          setPersistenceMode('indexeddb');
+          if (typeof document !== 'undefined') {
+            document.documentElement.classList.toggle('dark', committed.snapshot.theme === 'dark');
+          }
+          return { ok: true };
+        } catch (error) {
+          return {
+            ok: false,
+            error: error instanceof Error ? error.message : 'IndexedDB write failed; previous state remains active',
+          };
+        }
+      });
+      mutationTailRef.current = runImport.then(() => undefined, () => undefined);
+      return runImport;
     },
     [simulateSaveFailure]
   );
 
   const resetDemoDatabase = useCallback(async () => {
     const seed = getInitialSeedSnapshot();
-    const result = await persistState(seed);
-    if (!result.ok) throw new Error(result.error || 'Reset could not be persisted.');
-    if (result.volatileMemoryOnly) stateRef.current = seed;
-    setState(stateRef.current);
+    const runReset = mutationTailRef.current.then(async () => {
+      const result = await persistState(seed);
+      if (!result.ok) throw new Error(result.error || 'Reset could not be persisted.');
+      if (result.volatileMemoryOnly) {
+        committedStateRef.current = seed;
+        stateRef.current = seed;
+      }
+      setState(stateRef.current);
+      if (typeof document !== 'undefined') {
+        document.documentElement.classList.toggle('dark', stateRef.current.theme === 'dark');
+      }
+    });
+    mutationTailRef.current = runReset.then(() => undefined, () => undefined);
+    return runReset;
   }, [persistState]);
 
   const value: StudioContextValue = {

@@ -59,20 +59,74 @@ export default function MediaLibraryPage() {
     setUploadModalOpen(false);
   };
 
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const objectUrl = URL.createObjectURL(file);
-    const created = addMediaAsset({
-      filename: file.name,
-      title: file.name.replace(/\.[^.]+$/, ''),
-      kind: 'photograph',
-      src: objectUrl,
-      mime: file.type || 'image/png',
-      byteSize: file.size,
-      altText: `Uploaded figure: ${file.name}`,
-    });
-    setSelectedAssetId(created.id);
+    setUploadError(null);
+    const allowedMimes = new Set([
+      'image/png',
+      'image/jpeg',
+      'image/webp',
+      'image/avif',
+      'image/svg+xml',
+    ]);
+    const mime = file.type || 'image/png';
+    if (!allowedMimes.has(mime)) {
+      setUploadError(
+        `Unsupported media format (${mime}). Allowed formats: PNG, JPEG, WebP, AVIF, SVG.`
+      );
+      e.target.value = '';
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setUploadError('File exceeds 8 MB local IndexedDB media limit.');
+      e.target.value = '';
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+      if (!dataUrl.startsWith('data:image/')) {
+        setUploadError('Failed to encode image file as a durable data URI.');
+        return;
+      }
+      const probe = new window.Image();
+      probe.onload = () => {
+        const created = addMediaAsset({
+          filename: file.name,
+          title: file.name.replace(/\.[^.]+$/, ''),
+          kind: 'scientific_figure',
+          src: dataUrl,
+          mime,
+          width: probe.naturalWidth || 1200,
+          height: probe.naturalHeight || 675,
+          byteSize: file.size,
+          altText: `Uploaded figure: ${file.name}`,
+        });
+        setSelectedAssetId(created.id);
+      };
+      probe.onerror = () => {
+        const created = addMediaAsset({
+          filename: file.name,
+          title: file.name.replace(/\.[^.]+$/, ''),
+          kind: 'scientific_figure',
+          src: dataUrl,
+          mime,
+          byteSize: file.size,
+          altText: `Uploaded figure: ${file.name}`,
+        });
+        setSelectedAssetId(created.id);
+      };
+      probe.src = dataUrl;
+    };
+    reader.onerror = () => {
+      setUploadError('Could not read selected file from disk.');
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   return (
@@ -85,7 +139,7 @@ export default function MediaLibraryPage() {
             <span>Upload Local File</span>
             <input
               type="file"
-              accept="image/png,image/jpeg,image/webp,image/avif"
+              accept="image/png,image/jpeg,image/webp,image/avif,image/svg+xml"
               onChange={handleFileInput}
               className="hidden"
             />
@@ -122,6 +176,16 @@ export default function MediaLibraryPage() {
             Configure R2 in P1 →
           </Link>
         </div>
+
+        {uploadError && (
+          <div
+            role="alert"
+            className="p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-xs text-red-700 dark:text-red-300 flex items-center gap-2"
+          >
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{uploadError}</span>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Left 7 Columns: Media Grid */}

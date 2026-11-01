@@ -18,14 +18,18 @@ import {
   interpretWallTime,
 } from '@/lib/datetime/parse';
 import { formatLocalizedInstant, resolveEffectiveDatePrefs } from '@/lib/datetime/format';
+import { canTransitionStatus } from '@/lib/editorial-rules';
 
 export default function PublishingCalendarPage() {
-  const { articles, saveArticle, isHydrated, dateTimePreferences } = useStudio();
+  const { articles, saveArticle, activeRole, isHydrated, dateTimePreferences } = useStudio();
   const effectivePrefs = resolveEffectiveDatePrefs(dateTimePreferences);
   const timeZone = effectivePrefs.timeZone;
 
   const [selectedArticleId, setSelectedArticleId] = useState(
-    articles.find((a) => a.status !== 'published')?.id || articles[0]?.id || ''
+    articles.find((a) => a.status === 'approved' || a.status === 'scheduled')?.id ||
+      articles.find((a) => a.status !== 'published')?.id ||
+      articles[0]?.id ||
+      ''
   );
   const [scheduleDate, setScheduleDate] = useState('');
   const [dstDisambiguation, setDstDisambiguation] = useState<'earlier' | 'later'>('earlier');
@@ -68,6 +72,20 @@ export default function PublishingCalendarPage() {
       setWarning(
         'Already published articles cannot be silently moved to a new publication date (Spec §14).'
       );
+      return;
+    }
+
+    if (target.status !== 'scheduled') {
+      const check = canTransitionStatus(target.status, 'scheduled', activeRole);
+      if (!check.allowed) {
+        setWarning(
+          check.reason ||
+            'Only approved manuscripts can be scheduled by an Editor or Owner.'
+        );
+        return;
+      }
+    } else if (activeRole === 'author' || activeRole === 'reviewer') {
+      setWarning('Only Editors or Owners can reschedule articles.');
       return;
     }
 
