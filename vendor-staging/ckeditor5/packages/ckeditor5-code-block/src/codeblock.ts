@@ -1,0 +1,45 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+/**
+ * @module code-block/codeblock
+ */
+
+import { Plugin, type PluginDependenciesOf } from '@ckeditor/ckeditor5-core';
+
+import { CodeBlockEditing } from './codeblockediting.js';
+import { CodeBlockUI } from './codeblockui.js';
+
+/**
+ * The code block plugin.
+ *
+ * For more information about this feature check the {@glink api/code-block package page} and the
+ * {@glink features/code-blocks code block} feature guide.
+ *
+ * This is a "glue" plugin that loads the {@link module:code-block/codeblockediting~CodeBlockEditing code block editing feature}
+ * and the {@link module:code-block/codeblockui~CodeBlockUI code block UI feature}.
+ */
+export class CodeBlock extends Plugin {
+	/**
+	 * @inheritDoc
+	 */
+	public static get requires(): PluginDependenciesOf<[ CodeBlockEditing, CodeBlockUI ]> {
+		return [ CodeBlockEditing, CodeBlockUI ];
+	}
+
+	/**
+	 * @inheritDoc
+	 */
+	public static get pluginName() {
+		return 'CodeBlock' as const;
+	}
+
+	/**
+	 * @inheritDoc
+	 */
+	public static override get isOfficialPlugin(): true {
+		return true;
+	}
+}

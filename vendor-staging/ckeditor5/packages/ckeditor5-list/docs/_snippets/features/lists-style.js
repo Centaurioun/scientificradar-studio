@@ -1,0 +1,80 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { ListProperties } from 'ckeditor5';
+import {
+	TOKEN_URL,
+	getViewportTopOffsetConfig
+} from '@snippets/index.js';
+import { ListEditor } from './lists-source.js';
+
+ListEditor
+	.create( {
+		attachTo: document.querySelector( '#snippet-lists-styles' ),
+		extraPlugins: [ ListProperties ],
+		toolbar: {
+			items: [
+				'undo', 'redo', '|', 'heading',
+				'|', 'bold', 'italic',
+				'|', 'link', 'insertImage', 'insertTable', 'mediaEmbed',
+				'|', 'bulletedList', 'numberedList', 'outdent', 'indent'
+			]
+		},
+		ui: {
+			viewportOffset: {
+				top: getViewportTopOffsetConfig()
+			}
+		},
+		ckbox: {
+			tokenUrl: TOKEN_URL,
+			allowExternalImagesEditing: [ /^data:/, 'origin', /ckbox/ ],
+			forceDemoLabel: true
+		},
+		image: {
+			toolbar: [
+				'imageStyle:inline',
+				'imageStyle:wrapText',
+				'imageStyle:breakText',
+				'|',
+				'toggleImageCaption',
+				'imageTextAlternative',
+				'|',
+				'ckboxImageEdit'
+			]
+		},
+		table: {
+			contentToolbar: [ 'tableColumn', 'tableRow', 'mergeTableCells' ]
+		},
+		list: {
+			properties: {
+				styles: {
+					listStyleTypes: {
+						numbered: [
+							'decimal',
+							'decimal-leading-zero',
+							'lower-roman',
+							'upper-roman',
+							'lower-latin',
+							'upper-latin',
+							'arabic-indic'
+						],
+						bulleted: [
+							'disc',
+							'circle',
+							'square'
+						]
+					}
+				},
+				startIndex: false,
+				reversed: false
+			}
+		}
+	} )
+	.then( editor => {
+		window.editorStyles = editor;
+	} )
+	.catch( err => {
+		console.error( err.stack );
+	} );

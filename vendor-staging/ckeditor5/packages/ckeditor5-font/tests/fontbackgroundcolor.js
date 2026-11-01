@@ -1,0 +1,27 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, it, expect } from 'vitest';
+import { FontBackgroundColor } from './../src/fontbackgroundcolor.js';
+import { FontBackgroundColorEditing } from './../src/fontbackgroundcolor/fontbackgroundcolorediting.js';
+import { FontBackgroundColorUI } from '../src/fontbackgroundcolor/fontbackgroundcolorui.js';
+
+describe( 'FontBackgroundColor', () => {
+	it( 'requires FontBackgroundColorEditing and FontBackgroundColorUI', () => {
+		expect( FontBackgroundColor.requires ).toEqual( [ FontBackgroundColorEditing, FontBackgroundColorUI ] );
+	} );
+
+	it( 'defines plugin name', () => {
+		expect( FontBackgroundColor.pluginName ).toEqual( 'FontBackgroundColor' );
+	} );
+
+	it( 'should have `isOfficialPlugin` static flag set to `true`', () => {
+		expect( FontBackgroundColor.isOfficialPlugin ).toBe( true );
+	} );
+
+	it( 'should have `isPremiumPlugin` static flag set to `false`', () => {
+		expect( FontBackgroundColor.isPremiumPlugin ).toBe( false );
+	} );
+} );

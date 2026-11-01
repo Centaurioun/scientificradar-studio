@@ -1,0 +1,35 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, it, expect } from 'vitest';
+import { Markdown } from '../src/markdown.js';
+import { MarkdownGfmDataProcessor } from '../src/gfmdataprocessor.js';
+import { ClassicTestEditor } from '@ckeditor/ckeditor5-core/tests/_utils/classictesteditor.js';
+
+describe( 'Markdown', () => {
+	it( 'has proper name', () => {
+		expect( Markdown.pluginName ).toEqual( 'Markdown' );
+	} );
+
+	it( 'should have `isOfficialPlugin` static flag set to `true`', () => {
+		expect( Markdown.isOfficialPlugin ).toBe( true );
+	} );
+
+	it( 'should have `isPremiumPlugin` static flag set to `false`', () => {
+		expect( Markdown.isPremiumPlugin ).toBe( false );
+	} );
+
+	it( 'should set editor.data.processor', () => {
+		return ClassicTestEditor
+			.create( '', {
+				plugins: [ Markdown ]
+			} )
+			.then( editor => {
+				expect( editor.data.processor ).to.be.an.instanceof( MarkdownGfmDataProcessor );
+
+				return editor.destroy(); // Tests cleanup.
+			} );
+	} );
+} );

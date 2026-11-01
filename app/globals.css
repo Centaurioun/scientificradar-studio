@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Exclude inactive third-party source snapshots from Tailwind class extraction. */
+@source not "../vendor-staging";
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {

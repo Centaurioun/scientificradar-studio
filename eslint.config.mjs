@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export default defineConfig([{
+// Vendor snapshots are inactive source references, not ScientificRadar application code.
+export default defineConfig([{ ignores: ["vendor-staging/**"] }, {
     extends: [...next],
 }]);

@@ -1,0 +1,38 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, expect, it } from 'vitest';
+import { toMap } from '../src/tomap.js';
+import { count } from '../src/count.js';
+
+describe( 'utils', () => {
+	describe( 'toMap', () => {
+		it( 'should create map from object', () => {
+			const map = toMap( { foo: 1, bar: 2 } );
+
+			expect( count( map ) ).toEqual( 2 );
+			expect( map.get( 'foo' ) ).toEqual( 1 );
+			expect( map.get( 'bar' ) ).toEqual( 2 );
+		} );
+
+		it( 'should create map from iterator', () => {
+			const map = toMap( [ [ 'foo', 1 ], [ 'bar', 2 ] ] );
+
+			expect( count( map ) ).toEqual( 2 );
+			expect( map.get( 'foo' ) ).toEqual( 1 );
+			expect( map.get( 'bar' ) ).toEqual( 2 );
+		} );
+
+		it( 'should create map from another map', () => {
+			const data = new Map( [ [ 'foo', 1 ], [ 'bar', 2 ] ] );
+
+			const map = toMap( data );
+
+			expect( count( map ) ).toEqual( 2 );
+			expect( map.get( 'foo' ) ).toEqual( 1 );
+			expect( map.get( 'bar' ) ).toEqual( 2 );
+		} );
+	} );
+} );

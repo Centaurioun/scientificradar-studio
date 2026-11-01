@@ -1,0 +1,1366 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Paragraph } from '@ckeditor/ckeditor5-paragraph';
+import { Heading } from '@ckeditor/ckeditor5-heading';
+import { GeneralHtmlSupport } from '@ckeditor/ckeditor5-html-support';
+import { ClassicTestEditor } from '@ckeditor/ckeditor5-core/tests/_utils/classictesteditor.js';
+import { Image, ImageCaption } from '@ckeditor/ckeditor5-image';
+import { BlockQuote } from '@ckeditor/ckeditor5-block-quote';
+import { Link } from '@ckeditor/ckeditor5-link';
+import { Bold } from '@ckeditor/ckeditor5-basic-styles';
+import { _setModelData, _getModelData } from '@ckeditor/ckeditor5-engine';
+import { LinkStyleSupport } from '../../src/integrations/link.js';
+
+import { Style } from '../../src/style.js';
+
+describe( 'LinkStyleSupport', () => {
+	let editor, editorElement, command, model;
+
+	beforeEach( async () => {
+		await createEditor( [
+			{
+				name: 'A style',
+				element: 'a',
+				classes: [ 'a-styled' ]
+			},
+			{
+				name: 'B style',
+				element: 'b',
+				classes: [ 'b-styled' ]
+			}
+		] );
+	} );
+
+	afterEach( async () => {
+		editorElement.remove();
+		await editor.destroy();
+	} );
+
+	it( 'should have `isOfficialPlugin` static flag set to `true`', () => {
+		expect( LinkStyleSupport.isOfficialPlugin ).toBe( true );
+	} );
+
+	it( 'should have `isPremiumPlugin` static flag set to `false`', () => {
+		expect( LinkStyleSupport.isPremiumPlugin ).toBe( false );
+	} );
+
+	describe( 'enabled styles', () => {
+		describe( 'collapsed selection', () => {
+			it( 'Link style should be enabled for the selection in the link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foo[]bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should not be enabled for the selection outside the link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[]ore ' +
+						'<$text linkHref="123">foobar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 1 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be enabled for the selection at the beginning of a link (selection gravity override)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'[]<$text linkHref="123">foobar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				model.change( writer => writer.overrideSelectionGravity() );
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should not be enabled for the selection at the beginning of a link (default selection gravity)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'[]<$text linkHref="123">foobar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 1 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be enabled for the selection at the end of a link (default selection gravity override)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foobar</$text>[]' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should not be enabled for the selection at the end of a link (selection gravity override)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foobar</$text>[]' +
+						'after' +
+					'</paragraph>'
+				);
+
+				model.change( writer => writer.overrideSelectionGravity() );
+
+				expect( command.enabledStyles ).toHaveLength( 1 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be enabled for the selection in bolded link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123" bold="true">foo[]bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should not be enabled for the selection in bolded text', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text bold="true">foo[]bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 1 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+		} );
+
+		describe( 'non-collapsed selection', () => {
+			it( 'Link style should be enabled for the selection in the link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">fo[ob]ar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be enabled for the selection on the link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">[foobar]</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be enabled for the selection on na inline widget', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'[<imageInline linkHref="123"></imageInline>]' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be enabled for the selection including a link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[ore ' +
+						'<$text linkHref="123">foobar</$text>' +
+						'af]ter' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be enabled for the selection including a link partly from start', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[ore ' +
+						'<$text linkHref="123">foo]bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be enabled for the selection including a link partly from end', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foo[bar</$text>' +
+						'af]ter' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be enabled for the selection covering multiple links', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foo[bar</$text>' +
+						'middle' +
+						'<$text linkHref="abc">bar]foo</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be enabled for the selection covering multiple links (from outside)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[ore ' +
+						'<$text linkHref="123">foobar</$text>' +
+						'middle' +
+						'<$text linkHref="abc">barfoo</$text>' +
+						'af]ter' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be enabled for the selection covering multiple links (outside on the start)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[ore ' +
+						'<$text linkHref="123">foobar</$text>' +
+						'middle' +
+						'<$text linkHref="abc">bar]foo</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be enabled for the selection covering multiple links (outside on the end)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foo[bar</$text>' +
+						'middle' +
+						'<$text linkHref="abc">barfoo</$text>' +
+						'aft]er' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should not be enabled for the selection outside link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foobar</$text>' +
+						'mi[dd]le' +
+						'<$text linkHref="abc">barfoo</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 1 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+			} );
+		} );
+	} );
+
+	describe( 'active styles', () => {
+		describe( 'collapsed selection', () => {
+			it( 'Link style should be active for the selection in the link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foo[]bar</$text>` +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should not be active for the selection outside the link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[]ore ' +
+						'<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ \'a-styled\' ] } ) }">foobar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be active for the selection at the beginning of a link (selection gravity override)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`[]<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foobar</$text>` +
+						'after' +
+					'</paragraph>'
+				);
+
+				model.change( writer => writer.overrideSelectionGravity() );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should not be active for the selection at the beginning of a link (default selection gravity)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`[]<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foobar</$text>` +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be active for the selection at the end of a link (default selection gravity override)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foobar</$text>[]` +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should not be active for the selection at the end of a link (selection gravity override)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foobar</$text>[]` +
+						'after' +
+					'</paragraph>'
+				);
+
+				model.change( writer => writer.overrideSelectionGravity() );
+
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should be active for the selection in bolded link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`<$text linkHref="123" bold="true" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foo[]bar</$text>` +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should not be active for the selection in bolded text', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text bold="true">foo[]bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 0 );
+			} );
+		} );
+
+		describe( 'non-collapsed selection', () => {
+			it( 'Link style should be active for the selection in the link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">fo[ob]ar</$text>` +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should be active for the selection on the link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">[foobar]</$text>` +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should be active for the selection on na inline widget', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`[<imageInline linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }"></imageInline>]` +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should be active for the selection including a link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[ore ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foobar</$text>` +
+						'af]ter' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should be active for the selection including a link partly from start', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[ore ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foo]bar</$text>` +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should be active for the selection including a link partly from end', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foo[bar</$text>` +
+						'af]ter' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should be active for the selection covering multiple links', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foo[bar</$text>` +
+						'middle' +
+						`<$text linkHref="abc" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">bar]foo</$text>` +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should be active for the selection covering multiple links (from outside)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[ore ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foobar</$text>` +
+						'middle' +
+						`<$text linkHref="abc" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">barfoo</$text>` +
+						'af]ter' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should be active for the selection covering multiple links (outside on the start)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[ore ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foobar</$text>` +
+						'middle' +
+						`<$text linkHref="abc" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">bar]foo</$text>` +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should be active for the selection covering multiple links (outside on the end)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foo[bar</$text>` +
+						'middle' +
+						`<$text linkHref="abc" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">barfoo</$text>` +
+						'aft]er' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should be active for the selection covering multiple links (first has style)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foo[bar</$text>` +
+						'middle' +
+						'<$text linkHref="abc">barfoo</$text>' +
+						'aft]er' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) ); } );
+
+			it( 'Link style should not be active for the selection covering multiple links (second has style)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foo[bar</$text>' +
+						'middle' +
+						`<$text linkHref="abc" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">barfoo</$text>` +
+						'aft]er' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 0 );
+			} );
+
+			it( 'Link style should not be active for the selection outside link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foobar</$text>` +
+						'mi[dd]le' +
+						`<$text linkHref="abc" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">barfoo</$text>` +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 0 );
+			} );
+		} );
+	} );
+
+	describe( 'apply style', () => {
+		beforeEach( () => {
+			vi.spyOn( console, 'warn' ).mockImplementation( () => {} );
+		} );
+
+		describe( 'collapsed selection', () => {
+			it( 'Link style should be applied to the link with the selection in the link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foo[]bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="123">foo[]bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should not be applied for the selection outside the link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[]ore ' +
+						'<$text linkHref="123">foobar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 1 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 0 );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'bef[]ore ' +
+						'<$text linkHref="123">foobar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be applied for the selection at the beginning of a link (selection gravity override)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'[]<$text linkHref="123">foobar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				model.change( writer => writer.overrideSelectionGravity() );
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="123">[]foobar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should not be applied for the selection at the beginning of a link (default selection gravity)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'[]<$text linkHref="123">foobar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 1 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 0 );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'[]<$text linkHref="123">foobar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be applied for the selection at the end of a link (default selection gravity override)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foobar</$text>[]' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="123">foobar[]</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should not be applied for the selection at the end of a link (selection gravity override)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foobar</$text>[]' +
+						'after' +
+					'</paragraph>'
+				);
+
+				model.change( writer => writer.overrideSelectionGravity() );
+
+				expect( command.enabledStyles ).toHaveLength( 1 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 0 );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foobar</$text>[]' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be applied for the selection in bolded link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123" bold="true">foo[]bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text bold="true" htmlA="{"classes":["a-styled"]}" linkHref="123">foo[]bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should not be applied for the selection in bolded text', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text bold="true">foo[]bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 1 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 0 );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text bold="true">foo[]bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+		} );
+
+		describe( 'non-collapsed selection', () => {
+			it( 'Link style should be applied for the selection in the link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">fo[ob]ar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="123">fo[ob]ar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be applied for the selection on the link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+					'before ' +
+					'<$text linkHref="123">[foobar]</$text>' +
+					'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'[<$text htmlA="{"classes":["a-styled"]}" linkHref="123">foobar</$text>]' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be applied for the selection on na inline widget', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'[<imageInline linkHref="123"></imageInline>]' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'[<imageInline htmlA="{"classes":["a-styled"]}" linkHref="123"></imageInline>]' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be applied for the selection including a link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[ore ' +
+						'<$text linkHref="123">foobar</$text>' +
+						'af]ter' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'bef[ore ' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="123">foobar</$text>' +
+						'af]ter' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be applied for the selection including a link partly from start', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[ore ' +
+						'<$text linkHref="123">foo]bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'bef[ore ' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="123">foo]bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be applied for the selection including a link partly from end', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foo[bar</$text>' +
+						'af]ter' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="123">foo[bar</$text>' +
+						'af]ter' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be applied for the selection covering multiple links', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foo[bar</$text>' +
+						'middle' +
+						'<$text linkHref="abc">bar]foo</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="123">foo[bar</$text>' +
+						'middle' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="abc">bar]foo</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be applied for the selection covering multiple links (from outside)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[ore ' +
+						'<$text linkHref="123">foobar</$text>' +
+						'middle' +
+						'<$text linkHref="abc">barfoo</$text>' +
+						'af]ter' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'bef[ore ' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="123">foobar</$text>' +
+						'middle' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="abc">barfoo</$text>' +
+						'af]ter' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be applied for the selection covering multiple links (outside on the start)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'bef[ore ' +
+						'<$text linkHref="123">foobar</$text>' +
+						'middle' +
+						'<$text linkHref="abc">bar]foo</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'bef[ore ' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="123">foobar</$text>' +
+						'middle' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="abc">bar]foo</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be applied for the selection covering multiple links (outside on the end)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foo[bar</$text>' +
+						'middle' +
+						'<$text linkHref="abc">barfoo</$text>' +
+						'aft]er' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 2 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'A style', 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="123">foo[bar</$text>' +
+						'middle' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="abc">barfoo</$text>' +
+						'aft]er' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be removed for the selection covering multiple links (first has style)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						`<$text linkHref="123" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">foo[bar</$text>` +
+						'middle' +
+						'<$text linkHref="abc">barfoo</$text>' +
+						'aft]er' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 0 );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foo[bar</$text>' +
+						'middle' +
+						'<$text linkHref="abc">barfoo</$text>' +
+						'aft]er' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should be applied for the selection covering multiple links (second has style)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foo[bar</$text>' +
+						'middle' +
+						`<$text linkHref="abc" htmlA="${ ghsAttribute( { classes: [ 'a-styled' ] } ) }">barfoo</$text>` +
+						'aft]er' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 1 );
+				expect( command.value ).toEqual( expect.arrayContaining( [ 'A style' ] ) );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="123">foo[bar</$text>' +
+						'middle' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="abc">barfoo</$text>' +
+						'aft]er' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'Link style should not be applied for the selection outside link', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foobar</$text>' +
+						'mi[dd]le' +
+						'<$text linkHref="abc">barfoo</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+
+				expect( command.enabledStyles ).toHaveLength( 1 );
+				expect( command.enabledStyles ).toEqual( expect.arrayContaining( [ 'B style' ] ) );
+				expect( command.value ).toHaveLength( 0 );
+
+				command.execute( { styleName: 'A style' } );
+
+				expect( command.value ).toHaveLength( 0 );
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">foobar</$text>' +
+						'mi[dd]le' +
+						'<$text linkHref="abc">barfoo</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'bold style should be applied on the selection only', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text bold="true">foo[bar]</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+				command.execute( { styleName: 'B style' } );
+
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text bold="true">foo</$text>' +
+						'[<$text bold="true" htmlB="{"classes":["b-styled"]}">bar</$text>]' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+
+			it( 'link style should be applied on the whole link (partly bolded link)', () => {
+				_setModelData( model,
+					'<paragraph>' +
+						'before ' +
+						'<$text linkHref="123">f[o]o</$text>' +
+						'<$text bold="true" linkHref="123">bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+
+				command.refresh();
+				command.execute( { styleName: 'A style' } );
+
+				expect( _getModelData( model ) ).toBe(
+					'<paragraph>' +
+						'before ' +
+						'<$text htmlA="{"classes":["a-styled"]}" linkHref="123">f[o]o</$text>' +
+						'<$text bold="true" htmlA="{"classes":["a-styled"]}" linkHref="123">bar</$text>' +
+						'after' +
+					'</paragraph>'
+				);
+			} );
+		} );
+	} );
+
+	async function createEditor( styleDefinitions ) {
+		editorElement = document.createElement( 'div' );
+		document.body.appendChild( editorElement );
+
+		editor = await ClassicTestEditor.create( editorElement, {
+			plugins: [
+				Paragraph, Image, ImageCaption, Heading, BlockQuote, Link, Bold, GeneralHtmlSupport, Style
+			],
+			style: {
+				definitions: styleDefinitions
+			}
+		} );
+
+		model = editor.model;
+		command = editor.commands.get( 'style' );
+	}
+
+	function ghsAttribute( value ) {
+		return JSON.stringify( value ).replace( /"/g, '&quot;' );
+	}
+} );

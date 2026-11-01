@@ -1,0 +1,27 @@
+/*
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+.ck.ck-editor__editable {
+	/* The resized inline image nested in the table should respect its parent size.
+	See https://github.com/ckeditor/ckeditor5/issues/9117. */
+	& td,
+	& th {
+		& .image-inline.image_resized img {
+			max-width: 100%;
+		}
+	}
+}
+
+[dir="ltr"] .ck.ck-button.ck-button_with-text.ck-resize-image-button .ck-button__icon {
+	margin-right: var(--ck-spacing-standard, var(--ck-spacing-base));
+}
+
+[dir="rtl"] .ck.ck-button.ck-button_with-text.ck-resize-image-button .ck-button__icon {
+	margin-left: var(--ck-spacing-standard, var(--ck-spacing-base));
+}
+
+.ck.ck-dropdown .ck-button.ck-resize-image-button .ck-button__label {
+	width: 4em;
+}

@@ -1,0 +1,148 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+import { ClassicTestEditor } from '@ckeditor/ckeditor5-core/tests/_utils/classictesteditor.js';
+
+import { EasyImage } from '../src/easyimage.js';
+import { CloudServicesUploadAdapter } from '../src/cloudservicesuploadadapter.js';
+import { Image, ImageUpload } from '@ckeditor/ckeditor5-image';
+import { Clipboard } from '@ckeditor/ckeditor5-clipboard';
+
+import { UploadGatewayMock } from './_utils/uploadgatewaymock.js';
+import { createNativeFileMock } from '@ckeditor/ckeditor5-upload/tests/_utils/mocks.js';
+import { Paragraph } from '@ckeditor/ckeditor5-paragraph';
+
+import { CloudServices, CloudServicesCore } from '@ckeditor/ckeditor5-cloud-services';
+import { mockCreateToken } from '@ckeditor/ckeditor5-cloud-services/tests/_utils/mockcloudservicescoretoken.js';
+
+describe( 'EasyImage', () => {
+	beforeEach( () => {
+		// EasyImage requires the `CloudServicesCore` plugin as a dependency.
+		// In order to mock the `Token` and `UploadGateway` classes, we stub the factory methods of the `CloudServicesCore` plugin.
+		mockCreateToken();
+		vi.spyOn( CloudServicesCore.prototype, 'createUploadGateway' )
+			.mockImplementation( ( token, apiAddress ) => new UploadGatewayMock( token, apiAddress ) );
+	} );
+
+	it( 'should require other plugins', () => {
+		expect( EasyImage.requires ).toContain( CloudServicesUploadAdapter );
+	} );
+
+	it( 'should require ImageUpload', () => {
+		expect( EasyImage.requires ).toContain( ImageUpload );
+	} );
+
+	it( 'should have `isOfficialPlugin` static flag set to `true`', () => {
+		expect( EasyImage.isOfficialPlugin ).toBe( true );
+	} );
+
+	it( 'should have `isPremiumPlugin` static flag set to `false`', () => {
+		expect( EasyImage.isPremiumPlugin ).toBe( false );
+	} );
+
+	it( 'should be able to initialize editor with itself', () => {
+		const div = window.document.createElement( 'div' );
+		window.document.body.appendChild( div );
+
+		return ClassicTestEditor
+			.create( div, {
+				plugins: [ Clipboard, Image, ImageUpload, CloudServices, EasyImage ],
+				cloudServices: {
+					tokenUrl: 'abc',
+					uploadUrl: 'def'
+				}
+			} )
+			.then( editor => {
+				const easyImage = editor.plugins.get( EasyImage );
+				expect( easyImage ).toBeInstanceOf( EasyImage );
+
+				window.document.body.removeChild( div );
+
+				return editor.destroy();
+			} );
+	} );
+
+	it( 'should warn if there is no image feature loaded in the editor', async () => {
+		const stub = vi.spyOn( console, 'warn' ).mockImplementation( () => {} );
+		const div = window.document.createElement( 'div' );
+
+		window.document.body.appendChild( div );
+
+		const editor = await ClassicTestEditor.create( div, {
+			plugins: [ Clipboard, ImageUpload, CloudServices, EasyImage ],
+			cloudServices: {
+				tokenUrl: 'abc',
+				uploadUrl: 'def'
+			}
+		} );
+
+		expect( stub ).toHaveBeenCalledOnce();
+		expect( stub ).toHaveBeenCalledWith( 'easy-image-image-feature-missing', editor, expect.any( String ) );
+
+		window.document.body.removeChild( div );
+
+		await editor.destroy();
+	} );
+
+	describe( 'integration tests', () => {
+		let div;
+
+		beforeEach( () => {
+			vi.stubGlobal( 'FileReader', vi.fn( function() {
+				this.readAsDataURL = () => {
+					this.result = 'http://some-fake-url.jpg';
+					this.onload();
+				};
+			} ) );
+
+			div = window.document.createElement( 'div' );
+			window.document.body.appendChild( div );
+		} );
+
+		afterEach( () => {
+			window.document.body.removeChild( div );
+		} );
+
+		it( 'should enable easy image uploading', () => {
+			return ClassicTestEditor
+				.create( div, {
+					plugins: [ Clipboard, Image, ImageUpload, CloudServices, Paragraph, EasyImage ],
+					cloudServices: {
+						tokenUrl: 'abc',
+						uploadUrl: 'http://upload.mock.url/'
+					}
+				} )
+				.then( editor => {
+					const notification = editor.plugins.get( 'Notification' );
+					const upload = editor.plugins.get( CloudServicesUploadAdapter );
+
+					return new Promise( ( resolve, reject ) => {
+						notification.on( 'show:warning', ( evt, data ) => {
+							reject( new Error( data.title ) );
+						} );
+
+						editor.model.document.on( 'change', () => {
+							// Check whether the image is uploaded and the image's src is replaced correctly.
+							if ( editor.getData() === '<figure class="image"><img src="http://image.mock.url/"></figure>' ) {
+								const data = editor.getData();
+
+								editor.destroy().then( () => resolve( data ) );
+							}
+						} );
+
+						editor.execute( 'uploadImage', { file: createNativeFileMock() } );
+
+						setTimeout( () => {
+							upload._uploadGateway.resolveLastUpload();
+						} );
+					} ).then( data => {
+						expect( data ).toBe( '<figure class="image"><img src="http://image.mock.url/"></figure>' );
+					} );
+				} );
+		} );
+	} );
+} );

@@ -1,0 +1,7782 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EditingController } from '../../src/controller/editingcontroller.js';
+import { DataController } from '../../src/controller/datacontroller.js';
+
+import { Model } from '../../src/model/model.js';
+import { ModelElement } from '../../src/model/element.js';
+import { ModelText } from '../../src/model/text.js';
+
+import { ViewElement } from '../../src/view/element.js';
+import { ViewAttributeElement } from '../../src/view/attributeelement.js';
+import { ViewContainerElement } from '../../src/view/containerelement.js';
+import { ViewUIElement } from '../../src/view/uielement.js';
+import { ViewText } from '../../src/view/text.js';
+import { ViewDocument } from '../../src/view/document.js';
+
+import {
+	DowncastHelpers,
+	cleanSelection,
+	convertCollapsedSelection,
+	convertRangeSelection,
+	createViewElementFromDowncastHighlightDescriptor,
+	insertAttributesAndChildren,
+	insertText
+} from '../../src/conversion/downcasthelpers.js';
+
+import { Mapper } from '../../src/conversion/mapper.js';
+import { DowncastDispatcher } from '../../src/conversion/downcastdispatcher.js';
+import { _stringifyView } from '../../src/dev-utils/view.js';
+import { EditingView } from '../../src/view/view.js';
+import { createViewRoot } from '../view/_utils/createroot.js';
+import { _setModelData } from '../../src/dev-utils/model.js';
+import { expectToThrowCKEditorError } from '@ckeditor/ckeditor5-utils/tests/_utils/utils.js';
+import { StylesProcessor } from '../../src/view/stylesmap.js';
+import { ViewDowncastWriter } from '../../src/view/downcastwriter.js';
+
+import { toWidget } from '@ckeditor/ckeditor5-widget';
+
+describe( 'DowncastHelpers', () => {
+	let model, modelRoot, viewRoot, downcastHelpers, controller, modelRootStart;
+
+	beforeEach( () => {
+		model = new Model();
+		const modelDoc = model.document;
+		modelRoot = modelDoc.createRoot();
+
+		controller = new EditingController( model, new StylesProcessor() );
+
+		// Set name of view root the same as dom root.
+		// This is a mock of attaching view root to dom root.
+		controller.view.document.getRoot()._name = 'div';
+
+		viewRoot = controller.view.document.getRoot();
+
+		downcastHelpers = new DowncastHelpers( [ controller.downcastDispatcher ] );
+
+		modelRootStart = model.createPositionAt( modelRoot, 0 );
+	} );
+
+	describe( 'elementToElement()', () => {
+		it( 'should be chainable', () => {
+			expect( downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } ) ).toBe( downcastHelpers );
+		} );
+
+		it( 'config.view is a string', () => {
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+
+			model.change( writer => {
+				writer.insertElement( 'paragraph', modelRoot, 0 );
+			} );
+
+			expectResult( '<p></p>' );
+		} );
+
+		it( 'can be overwritten using converterPriority', () => {
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'foo', converterPriority: 'high' } );
+
+			model.change( writer => {
+				writer.insertElement( 'paragraph', modelRoot, 0 );
+			} );
+
+			expectResult( '<foo></foo>' );
+		} );
+
+		it( 'config.view is a view element definition', () => {
+			downcastHelpers.elementToElement( {
+				model: 'fancyParagraph',
+				view: {
+					name: 'p',
+					classes: 'fancy'
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertElement( 'fancyParagraph', modelRoot, 0 );
+			} );
+
+			expectResult( '<p class="fancy"></p>' );
+		} );
+
+		it( 'config.view is a function', () => {
+			downcastHelpers.elementToElement( {
+				model: 'heading',
+				view: ( modelElement, { writer } ) => writer.createContainerElement( 'h' + modelElement.getAttribute( 'level' ) )
+			} );
+
+			model.change( writer => {
+				writer.insertElement( 'heading', { level: 2 }, modelRoot, 0 );
+			} );
+
+			expectResult( '<h2></h2>' );
+		} );
+
+		it( 'config.view is a function that does not return view element', () => {
+			downcastHelpers.elementToElement( {
+				model: 'heading',
+				view: () => null
+			} );
+
+			controller.downcastDispatcher.on( 'insert:heading', ( evt, data, conversionApi ) => {
+				conversionApi.consumable.consume( data.item, evt.name );
+			}, { priority: 'lowest' } );
+
+			model.change( writer => {
+				writer.insertElement( 'heading', {}, modelRoot, 0 );
+			} );
+
+			expectResult( '' );
+		} );
+
+		it( 'config.view is a function that receives event data as a third argument', () => {
+			downcastHelpers.elementToElement( {
+				model: 'heading',
+				view: ( modelElement, { writer }, data ) => {
+					expect( data.item.is( 'element', 'heading' ) ).toBe( true );
+					expect( data.range.is( 'range' ) ).toBe( true );
+
+					return writer.createContainerElement( 'h' + modelElement.getAttribute( 'level' ) );
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertElement( 'heading', { level: 2 }, modelRoot, 0 );
+			} );
+
+			expectResult( '<h2></h2>' );
+		} );
+
+		describe( 'converting element', () => {
+			beforeEach( () => {
+				model.schema.register( 'simpleBlock', {
+					allowIn: '$root',
+					allowAttributes: [ 'toStyle', 'toClass' ]
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: 'simpleBlock',
+					view: ( modelElement, { writer } ) => {
+						return writer.createContainerElement( 'div', { class: 'simple' } );
+					}
+				} );
+
+				model.schema.register( 'paragraph', {
+					inheritAllFrom: '$block',
+					allowIn: 'simpleBlock'
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: 'paragraph',
+					view: 'p'
+				} );
+			} );
+
+			it( 'should convert element insert', () => {
+				_setModelData( model, '<simpleBlock toStyle="display:block"></simpleBlock>' );
+
+				expectResult( '<div class="simple"></div>' );
+			} );
+
+			it( 'should not reconvert on adding a child', () => {
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', () => {
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 0 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ viewAfter, /* insertedPara */, /* insertedText */, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div class="simple"><p>bar</p><p>foo</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).not.toHaveBeenCalled();
+			} );
+		} );
+
+		describe( 'converting element together with selected attributes', () => {
+			it( 'should allow passing a list of attributes to convert and consume', () => {
+				model.schema.register( 'simpleBlock', {
+					allowIn: '$root',
+					allowAttributes: [ 'toStyle', 'toClass' ]
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: {
+						name: 'simpleBlock',
+						attributes: [ 'toStyle', 'toClass' ]
+					},
+					view: ( modelElement, { writer } ) => {
+						return writer.createContainerElement( 'div', getViewAttributes( modelElement ) );
+					}
+				} );
+
+				let consumable;
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data, conversionApi ) => {
+					consumable = conversionApi.consumable;
+				}, { priority: 'low' } );
+
+				_setModelData( model, '<simpleBlock toStyle="display:block"></simpleBlock>' );
+
+				expectResult( '<div style="display:block"></div>' );
+
+				expect( consumable.test( modelRoot.getChild( 0 ), 'attribute:toStyle' ) ).toBe( false );
+				expect( consumable.test( modelRoot.getChild( 0 ), 'attribute:toClass' ) ).toBeNull();
+			} );
+
+			it( 'should allow passing a single attribute name to convert and consume', () => {
+				model.schema.register( 'simpleBlock', {
+					allowIn: '$root',
+					allowAttributes: [ 'toStyle', 'toClass' ]
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: {
+						name: 'simpleBlock',
+						attributes: 'toStyle'
+					},
+					view: ( modelElement, { writer } ) => {
+						return writer.createContainerElement( 'div', getViewAttributes( modelElement ) );
+					}
+				} );
+
+				let consumable;
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data, conversionApi ) => {
+					consumable = conversionApi.consumable;
+				}, { priority: 'low' } );
+
+				_setModelData( model, '<simpleBlock toStyle="display:block"></simpleBlock>' );
+
+				expectResult( '<div style="display:block"></div>' );
+
+				expect( consumable.test( modelRoot.getChild( 0 ), 'attribute:toStyle' ) ).toBe( false );
+				expect( consumable.test( modelRoot.getChild( 0 ), 'attribute:toClass' ) ).toBeNull();
+			} );
+		} );
+
+		describe( 'with simple block view structure (without reconversion on children list change)', () => {
+			beforeEach( () => {
+				model.schema.register( 'simpleBlock', {
+					allowIn: '$root',
+					allowAttributes: [ 'toStyle', 'toClass' ]
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: {
+						name: 'simpleBlock',
+						attributes: [ 'toStyle', 'toClass' ]
+					},
+					view: ( modelElement, { writer } ) => {
+						return writer.createContainerElement( 'div', getViewAttributes( modelElement ) );
+					}
+				} );
+			} );
+
+			it( 'should convert on insert', () => {
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data ).not.toHaveProperty( 'reconversion' );
+				} );
+
+				model.change( writer => {
+					writer.insertElement( 'simpleBlock', modelRoot, 0 );
+				} );
+
+				expectResult( '<div></div>' );
+			} );
+
+			it( 'should convert on attribute set', () => {
+				_setModelData( model, '<simpleBlock></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				const [ viewBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:block', modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter ] = getNodes();
+
+				expectResult( '<div style="display:block"></div>' );
+				expect( viewAfter ).not.toBe( viewBefore );
+			} );
+
+			it( 'should convert on attribute change', () => {
+				_setModelData( model, '<simpleBlock toStyle="display:block"></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				const [ viewBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:inline', modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter ] = getNodes();
+
+				expectResult( '<div style="display:inline"></div>' );
+
+				expect( viewAfter ).not.toBe( viewBefore );
+			} );
+
+			it( 'should convert on attribute remove', () => {
+				_setModelData( model, '<simpleBlock toStyle="display:block"></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				model.change( writer => {
+					writer.removeAttribute( 'toStyle', modelRoot.getChild( 0 ) );
+				} );
+
+				expectResult( '<div></div>' );
+			} );
+
+			it( 'should convert on one attribute add and other remove', () => {
+				_setModelData( model, '<simpleBlock toStyle="display:block"></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				model.change( writer => {
+					writer.removeAttribute( 'toStyle', modelRoot.getChild( 0 ) );
+					writer.setAttribute( 'toClass', true, modelRoot.getChild( 0 ) );
+				} );
+
+				expectResult( '<div class="is-classy"></div>' );
+			} );
+
+			it( 'should reuse child view element', () => {
+				model.schema.register( 'paragraph', { inheritAllFrom: '$block', allowIn: 'simpleBlock' } );
+				downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+
+				_setModelData( model, '<simpleBlock toStyle="display:block"><paragraph>foo</paragraph></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:inline', modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div style="display:inline"><p>foo</p></div>' );
+
+				expect( viewAfter ).not.toBe( viewBefore );
+				expect( paraAfter ).toBe( paraBefore );
+				expect( textAfter ).toBe( textBefore );
+			} );
+
+			it( 'should not reuse child view element if marked by Differ#_refreshItem()', () => {
+				model.schema.register( 'paragraph', { inheritAllFrom: '$block', allowIn: 'simpleBlock' } );
+				downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+
+				_setModelData( model, '<simpleBlock toStyle="display:block"><paragraph>foo</paragraph></simpleBlock>' );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:inline', modelRoot.getChild( 0 ) );
+					model.document.differ._refreshItem( modelRoot.getChild( 0 ).getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div style="display:inline"><p>foo</p></div>' );
+
+				expect( viewAfter ).not.toBe( viewBefore );
+				expect( paraAfter ).not.toBe( paraBefore );
+				expect( textAfter ).not.toBe( textBefore );
+			} );
+
+			it( 'should properly re-bind mapper mappings and retain markers', () => {
+				downcastHelpers.elementToElement( {
+					model: {
+						name: 'simpleBlock',
+						attributes: [ 'toStyle', 'toClass' ]
+					},
+					view: ( modelElement, { writer } ) => {
+						const viewElement = writer.createContainerElement( 'div', getViewAttributes( modelElement ) );
+
+						return toWidget( viewElement, writer );
+					},
+					converterPriority: 'high'
+				} );
+
+				const mapper = controller.mapper;
+
+				downcastHelpers.markerToHighlight( {
+					model: 'myMarker',
+					view: { classes: 'foo' }
+				} );
+
+				_setModelData( model, '<simpleBlock></simpleBlock>' );
+
+				const modelElement = modelRoot.getChild( 0 );
+				const [ viewBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.addMarker( 'myMarker', { range: writer.createRangeOn( modelElement ), usingOperation: false } );
+				} );
+
+				expect( mapper.toViewElement( modelElement ) ).toBe( viewBefore );
+				expect( mapper.toModelElement( viewBefore ) ).toBe( modelElement );
+				expect( mapper.markerNameToElements( 'myMarker' ).has( viewBefore ) ).toBe( true );
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:block', modelElement );
+				} );
+
+				const [ viewAfter ] = getNodes();
+
+				expect( mapper.toViewElement( modelElement ) ).toBe( viewAfter );
+				expect( mapper.toModelElement( viewBefore ) ).toBeUndefined();
+				expect( mapper.toModelElement( viewAfter ) ).toBe( modelElement );
+				expect( mapper.markerNameToElements( 'myMarker' ).has( viewAfter ) ).toBe( true );
+				expect( mapper.markerNameToElements( 'myMarker' ).has( viewBefore ) ).toBe( false );
+			} );
+
+			it( 'should not reconvert if non watched attribute has changed', () => {
+				_setModelData( model, '<simpleBlock></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data ).not.toHaveProperty( 'reconversion' );
+				} );
+
+				const [ viewBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'notTriggered', true, modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter ] = getNodes();
+
+				expectResult( '<div></div>' );
+
+				expect( viewAfter ).toBe( viewBefore );
+			} );
+
+			it( 'should reconvert on child element added (implicit reconversion because of attributes watch)', () => {
+				model.schema.register( 'paragraph', {
+					inheritAllFrom: '$block',
+					allowIn: 'simpleBlock'
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: 'paragraph',
+					view: 'p'
+				} );
+
+				_setModelData( model, '<simpleBlock></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				const [ viewBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.insertElement( 'paragraph', modelRoot.getChild( 0 ), 0 );
+				} );
+
+				const [ viewAfter ] = getNodes();
+
+				expectResult( '<div><p></p></div>' );
+
+				expect( viewAfter ).not.toBe( viewBefore );
+			} );
+		} );
+
+		describe( 'with simple block view structure (with reconversion on child add)', () => {
+			beforeEach( () => {
+				model.schema.register( 'simpleBlock', {
+					allowIn: '$root',
+					allowAttributes: [ 'toStyle', 'toClass' ]
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: {
+						name: 'simpleBlock',
+						children: true
+					},
+					view: ( modelElement, { writer } ) => {
+						return writer.createContainerElement( 'div', getViewAttributes( modelElement ) );
+					}
+				} );
+
+				model.schema.register( 'paragraph', {
+					inheritAllFrom: '$block',
+					allowIn: 'simpleBlock'
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: 'paragraph',
+					view: 'p'
+				} );
+			} );
+
+			it( 'should convert on insert', () => {
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data ).not.toHaveProperty( 'reconversion' );
+				} );
+
+				model.change( writer => {
+					const simpleBlock = writer.createElement( 'simpleBlock' );
+					const paragraph = writer.createElement( 'paragraph' );
+
+					writer.insert( simpleBlock, modelRoot, 0 );
+					writer.insert( paragraph, simpleBlock, 0 );
+					writer.insertText( 'foo', paragraph, 0 );
+				} );
+
+				expectResult( '<div><p>foo</p></div>' );
+			} );
+
+			it( 'should convert on adding a child (at the beginning)', () => {
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 0 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ viewAfter, /* insertedPara */, /* insertedText */, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div><p>bar</p><p>foo</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on adding a child (in the middle)', () => {
+				_setModelData( model,
+					'<simpleBlock>' +
+						'<paragraph>foo</paragraph>' +
+						'<paragraph>bar</paragraph>' +
+					'</simpleBlock>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraFooBefore, textFooBefore, paraBarBefore, textBarBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'baz' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ viewAfter,
+					paraFooAfter, textFooAfter, /* insertedPara */, /* insertedText */, paraBarAfter, textBarAfter
+				] = getNodes();
+
+				expectResult( '<div><p>foo</p><p>baz</p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraFooAfter, 'para foo' ).toBe( paraFooBefore );
+				expect( textFooAfter, 'text foo' ).toBe( textFooBefore );
+				expect( paraBarAfter, 'para bar' ).toBe( paraBarBefore );
+				expect( textBarAfter, 'text bar' ).toBe( textBarBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on adding a child (at the end)', () => {
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div><p>foo</p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert attribute change and add a child at the same time (separate converters)', () => {
+				model.schema.extend( 'simpleBlock', { allowAttributes: 'someOther' } );
+				downcastHelpers.attributeToAttribute( { model: 'someOther', view: 'data-other' } );
+
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+					writer.setAttribute( 'someOther', 'foo', modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div data-other="foo"><p>foo</p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert attribute change, remove element before, and add a child at the same time (separate)', () => {
+				model.schema.extend( 'simpleBlock', { allowAttributes: 'someOther' } );
+				downcastHelpers.attributeToAttribute( { model: 'someOther', view: 'data-other' } );
+
+				_setModelData( model, '<paragraph></paragraph><simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes( 1 );
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.remove( modelRoot.getChild( 0 ) );
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+					writer.setAttribute( 'someOther', 'foo', modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div data-other="foo"><p>foo</p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should reconvert before content modifications (some deeply nested node added)', () => {
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+					writer.insertText( 'abc', modelRoot.getChild( 0 ).getChild( 0 ), 'end' );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div><p>fooabc</p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should reconvert before content modifications (some deeply nested node removed)', () => {
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+					writer.remove( modelRoot.getChild( 0 ).getChild( 0 ).getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter ] = getNodes();
+
+				expectResult( '<div><p></p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should reconvert before content modifications (with element added before)', () => {
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+					writer.remove( modelRoot.getChild( 0 ).getChild( 0 ).getChild( 0 ) );
+					writer.insertElement( 'paragraph', modelRoot, 0 );
+				} );
+
+				const [ viewAfter, paraAfter ] = getNodes( 1 );
+
+				expectResult( '<p></p><div><p></p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on removing a child', () => {
+				_setModelData( model,
+					'<simpleBlock><paragraph>foo</paragraph><paragraph>bar</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.remove( modelRoot.getNodeByPath( [ 0, 1 ] ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div><p>foo</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			// https://github.com/ckeditor/ckeditor5/issues/9641
+			it( 'should convert on multiple similar child hooks', () => {
+				model.schema.register( 'simpleBlock2', {
+					allowIn: '$root',
+					allowChildren: 'paragraph'
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: {
+						name: 'simpleBlock2',
+						children: true
+					},
+					view: ( modelElement, { writer } ) => {
+						return writer.createContainerElement( 'div', { class: 'second' } );
+					}
+				} );
+
+				_setModelData( model,
+					'<simpleBlock><paragraph>foo</paragraph></simpleBlock>' +
+					'<simpleBlock2><paragraph>bar</paragraph></simpleBlock2>'
+				);
+
+				const [ viewBefore0, paraBefore0, textBefore0 ] = getNodes( 0 );
+				const [ viewBefore1, paraBefore1, textBefore1 ] = getNodes( 1 );
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'abc' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ viewAfter0, paraAfter0, textAfter0 ] = getNodes( 0 );
+				const [ viewAfter1, paraAfter1, textAfter1 ] = getNodes( 1 );
+
+				expectResult(
+					'<div><p>foo</p><p>abc</p></div>' +
+					'<div class="second"><p>bar</p></div>'
+				);
+
+				expect( viewAfter0, 'simpleBlock' ).not.toBe( viewBefore0 );
+				expect( paraAfter0, 'para' ).toBe( paraBefore0 );
+				expect( textAfter0, 'text' ).toBe( textBefore0 );
+
+				expect( viewAfter1, 'simpleBlock' ).toBe( viewBefore1 );
+				expect( paraAfter1, 'para' ).toBe( paraBefore1 );
+				expect( textAfter1, 'text' ).toBe( textBefore1 );
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( '123' );
+
+					writer.insert( paragraph, modelRoot.getChild( 1 ), 1 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ viewAfterAfter0, paraAfterAfter0, textAfterAfter0 ] = getNodes( 0 );
+				const [ viewAfterAfter1, paraAfterAfter1, textAfterAfter1 ] = getNodes( 1 );
+
+				expectResult(
+					'<div><p>foo</p><p>abc</p></div>' +
+					'<div class="second"><p>bar</p><p>123</p></div>'
+				);
+
+				expect( viewAfter0, 'simpleBlock' ).not.toBe( viewBefore0 );
+				expect( paraAfter0, 'para' ).toBe( paraBefore0 );
+				expect( textAfter0, 'text' ).toBe( textBefore0 );
+
+				expect( viewAfter1, 'simpleBlock' ).toBe( viewBefore1 );
+				expect( paraAfter1, 'para' ).toBe( paraBefore1 );
+				expect( textAfter1, 'text' ).toBe( textBefore1 );
+
+				expect( viewAfterAfter0, 'simpleBlock' ).toBe( viewAfter0 );
+				expect( paraAfterAfter0, 'para' ).toBe( paraAfter0 );
+				expect( textAfterAfter0, 'text' ).toBe( textAfter0 );
+
+				expect( viewAfterAfter1, 'simpleBlock' ).not.toBe( viewAfter1 );
+				expect( paraAfterAfter1, 'para' ).toBe( paraAfter1 );
+				expect( textAfterAfter1, 'text' ).toBe( textAfter1 );
+			} );
+
+			it( 'should not reuse child view element if marked by Differ#_refreshItem()', () => {
+				_setModelData( model, '<simpleBlock toStyle="display:block"><paragraph>foo</paragraph></simpleBlock>' );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:inline', modelRoot.getChild( 0 ) );
+					model.document.differ._refreshItem( modelRoot.getChild( 0 ).getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div style="display:inline"><p>foo</p></div>' );
+
+				expect( viewAfter ).not.toBe( viewBefore );
+				expect( paraAfter ).not.toBe( paraBefore );
+				expect( textAfter ).not.toBe( textBefore );
+			} );
+
+			it( 'should fire conversion events in proper order', () => {
+				const loggedEvents = [];
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					const itemId = data.item.name ? data.item.name : '$text:' + data.item.data;
+					const log = 'insert:' + itemId + ':' + data.range.start.path + ':' + data.range.end.path;
+
+					loggedEvents.push( log );
+				}, { priority: 'highest' } );
+
+				controller.downcastDispatcher.on( 'attribute', ( evt, data ) => {
+					const itemId = data.item.name ? data.item.name : '$text:' + data.item.data;
+					const key = data.attributeKey;
+					const value = data.attributeNewValue;
+					const log = 'attribute:' + key + ':' + value + ':' + itemId + ':' + data.range.start.path + ':' + data.range.end.path;
+
+					loggedEvents.push( log );
+				}, { priority: 'highest' } );
+
+				_setModelData( model, '<simpleBlock toStyle="display:block"><paragraph>foo</paragraph></simpleBlock>' );
+
+				expectResult( '<div style="display:block"><p>foo</p></div>' );
+
+				expect( loggedEvents ).toEqual( [
+					'insert:simpleBlock:0:1',
+					'attribute:toStyle:display:block:simpleBlock:0:1',
+					'insert:paragraph:0,0:0,1',
+					'insert:$text:foo:0,0,0:0,0,3'
+				] );
+			} );
+		} );
+
+		describe( 'with multiple child elements', () => {
+			it( 'does not warn if multiple child elements are created', () => {
+				let viewElement;
+
+				vi.spyOn( console, 'warn' ).mockImplementation( () => {} );
+
+				downcastHelpers.elementToElement( {
+					model: 'multiItemBox',
+					view: ( modelElement, { writer } ) => {
+						viewElement = writer.createContainerElement( 'div' );
+
+						writer.insert( writer.createPositionAt( viewElement, 0 ), writer.createEmptyElement( 'p' ) );
+
+						return viewElement;
+					}
+				} );
+
+				model.change( writer => {
+					writer.insertElement( 'multiItemBox', null, modelRoot, 0 );
+				} );
+
+				expect( console.warn ).not.toHaveBeenCalled();
+			} );
+
+			it( 'does not warn if multiple child UI elements are created', () => {
+				let viewElement;
+
+				vi.spyOn( console, 'warn' ).mockImplementation( () => {} );
+
+				downcastHelpers.elementToElement( {
+					model: 'multiItemBox',
+					view: ( modelElement, { writer } ) => {
+						viewElement = writer.createContainerElement( 'div' );
+
+						writer.insert( writer.createPositionAt( viewElement, 0 ), writer.createUIElement( 'div' ) );
+						writer.insert( writer.createPositionAt( viewElement, 1 ), writer.createUIElement( 'span' ) );
+
+						return viewElement;
+					}
+				} );
+
+				model.change( writer => {
+					writer.insertElement( 'multiItemBox', null, modelRoot, 0 );
+				} );
+
+				expect( console.warn ).not.toHaveBeenCalled();
+			} );
+		} );
+	} );
+
+	describe( 'elementToStructure()', () => {
+		it( 'should be chainable', () => {
+			expect( downcastHelpers.elementToStructure( { model: 'paragraph', view: 'p' } ) ).toBe( downcastHelpers );
+		} );
+
+		it( 'config.view is a string', () => {
+			downcastHelpers.elementToStructure( { model: 'paragraph', view: 'p' } );
+
+			model.change( writer => {
+				writer.insertElement( 'paragraph', modelRoot, 0 );
+			} );
+
+			expectResult( '<p></p>' );
+		} );
+
+		it( 'can be overwritten using converterPriority', () => {
+			downcastHelpers.elementToStructure( { model: 'paragraph', view: 'p' } );
+			downcastHelpers.elementToStructure( { model: 'paragraph', view: 'foo', converterPriority: 'high' } );
+
+			model.change( writer => {
+				writer.insertElement( 'paragraph', modelRoot, 0 );
+			} );
+
+			expectResult( '<foo></foo>' );
+		} );
+
+		it( 'config.view is a view element definition', () => {
+			downcastHelpers.elementToStructure( {
+				model: 'fancyParagraph',
+				view: {
+					name: 'p',
+					classes: 'fancy'
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertElement( 'fancyParagraph', modelRoot, 0 );
+			} );
+
+			expectResult( '<p class="fancy"></p>' );
+		} );
+
+		it( 'config.view is a function', () => {
+			downcastHelpers.elementToStructure( {
+				model: 'heading',
+				view: ( modelElement, { writer } ) => writer.createContainerElement( 'h' + modelElement.getAttribute( 'level' ) )
+			} );
+
+			model.change( writer => {
+				writer.insertElement( 'heading', { level: 2 }, modelRoot, 0 );
+			} );
+
+			expectResult( '<h2></h2>' );
+		} );
+
+		it( 'config.view is a function that does not return view element', () => {
+			downcastHelpers.elementToStructure( {
+				model: 'heading',
+				view: () => null
+			} );
+
+			controller.downcastDispatcher.on( 'insert:heading', ( evt, data, conversionApi ) => {
+				conversionApi.consumable.consume( data.item, evt.name );
+			}, { priority: 'lowest' } );
+
+			model.change( writer => {
+				writer.insertElement( 'heading', {}, modelRoot, 0 );
+			} );
+
+			expectResult( '' );
+		} );
+
+		it( 'config.view is a function that receives event data as a third argument', () => {
+			downcastHelpers.elementToStructure( {
+				model: 'heading',
+				view: ( modelElement, { writer }, data ) => {
+					expect( data.item.is( 'element', 'heading' ) ).toBe( true );
+					expect( data.range.is( 'range' ) ).toBe( true );
+
+					return writer.createContainerElement( 'h' + modelElement.getAttribute( 'level' ) );
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertElement( 'heading', { level: 2 }, modelRoot, 0 );
+			} );
+
+			expectResult( '<h2></h2>' );
+		} );
+
+		describe( 'converting element together with selected attributes', () => {
+			it( 'should allow passing a list of attributes to convert and consume', () => {
+				model.schema.register( 'simpleBlock', {
+					allowIn: '$root',
+					allowAttributes: [ 'toStyle', 'toClass' ]
+				} );
+
+				downcastHelpers.elementToStructure( {
+					model: {
+						name: 'simpleBlock',
+						attributes: [ 'toStyle', 'toClass' ]
+					},
+					view: ( modelElement, { writer } ) => {
+						return writer.createContainerElement( 'div', getViewAttributes( modelElement ) );
+					}
+				} );
+
+				let consumable;
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data, conversionApi ) => {
+					consumable = conversionApi.consumable;
+				}, { priority: 'low' } );
+
+				_setModelData( model, '<simpleBlock toStyle="display:block"></simpleBlock>' );
+
+				expectResult( '<div style="display:block"></div>' );
+
+				expect( consumable.test( modelRoot.getChild( 0 ), 'attribute:toStyle' ) ).toBe( false );
+				expect( consumable.test( modelRoot.getChild( 0 ), 'attribute:toClass' ) ).toBeNull();
+			} );
+
+			it( 'should allow passing a single attribute name to convert and consume', () => {
+				model.schema.register( 'simpleBlock', {
+					allowIn: '$root',
+					allowAttributes: [ 'toStyle', 'toClass' ]
+				} );
+
+				downcastHelpers.elementToStructure( {
+					model: {
+						name: 'simpleBlock',
+						attributes: 'toStyle'
+					},
+					view: ( modelElement, { writer } ) => {
+						return writer.createContainerElement( 'div', getViewAttributes( modelElement ) );
+					}
+				} );
+
+				let consumable;
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data, conversionApi ) => {
+					consumable = conversionApi.consumable;
+				}, { priority: 'low' } );
+
+				_setModelData( model, '<simpleBlock toStyle="display:block"></simpleBlock>' );
+
+				expectResult( '<div style="display:block"></div>' );
+
+				expect( consumable.test( modelRoot.getChild( 0 ), 'attribute:toStyle' ) ).toBe( false );
+				expect( consumable.test( modelRoot.getChild( 0 ), 'attribute:toClass' ) ).toBeNull();
+			} );
+		} );
+
+		describe( 'with simple block view structure (without slots)', () => {
+			beforeEach( () => {
+				model.schema.register( 'simpleBlock', {
+					allowIn: '$root',
+					allowAttributes: [ 'toStyle', 'toClass' ]
+				} );
+
+				downcastHelpers.elementToStructure( {
+					model: {
+						name: 'simpleBlock',
+						attributes: [ 'toStyle', 'toClass' ]
+					},
+					view: ( modelElement, { writer } ) => {
+						return writer.createContainerElement( 'div', getViewAttributes( modelElement ) );
+					}
+				} );
+			} );
+
+			it( 'should convert on insert', () => {
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data ).not.toHaveProperty( 'reconversion' );
+				} );
+
+				model.change( writer => {
+					writer.insertElement( 'simpleBlock', modelRoot, 0 );
+				} );
+
+				expectResult( '<div></div>' );
+			} );
+
+			it( 'should convert on attribute set', () => {
+				_setModelData( model, '<simpleBlock></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				const [ viewBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:block', modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter ] = getNodes();
+
+				expectResult( '<div style="display:block"></div>' );
+				expect( viewAfter ).not.toBe( viewBefore );
+			} );
+
+			it( 'should convert on attribute change', () => {
+				_setModelData( model, '<simpleBlock toStyle="display:block"></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				const [ viewBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:inline', modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter ] = getNodes();
+
+				expectResult( '<div style="display:inline"></div>' );
+
+				expect( viewAfter ).not.toBe( viewBefore );
+			} );
+
+			it( 'should convert on attribute remove', () => {
+				_setModelData( model, '<simpleBlock toStyle="display:block"></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				model.change( writer => {
+					writer.removeAttribute( 'toStyle', modelRoot.getChild( 0 ) );
+				} );
+
+				expectResult( '<div></div>' );
+			} );
+
+			it( 'should convert on one attribute add and other remove', () => {
+				_setModelData( model, '<simpleBlock toStyle="display:block"></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				model.change( writer => {
+					writer.removeAttribute( 'toStyle', modelRoot.getChild( 0 ) );
+					writer.setAttribute( 'toClass', true, modelRoot.getChild( 0 ) );
+				} );
+
+				expectResult( '<div class="is-classy"></div>' );
+			} );
+
+			it( 'should properly re-bind mapper mappings and retain markers', () => {
+				downcastHelpers.elementToElement( {
+					model: {
+						name: 'simpleBlock',
+						attributes: [ 'toStyle', 'toClass' ]
+					},
+					view: ( modelElement, { writer } ) => {
+						const viewElement = writer.createContainerElement( 'div', getViewAttributes( modelElement ) );
+
+						return toWidget( viewElement, writer );
+					},
+					converterPriority: 'high'
+				} );
+
+				const mapper = controller.mapper;
+
+				downcastHelpers.markerToHighlight( {
+					model: 'myMarker',
+					view: { classes: 'foo' }
+				} );
+
+				_setModelData( model, '<simpleBlock></simpleBlock>' );
+
+				const modelElement = modelRoot.getChild( 0 );
+				const [ viewBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.addMarker( 'myMarker', { range: writer.createRangeOn( modelElement ), usingOperation: false } );
+				} );
+
+				expect( mapper.toViewElement( modelElement ) ).toBe( viewBefore );
+				expect( mapper.toModelElement( viewBefore ) ).toBe( modelElement );
+				expect( mapper.markerNameToElements( 'myMarker' ).has( viewBefore ) ).toBe( true );
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:block', modelElement );
+				} );
+
+				const [ viewAfter ] = getNodes();
+
+				expect( mapper.toViewElement( modelElement ) ).toBe( viewAfter );
+				expect( mapper.toModelElement( viewBefore ) ).toBeUndefined();
+				expect( mapper.toModelElement( viewAfter ) ).toBe( modelElement );
+				expect( mapper.markerNameToElements( 'myMarker' ).has( viewAfter ) ).toBe( true );
+				expect( mapper.markerNameToElements( 'myMarker' ).has( viewBefore ) ).toBe( false );
+			} );
+
+			it( 'should not reconvert if non watched attribute has changed', () => {
+				_setModelData( model, '<simpleBlock></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data ).not.toHaveProperty( 'reconversion' );
+				} );
+
+				const [ viewBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'notTriggered', true, modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter ] = getNodes();
+
+				expectResult( '<div></div>' );
+
+				expect( viewAfter ).toBe( viewBefore );
+			} );
+		} );
+
+		describe( 'with simple block view structure (with slots, changing attributes)', () => {
+			beforeEach( () => {
+				model.schema.register( 'simpleBlock', {
+					allowIn: '$root',
+					allowAttributes: [ 'toStyle', 'toClass' ]
+				} );
+
+				downcastHelpers.elementToStructure( {
+					model: {
+						name: 'simpleBlock',
+						attributes: [ 'toStyle', 'toClass' ]
+					},
+					view: ( modelElement, { writer } ) => {
+						const viewElement = writer.createContainerElement( 'div', getViewAttributes( modelElement ) );
+
+						writer.insert( writer.createPositionAt( viewElement, 0 ), writer.createSlot() );
+
+						return viewElement;
+					}
+				} );
+
+				model.schema.register( 'paragraph', {
+					inheritAllFrom: '$block',
+					allowIn: 'simpleBlock'
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: 'paragraph',
+					view: 'p'
+				} );
+			} );
+
+			it( 'should convert on insert', () => {
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data ).not.toHaveProperty( 'reconversion' );
+				} );
+
+				model.change( writer => {
+					const simpleBlock = writer.createElement( 'simpleBlock' );
+					const paragraph = writer.createElement( 'paragraph' );
+
+					writer.insert( simpleBlock, modelRoot, 0 );
+					writer.insert( paragraph, simpleBlock, 0 );
+					writer.insertText( 'foo', paragraph, 0 );
+				} );
+
+				expectResult( '<div><p>foo</p></div>' );
+			} );
+
+			it( 'should convert on attribute set', () => {
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:block', modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div style="display:block"><p>foo</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+			} );
+
+			it( 'should convert on attribute change', () => {
+				_setModelData( model, '<simpleBlock toStyle="display:block"><paragraph>foo</paragraph></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:inline', modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div style="display:inline"><p>foo</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+			} );
+
+			it( 'should convert on attribute remove', () => {
+				_setModelData( model, '<simpleBlock toStyle="display:block"><paragraph>foo</paragraph></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				model.change( writer => {
+					writer.removeAttribute( 'toStyle', modelRoot.getChild( 0 ) );
+				} );
+
+				expectResult( '<div><p>foo</p></div>' );
+			} );
+
+			it( 'should convert on one attribute add and other remove', () => {
+				_setModelData( model, '<simpleBlock toStyle="display:block"><paragraph>foo</paragraph></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+				} );
+
+				model.change( writer => {
+					writer.removeAttribute( 'toStyle', modelRoot.getChild( 0 ) );
+					writer.setAttribute( 'toClass', true, modelRoot.getChild( 0 ) );
+				} );
+
+				expectResult( '<div class="is-classy"><p>foo</p></div>' );
+			} );
+
+			it( 'should not reconvert if non watched attribute has changed', () => {
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data ).not.toHaveProperty( 'reconversion' );
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'notTriggered', true, modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div><p>foo</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+			} );
+
+			it( 'should not reuse child view element if marked by Differ#_refreshItem()', () => {
+				_setModelData( model, '<simpleBlock toStyle="display:block"><paragraph>foo</paragraph></simpleBlock>' );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:inline', modelRoot.getChild( 0 ) );
+					model.document.differ._refreshItem( modelRoot.getChild( 0 ).getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div style="display:inline"><p>foo</p></div>' );
+
+				expect( viewAfter ).not.toBe( viewBefore );
+				expect( paraAfter ).not.toBe( paraBefore );
+				expect( textAfter ).not.toBe( textBefore );
+			} );
+		} );
+
+		describe( 'with simple block view structure (reconvert on child add)', () => {
+			beforeEach( () => {
+				model.schema.register( 'simpleBlock', {
+					allowIn: '$root',
+					allowAttributes: [ 'toStyle', 'toClass' ]
+				} );
+
+				downcastHelpers.elementToStructure( {
+					model: 'simpleBlock',
+					view: ( modelElement, { writer } ) => {
+						const viewElement = writer.createContainerElement( 'div', getViewAttributes( modelElement ) );
+
+						writer.insert( writer.createPositionAt( viewElement, 0 ), writer.createSlot() );
+
+						return viewElement;
+					}
+				} );
+
+				model.schema.register( 'paragraph', {
+					inheritAllFrom: '$block',
+					allowIn: 'simpleBlock'
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: 'paragraph',
+					view: 'p'
+				} );
+			} );
+
+			it( 'should convert on insert', () => {
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data ).not.toHaveProperty( 'reconversion' );
+				} );
+
+				model.change( writer => {
+					const simpleBlock = writer.createElement( 'simpleBlock' );
+					const paragraph = writer.createElement( 'paragraph' );
+
+					writer.insert( simpleBlock, modelRoot, 0 );
+					writer.insert( paragraph, simpleBlock, 0 );
+					writer.insertText( 'foo', paragraph, 0 );
+				} );
+
+				expectResult( '<div><p>foo</p></div>' );
+			} );
+
+			it( 'should convert on adding a child (at the beginning)', () => {
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 0 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ viewAfter, /* insertedPara */, /* insertedText */, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div><p>bar</p><p>foo</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on adding a child (in the middle)', () => {
+				_setModelData( model,
+					'<simpleBlock>' +
+						'<paragraph>foo</paragraph>' +
+						'<paragraph>bar</paragraph>' +
+					'</simpleBlock>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraFooBefore, textFooBefore, paraBarBefore, textBarBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'baz' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ viewAfter,
+					paraFooAfter, textFooAfter, /* insertedPara */, /* insertedText */, paraBarAfter, textBarAfter
+				] = getNodes();
+
+				expectResult( '<div><p>foo</p><p>baz</p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraFooAfter, 'para foo' ).toBe( paraFooBefore );
+				expect( textFooAfter, 'text foo' ).toBe( textFooBefore );
+				expect( paraBarAfter, 'para bar' ).toBe( paraBarBefore );
+				expect( textBarAfter, 'text bar' ).toBe( textBarBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on adding a child (at the end)', () => {
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div><p>foo</p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert attribute change and add a child at the same time (separate converters)', () => {
+				model.schema.extend( 'simpleBlock', { allowAttributes: 'someOther' } );
+				downcastHelpers.attributeToAttribute( { model: 'someOther', view: 'data-other' } );
+
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+					writer.setAttribute( 'someOther', 'foo', modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div data-other="foo"><p>foo</p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert attribute change, remove element before, and add a child at the same time (separate)', () => {
+				model.schema.extend( 'simpleBlock', { allowAttributes: 'someOther' } );
+				downcastHelpers.attributeToAttribute( { model: 'someOther', view: 'data-other' } );
+
+				_setModelData( model, '<paragraph></paragraph><simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes( 1 );
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.remove( modelRoot.getChild( 0 ) );
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+					writer.setAttribute( 'someOther', 'foo', modelRoot.getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div data-other="foo"><p>foo</p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should reconvert before content modifications (some deeply nested node added)', () => {
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+					writer.insertText( 'abc', modelRoot.getChild( 0 ).getChild( 0 ), 'end' );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div><p>fooabc</p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should reconvert before content modifications (some deeply nested node removed)', () => {
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+					writer.remove( modelRoot.getChild( 0 ).getChild( 0 ).getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter ] = getNodes();
+
+				expectResult( '<div><p></p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should reconvert before content modifications (with element added before)', () => {
+				_setModelData( model, '<simpleBlock><paragraph>foo</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:simpleBlock', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+					writer.remove( modelRoot.getChild( 0 ).getChild( 0 ).getChild( 0 ) );
+					writer.insertElement( 'paragraph', modelRoot, 0 );
+				} );
+
+				const [ viewAfter, paraAfter ] = getNodes( 1 );
+
+				expectResult( '<p></p><div><p></p><p>bar</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on removing a child', () => {
+				_setModelData( model,
+					'<simpleBlock><paragraph>foo</paragraph><paragraph>bar</paragraph></simpleBlock>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.remove( modelRoot.getNodeByPath( [ 0, 1 ] ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div><p>foo</p></div>' );
+
+				expect( viewAfter, 'simpleBlock' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			// https://github.com/ckeditor/ckeditor5/issues/9641
+			it( 'should convert on multiple similar child hooks', () => {
+				model.schema.register( 'simpleBlock2', {
+					allowIn: '$root',
+					allowChildren: 'paragraph'
+				} );
+
+				downcastHelpers.elementToStructure( {
+					model: {
+						name: 'simpleBlock2',
+						children: true
+					},
+					view: ( modelElement, { writer } ) => {
+						const viewElement = writer.createContainerElement( 'div', { class: 'second' } );
+
+						writer.insert( writer.createPositionAt( viewElement, 0 ), writer.createSlot() );
+
+						return viewElement;
+					}
+				} );
+
+				_setModelData( model,
+					'<simpleBlock><paragraph>foo</paragraph></simpleBlock>' +
+					'<simpleBlock2><paragraph>bar</paragraph></simpleBlock2>'
+				);
+
+				const [ viewBefore0, paraBefore0, textBefore0 ] = getNodes( 0 );
+				const [ viewBefore1, paraBefore1, textBefore1 ] = getNodes( 1 );
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'abc' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ viewAfter0, paraAfter0, textAfter0 ] = getNodes( 0 );
+				const [ viewAfter1, paraAfter1, textAfter1 ] = getNodes( 1 );
+
+				expectResult(
+					'<div><p>foo</p><p>abc</p></div>' +
+					'<div class="second"><p>bar</p></div>'
+				);
+
+				expect( viewAfter0, 'simpleBlock' ).not.toBe( viewBefore0 );
+				expect( paraAfter0, 'para' ).toBe( paraBefore0 );
+				expect( textAfter0, 'text' ).toBe( textBefore0 );
+
+				expect( viewAfter1, 'simpleBlock' ).toBe( viewBefore1 );
+				expect( paraAfter1, 'para' ).toBe( paraBefore1 );
+				expect( textAfter1, 'text' ).toBe( textBefore1 );
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( '123' );
+
+					writer.insert( paragraph, modelRoot.getChild( 1 ), 1 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ viewAfterAfter0, paraAfterAfter0, textAfterAfter0 ] = getNodes( 0 );
+				const [ viewAfterAfter1, paraAfterAfter1, textAfterAfter1 ] = getNodes( 1 );
+
+				expectResult(
+					'<div><p>foo</p><p>abc</p></div>' +
+					'<div class="second"><p>bar</p><p>123</p></div>'
+				);
+
+				expect( viewAfter0, 'simpleBlock' ).not.toBe( viewBefore0 );
+				expect( paraAfter0, 'para' ).toBe( paraBefore0 );
+				expect( textAfter0, 'text' ).toBe( textBefore0 );
+
+				expect( viewAfter1, 'simpleBlock' ).toBe( viewBefore1 );
+				expect( paraAfter1, 'para' ).toBe( paraBefore1 );
+				expect( textAfter1, 'text' ).toBe( textBefore1 );
+
+				expect( viewAfterAfter0, 'simpleBlock' ).toBe( viewAfter0 );
+				expect( paraAfterAfter0, 'para' ).toBe( paraAfter0 );
+				expect( textAfterAfter0, 'text' ).toBe( textAfter0 );
+
+				expect( viewAfterAfter1, 'simpleBlock' ).not.toBe( viewAfter1 );
+				expect( paraAfterAfter1, 'para' ).toBe( paraAfter1 );
+				expect( textAfterAfter1, 'text' ).toBe( textAfter1 );
+			} );
+
+			it( 'should not reuse child view element if marked by Differ#_refreshItem()', () => {
+				_setModelData( model, '<simpleBlock toStyle="display:block"><paragraph>foo</paragraph></simpleBlock>' );
+
+				const [ viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:inline', modelRoot.getChild( 0 ) );
+					model.document.differ._refreshItem( modelRoot.getChild( 0 ).getChild( 0 ) );
+				} );
+
+				const [ viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div style="display:inline"><p>foo</p></div>' );
+
+				expect( viewAfter ).not.toBe( viewBefore );
+				expect( paraAfter ).not.toBe( paraBefore );
+				expect( textAfter ).not.toBe( textBefore );
+			} );
+		} );
+
+		describe( 'with complex view structure - single slot for all children', () => {
+			beforeEach( () => {
+				model.schema.register( 'complex', {
+					allowIn: '$root',
+					allowAttributes: [ 'toStyle', 'toClass' ]
+				} );
+
+				downcastHelpers.elementToStructure( {
+					model: {
+						name: 'complex',
+						attributes: [ 'toStyle', 'toClass' ],
+						children: true
+					},
+					view: ( modelElement, { writer } ) => {
+						const outer = writer.createContainerElement( 'div', { class: 'complex-outer' } );
+						const inner = writer.createContainerElement( 'div', getViewAttributes( modelElement ) );
+
+						writer.insert( writer.createPositionAt( outer, 0 ), inner );
+						writer.insert( writer.createPositionAt( inner, 0 ), writer.createSlot() );
+
+						return outer;
+					}
+				} );
+
+				model.schema.register( 'paragraph', {
+					inheritAllFrom: '$block',
+					allowIn: 'complex'
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: 'paragraph',
+					view: 'p'
+				} );
+			} );
+
+			it( 'should convert on insert', () => {
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data ).not.toHaveProperty( 'reconversion' );
+					spy();
+				} );
+
+				model.change( writer => {
+					writer.insertElement( 'complex', modelRoot, 0 );
+				} );
+
+				expectResult( '<div class="complex-outer"><div></div></div>' );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on attribute set', () => {
+				_setModelData( model, '<complex></complex>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ outerDivBefore, innerDivBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:block', modelRoot.getChild( 0 ) );
+				} );
+
+				const [ outerDivAfter, innerDivAfter ] = getNodes();
+
+				expectResult( '<div class="complex-outer"><div style="display:block"></div></div>' );
+				expect( outerDivAfter, 'outer div' ).not.toBe( outerDivBefore );
+				expect( innerDivAfter, 'inner div' ).not.toBe( innerDivBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on attribute change', () => {
+				_setModelData( model, '<complex toStyle="display:block"></complex>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:inline', modelRoot.getChild( 0 ) );
+				} );
+
+				expectResult( '<div class="complex-outer"><div style="display:inline"></div></div>' );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on attribute remove', () => {
+				_setModelData( model, '<complex toStyle="display:block"></complex>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				model.change( writer => {
+					writer.removeAttribute( 'toStyle', modelRoot.getChild( 0 ) );
+				} );
+
+				expectResult( '<div class="complex-outer"><div></div></div>' );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on one attribute add and other remove', () => {
+				_setModelData( model, '<complex toStyle="display:block"></complex>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				model.change( writer => {
+					writer.removeAttribute( 'toStyle', modelRoot.getChild( 0 ) );
+					writer.setAttribute( 'toClass', true, modelRoot.getChild( 0 ) );
+				} );
+
+				expectResult( '<div class="complex-outer"><div class="is-classy"></div></div>' );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on adding a child (at the beginning)', () => {
+				_setModelData( model, '<complex toClass="true"><paragraph>foo</paragraph></complex>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ outerBefore, viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 0 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ outerAfter, viewAfter, /* insertedPara */, /* insertedText */, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div class="complex-outer"><div class="is-classy"><p>bar</p><p>foo</p></div></div>' );
+
+				expect( outerAfter, 'outer' ).not.toBe( outerBefore );
+				expect( viewAfter, 'inner' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on adding a child (in the middle)', () => {
+				_setModelData( model,
+					'<complex toClass="true">' +
+						'<paragraph>foo</paragraph>' +
+						'<paragraph>bar</paragraph>' +
+					'</complex>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ outerBefore, viewBefore, paraFooBefore, textFooBefore, paraBarBefore, textBarBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'baz' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ outerAfter, viewAfter,
+					paraFooAfter, textFooAfter, /* insertedPara */, /* insertedText */, paraBarAfter, textBarAfter
+				] = getNodes();
+
+				expectResult( '<div class="complex-outer"><div class="is-classy"><p>foo</p><p>baz</p><p>bar</p></div></div>' );
+
+				expect( outerAfter, 'outer' ).not.toBe( outerBefore );
+				expect( viewAfter, 'inner' ).not.toBe( viewBefore );
+				expect( paraFooAfter, 'para foo' ).toBe( paraFooBefore );
+				expect( textFooAfter, 'text foo' ).toBe( textFooBefore );
+				expect( paraBarAfter, 'para bar' ).toBe( paraBarBefore );
+				expect( textBarAfter, 'text bar' ).toBe( textBarBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on adding a child (at the end)', () => {
+				_setModelData( model, '<complex toClass="true"><paragraph>foo</paragraph></complex>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ outerBefore, viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ outerAfter, viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div class="complex-outer"><div class="is-classy"><p>foo</p><p>bar</p></div></div>' );
+
+				expect( outerAfter, 'outer' ).not.toBe( outerBefore );
+				expect( viewAfter, 'inner' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on removing a child', () => {
+				_setModelData( model, '<complex toClass="true"><paragraph>foo</paragraph><paragraph>bar</paragraph></complex>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ outerBefore, viewBefore, paraBefore, textBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.remove( modelRoot.getNodeByPath( [ 0, 1 ] ) );
+				} );
+
+				const [ outerAfter, viewAfter, paraAfter, textAfter ] = getNodes();
+
+				expectResult( '<div class="complex-outer"><div class="is-classy"><p>foo</p></div></div>' );
+
+				expect( outerAfter, 'outer' ).not.toBe( outerBefore );
+				expect( viewAfter, 'inner' ).not.toBe( viewBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should not reconvert if non watched attribute has changed', () => {
+				_setModelData( model, '<complex></complex>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', () => {
+					spy();
+				} );
+
+				const [ outerDivBefore, innerDivBefore ] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'notTriggered', true, modelRoot.getChild( 0 ) );
+				} );
+
+				const [ outerDivAfter, innerDivAfter ] = getNodes();
+
+				expectResult( '<div class="complex-outer"><div></div></div>' );
+
+				expect( outerDivAfter, 'outer div' ).toBe( outerDivBefore );
+				expect( innerDivAfter, 'inner div' ).toBe( innerDivBefore );
+				expect( spy ).not.toHaveBeenCalled();
+			} );
+
+			it( 'should fire conversion events in proper order', () => {
+				const loggedEvents = [];
+
+				controller.downcastDispatcher.on( 'insert', ( evt, data ) => {
+					const itemId = data.item.name ? data.item.name : '$text:' + data.item.data;
+					const log = 'insert:' + itemId + ':' + data.range.start.path + ':' + data.range.end.path;
+
+					loggedEvents.push( log );
+				}, { priority: 'highest' } );
+
+				controller.downcastDispatcher.on( 'attribute', ( evt, data ) => {
+					const itemId = data.item.name ? data.item.name : '$text:' + data.item.data;
+					const key = data.attributeKey;
+					const value = data.attributeNewValue;
+					const log = 'attribute:' + key + ':' + value + ':' + itemId + ':' + data.range.start.path + ':' + data.range.end.path;
+
+					loggedEvents.push( log );
+				}, { priority: 'highest' } );
+
+				_setModelData( model, '<complex toClass="true"><paragraph>foo</paragraph><paragraph>bar</paragraph></complex>' );
+
+				expectResult( '<div class="complex-outer"><div class="is-classy"><p>foo</p><p>bar</p></div></div>' );
+
+				expect( loggedEvents ).toEqual( [
+					'insert:complex:0:1',
+					'attribute:toClass:true:complex:0:1',
+					'insert:paragraph:0,0:0,1',
+					'insert:$text:foo:0,0,0:0,0,3',
+					'insert:paragraph:0,1:0,2',
+					'insert:$text:bar:0,1,0:0,1,3'
+				] );
+			} );
+		} );
+
+		describe( 'with complex view structure - multiple slots', () => {
+			beforeEach( () => {
+				model.schema.register( 'complex', {
+					allowIn: '$root'
+				} );
+
+				downcastHelpers.elementToStructure( {
+					model: {
+						name: 'complex',
+						children: true
+					},
+					view: ( modelElement, { writer } ) => {
+						const outer = writer.createContainerElement( 'div', { class: 'complex-outer' } );
+						const inner1 = writer.createContainerElement( 'div', { class: 'inner-first' } );
+						const inner2 = writer.createContainerElement( 'div', { class: 'inner-second' } );
+
+						writer.insert( writer.createPositionAt( outer, 'end' ), inner1 );
+						writer.insert( writer.createPositionAt( outer, 'end' ), inner2 );
+
+						writer.insert( writer.createPositionAt( inner1, 0 ), writer.createSlot( element => element.index < 2 ) );
+						writer.insert( writer.createPositionAt( inner2, 0 ), writer.createSlot( element => element.index >= 2 ) );
+
+						return outer;
+					}
+				} );
+
+				model.schema.register( 'paragraph', {
+					inheritAllFrom: '$block',
+					allowIn: 'complex'
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: 'paragraph',
+					view: 'p'
+				} );
+			} );
+
+			it( 'should convert on insert', () => {
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data ).not.toHaveProperty( 'reconversion' );
+					spy();
+				} );
+
+				model.change( writer => {
+					writer.insertElement( 'complex', modelRoot, 0 );
+				} );
+
+				expectResult( '<div class="complex-outer"><div class="inner-first"></div><div class="inner-second"></div></div>' );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on adding a child (at the beginning)', () => {
+				_setModelData( model, '<complex><paragraph>foo</paragraph></complex>' );
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [ outerBefore, firstBefore, paraBefore, textBefore, secondBefore ] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 0 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [ outerAfter, firstAfter, /* insertedPara */, /* insertedText */, paraAfter, textAfter, secondAfter ] = getNodes();
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="inner-first"><p>bar</p><p>foo</p></div>' +
+						'<div class="inner-second"></div>' +
+					'</div>'
+				);
+
+				expect( outerAfter, 'outer' ).not.toBe( outerBefore );
+				expect( firstAfter, 'inner first' ).not.toBe( firstBefore );
+				expect( secondAfter, 'inner second' ).not.toBe( secondBefore );
+				expect( paraAfter, 'para' ).toBe( paraBefore );
+				expect( textAfter, 'text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on adding a child (in the middle)', () => {
+				_setModelData( model,
+					'<complex>' +
+						'<paragraph>foo</paragraph>' +
+						'<paragraph>bar</paragraph>' +
+					'</complex>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [
+					outerBefore,
+					firstBefore, paraFooBefore, textFooBefore, paraBarBefore, textBarBefore,
+					secondBefore
+				] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'baz' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [
+					outerAfter,
+					firstAfter, paraFooAfter, textFooAfter, /* insertedPara */, /* insertedText */,
+					secondAfter, paraBarAfter, textBarAfter
+				] = getNodes();
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="inner-first"><p>foo</p><p>baz</p></div>' +
+						'<div class="inner-second"><p>bar</p></div>' +
+					'</div>'
+				);
+
+				expect( outerAfter, 'outer' ).not.toBe( outerBefore );
+				expect( firstAfter, 'inner first' ).not.toBe( firstBefore );
+				expect( secondAfter, 'inner second' ).not.toBe( secondBefore );
+				expect( paraFooAfter, 'para foo' ).toBe( paraFooBefore );
+				expect( textFooAfter, 'text foo' ).toBe( textFooBefore );
+				expect( paraBarAfter, 'para bar' ).toBe( paraBarBefore );
+				expect( textBarAfter, 'text bar' ).toBe( textBarBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on adding a child (at the end)', () => {
+				_setModelData( model,
+					'<complex>' +
+						'<paragraph>foo</paragraph>' +
+						'<paragraph>bar</paragraph>' +
+					'</complex>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [
+					outerBefore,
+					firstBefore, paraFooBefore, textFooBefore, paraBarBefore, textBarBefore,
+					secondBefore
+				] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'baz' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ), 'end' );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [
+					outerAfter,
+					firstAfter, paraFooAfter, textFooAfter, paraBarAfter, textBarAfter,
+					secondAfter, /* insertedPara */, /* insertedText */
+				] = getNodes();
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="inner-first"><p>foo</p><p>bar</p></div>' +
+						'<div class="inner-second"><p>baz</p></div>' +
+					'</div>'
+				);
+
+				expect( outerAfter, 'outer' ).not.toBe( outerBefore );
+				expect( firstAfter, 'inner first' ).not.toBe( firstBefore );
+				expect( secondAfter, 'inner second' ).not.toBe( secondBefore );
+				expect( paraFooAfter, 'para foo' ).toBe( paraFooBefore );
+				expect( textFooAfter, 'text foo' ).toBe( textFooBefore );
+				expect( paraBarAfter, 'para bar' ).toBe( paraBarBefore );
+				expect( textBarAfter, 'text bar' ).toBe( textBarBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on removing a child', () => {
+				_setModelData( model,
+					'<complex>' +
+						'<paragraph>foo</paragraph>' +
+						'<paragraph>bar</paragraph>' +
+						'<paragraph>baz</paragraph>' +
+						'<paragraph>abc</paragraph>' +
+					'</complex>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [
+					outerBefore,
+					firstBefore, paraFooBefore, textFooBefore, /* removedPara */, /* removedText */,
+					secondBefore, paraBazBefore, textBazBefore, paraAbcBefore, textAbcBefore
+				] = getNodes();
+
+				model.change( writer => {
+					writer.remove( modelRoot.getNodeByPath( [ 0, 1 ] ) );
+				} );
+
+				const [
+					outerAfter,
+					firstAfter, paraFooAfter, textFooAfter, paraBazAfter, textBazAfter,
+					secondAfter, paraAbcAfter, textAbcAfter
+				] = getNodes();
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="inner-first"><p>foo</p><p>baz</p></div>' +
+						'<div class="inner-second"><p>abc</p></div>' +
+					'</div>'
+				);
+
+				expect( outerAfter, 'outer' ).not.toBe( outerBefore );
+				expect( firstAfter, 'inner first' ).not.toBe( firstBefore );
+				expect( secondAfter, 'inner second' ).not.toBe( secondBefore );
+				expect( paraFooAfter, 'para foo' ).toBe( paraFooBefore );
+				expect( textFooAfter, 'text foo' ).toBe( textFooBefore );
+				expect( paraBazAfter, 'para baz' ).toBe( paraBazBefore );
+				expect( textBazAfter, 'text baz' ).toBe( textBazBefore );
+				expect( paraAbcAfter, 'para abc' ).toBe( paraAbcBefore );
+				expect( textAbcAfter, 'text abc' ).toBe( textAbcBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+		} );
+
+		describe( 'with complex view structure - structure nested in structure', () => {
+			beforeEach( () => {
+				model.schema.register( 'complex', {
+					allowIn: [ '$root', 'complex' ],
+					allowAttributes: [ 'toStyle', 'toClass' ]
+				} );
+
+				downcastHelpers.elementToStructure( {
+					model: {
+						name: 'complex',
+						attributes: [ 'toStyle', 'toClass' ],
+						children: true
+					},
+					view: ( modelElement, { writer } ) => {
+						const outer = writer.createContainerElement( 'div', { class: 'complex-outer' } );
+						const inner = writer.createContainerElement( 'div', {
+							class: 'complex-inner',
+							...getViewAttributes( modelElement )
+						} );
+
+						writer.insert( writer.createPositionAt( outer, 0 ), inner );
+						writer.insert( writer.createPositionAt( inner, 0 ), writer.createSlot() );
+
+						return outer;
+					}
+				} );
+
+				model.schema.register( 'paragraph', {
+					inheritAllFrom: '$block',
+					allowIn: 'complex'
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: 'paragraph',
+					view: 'p'
+				} );
+
+				model.schema.register( 'heading', {
+					inheritAllFrom: '$block',
+					allowIn: 'complex'
+				} );
+
+				downcastHelpers.elementToElement( {
+					model: 'heading',
+					view: 'h1'
+				} );
+			} );
+
+			it( 'should convert on insert', () => {
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data ).not.toHaveProperty( 'reconversion' );
+					spy();
+				} );
+
+				model.change( writer => {
+					writer.insertElement( 'complex', modelRoot, 0 );
+					writer.insertElement( 'complex', modelRoot.getChild( 0 ), 0 );
+				} );
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="complex-inner">' +
+							'<div class="complex-outer">' +
+								'<div class="complex-inner">' +
+								'</div>' +
+							'</div>' +
+						'</div>' +
+					'</div>'
+				);
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on attribute set', () => {
+				_setModelData( model,
+					'<complex>' +
+						'<complex>' +
+							'<paragraph></paragraph>' +
+						'</complex>' +
+					'</complex>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [
+					outerDivBefore, innerDivBefore,
+					nestedOuterDivBefore, nestedInnerDivBefore,
+					paragraphBefore
+				] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:block', modelRoot.getChild( 0 ).getChild( 0 ) );
+				} );
+
+				const [
+					outerDivAfter, innerDivAfter,
+					nestedOuterDivAfter, nestedInnerDivAfter,
+					paragraphAfter
+				] = getNodes();
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="complex-inner">' +
+							'<div class="complex-outer">' +
+								'<div class="complex-inner" style="display:block">' +
+									'<p></p>' +
+								'</div>' +
+							'</div>' +
+						'</div>' +
+					'</div>'
+				);
+
+				expect( outerDivAfter, 'outer div' ).toBe( outerDivBefore );
+				expect( innerDivAfter, 'inner div' ).toBe( innerDivBefore );
+				expect( nestedOuterDivAfter, 'nested outer div' ).not.toBe( nestedOuterDivBefore );
+				expect( nestedInnerDivAfter, 'nested inner div' ).not.toBe( nestedInnerDivBefore );
+				expect( paragraphAfter, 'p' ).toBe( paragraphBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on attribute change', () => {
+				_setModelData( model,
+					'<complex>' +
+						'<complex toStyle="display:block">' +
+							'<paragraph></paragraph>' +
+						'</complex>' +
+					'</complex>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [
+					outerDivBefore, innerDivBefore,
+					nestedOuterDivBefore, nestedInnerDivBefore,
+					paragraphBefore
+				] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:inline', modelRoot.getChild( 0 ).getChild( 0 ) );
+				} );
+
+				const [
+					outerDivAfter, innerDivAfter,
+					nestedOuterDivAfter, nestedInnerDivAfter,
+					paragraphAfter
+				] = getNodes();
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="complex-inner">' +
+							'<div class="complex-outer">' +
+								'<div class="complex-inner" style="display:inline">' +
+									'<p></p>' +
+								'</div>' +
+							'</div>' +
+						'</div>' +
+					'</div>'
+				);
+
+				expect( outerDivAfter, 'outer div' ).toBe( outerDivBefore );
+				expect( innerDivAfter, 'inner div' ).toBe( innerDivBefore );
+				expect( nestedOuterDivAfter, 'nested outer div' ).not.toBe( nestedOuterDivBefore );
+				expect( nestedInnerDivAfter, 'nested inner div' ).not.toBe( nestedInnerDivBefore );
+				expect( paragraphAfter, 'p' ).toBe( paragraphBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on attribute remove', () => {
+				_setModelData( model,
+					'<complex>' +
+						'<complex toStyle="display:block">' +
+							'<paragraph></paragraph>' +
+						'</complex>' +
+					'</complex>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [
+					outerDivBefore, innerDivBefore,
+					nestedOuterDivBefore, nestedInnerDivBefore,
+					paragraphBefore
+				] = getNodes();
+
+				model.change( writer => {
+					writer.removeAttribute( 'toStyle', modelRoot.getChild( 0 ).getChild( 0 ) );
+				} );
+
+				const [
+					outerDivAfter, innerDivAfter,
+					nestedOuterDivAfter, nestedInnerDivAfter,
+					paragraphAfter
+				] = getNodes();
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="complex-inner">' +
+							'<div class="complex-outer">' +
+								'<div class="complex-inner">' +
+									'<p></p>' +
+								'</div>' +
+							'</div>' +
+						'</div>' +
+					'</div>'
+				);
+
+				expect( outerDivAfter, 'outer div' ).toBe( outerDivBefore );
+				expect( innerDivAfter, 'inner div' ).toBe( innerDivBefore );
+				expect( nestedOuterDivAfter, 'nested outer div' ).not.toBe( nestedOuterDivBefore );
+				expect( nestedInnerDivAfter, 'nested inner div' ).not.toBe( nestedInnerDivBefore );
+				expect( paragraphAfter, 'p' ).toBe( paragraphBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on attribute change on both elements', () => {
+				_setModelData( model,
+					'<complex toClass="true">' +
+						'<complex toStyle="display:block">' +
+							'<paragraph>foo</paragraph>' +
+						'</complex>' +
+					'</complex>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [
+					outerDivBefore, innerDivBefore,
+					nestedOuterDivBefore, nestedInnerDivBefore,
+					paragraphBefore, textBefore
+				] = getNodes();
+
+				model.change( writer => {
+					writer.setAttribute( 'toStyle', 'display:flex', modelRoot.getChild( 0 ) );
+					writer.setAttribute( 'toStyle', 'display:inline-block', modelRoot.getChild( 0 ).getChild( 0 ) );
+				} );
+
+				const [
+					outerDivAfter, innerDivAfter,
+					nestedOuterDivAfter, nestedInnerDivAfter,
+					paragraphAfter, textAfter
+				] = getNodes();
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="is-classy" style="display:flex">' +
+							'<div class="complex-outer">' +
+								'<div class="complex-inner" style="display:inline-block">' +
+									'<p>foo</p>' +
+								'</div>' +
+							'</div>' +
+						'</div>' +
+					'</div>'
+				);
+
+				expect( outerDivAfter, 'outer div' ).not.toBe( outerDivBefore );
+				expect( innerDivAfter, 'inner div' ).not.toBe( innerDivBefore );
+				expect( nestedOuterDivAfter, 'nested outer div' ).not.toBe( nestedOuterDivBefore );
+				expect( nestedInnerDivAfter, 'nested inner div' ).not.toBe( nestedInnerDivBefore );
+				expect( paragraphAfter, 'p' ).toBe( paragraphBefore );
+				expect( textAfter, '$text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on one attribute add and other remove', () => {
+				_setModelData( model,
+					'<complex>' +
+						'<complex toStyle="display:block">' +
+						'</complex>' +
+					'</complex>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				model.change( writer => {
+					writer.removeAttribute( 'toStyle', modelRoot.getChild( 0 ).getChild( 0 ) );
+					writer.setAttribute( 'toClass', true, modelRoot.getChild( 0 ).getChild( 0 ) );
+				} );
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="complex-inner">' +
+							'<div class="complex-outer">' +
+								'<div class="is-classy">' +
+								'</div>' +
+							'</div>' +
+						'</div>' +
+					'</div>'
+				);
+
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on adding a child (at the beginning)', () => {
+				_setModelData( model,
+					'<complex>' +
+						'<complex toClass="true">' +
+							'<paragraph>foo</paragraph>' +
+						'</complex>' +
+					'</complex>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [
+					outerDivBefore, innerDivBefore,
+					nestedOuterDivBefore, nestedInnerDivBefore,
+					paragraphBefore, textBefore
+				] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ).getChild( 0 ), 0 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [
+					outerDivAfter, innerDivAfter,
+					nestedOuterDivAfter, nestedInnerDivAfter, /* insertedPara */, /* insertedText */,
+					paragraphAfter, textAfter
+				] = getNodes();
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="complex-inner">' +
+							'<div class="complex-outer">' +
+								'<div class="is-classy">' +
+									'<p>bar</p>' +
+									'<p>foo</p>' +
+								'</div>' +
+							'</div>' +
+						'</div>' +
+					'</div>'
+				);
+
+				expect( outerDivAfter, 'outer div' ).toBe( outerDivBefore );
+				expect( innerDivAfter, 'inner div' ).toBe( innerDivBefore );
+				expect( nestedOuterDivAfter, 'nested outer div' ).not.toBe( nestedOuterDivBefore );
+				expect( nestedInnerDivAfter, 'nested inner div' ).not.toBe( nestedInnerDivBefore );
+				expect( paragraphAfter, 'p' ).toBe( paragraphBefore );
+				expect( textAfter, '$text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on adding a child (at the end)', () => {
+				_setModelData( model,
+					'<complex>' +
+						'<complex toClass="true">' +
+							'<paragraph>foo</paragraph>' +
+						'</complex>' +
+					'</complex>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [
+					outerDivBefore, innerDivBefore,
+					nestedOuterDivBefore, nestedInnerDivBefore,
+					paragraphBefore, textBefore
+				] = getNodes();
+
+				model.change( writer => {
+					const paragraph = writer.createElement( 'paragraph' );
+					const text = writer.createText( 'bar' );
+
+					writer.insert( paragraph, modelRoot.getChild( 0 ).getChild( 0 ), 1 );
+					writer.insert( text, paragraph, 0 );
+				} );
+
+				const [
+					outerDivAfter, innerDivAfter,
+					nestedOuterDivAfter, nestedInnerDivAfter,
+					paragraphAfter, textAfter
+				] = getNodes();
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="complex-inner">' +
+							'<div class="complex-outer">' +
+								'<div class="is-classy">' +
+									'<p>foo</p>' +
+									'<p>bar</p>' +
+								'</div>' +
+							'</div>' +
+						'</div>' +
+					'</div>'
+				);
+
+				expect( outerDivAfter, 'outer div' ).toBe( outerDivBefore );
+				expect( innerDivAfter, 'inner div' ).toBe( innerDivBefore );
+				expect( nestedOuterDivAfter, 'nested outer div' ).not.toBe( nestedOuterDivBefore );
+				expect( nestedInnerDivAfter, 'nested inner div' ).not.toBe( nestedInnerDivBefore );
+				expect( paragraphAfter, 'p' ).toBe( paragraphBefore );
+				expect( textAfter, '$text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on renaming a child', () => {
+				_setModelData( model,
+					'<complex>' +
+						'<complex toClass="true">' +
+							'<paragraph>foo</paragraph>' +
+							'<paragraph>bar</paragraph>' +
+						'</complex>' +
+					'</complex>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [
+					outerDivBefore, innerDivBefore,
+					nestedOuterDivBefore, nestedInnerDivBefore,
+					paragraphBefore, textBefore, paragraph2Before, text2Before
+				] = getNodes();
+
+				model.change( writer => {
+					writer.rename( modelRoot.getChild( 0 ).getChild( 0 ).getChild( 0 ), 'heading' );
+				} );
+
+				const [
+					outerDivAfter, innerDivAfter,
+					nestedOuterDivAfter, nestedInnerDivAfter,
+					headingAfter, textAfter, paragraph2After, text2After
+				] = getNodes();
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="complex-inner">' +
+							'<div class="complex-outer">' +
+								'<div class="is-classy">' +
+									'<h1>foo</h1>' +
+									'<p>bar</p>' +
+								'</div>' +
+							'</div>' +
+						'</div>' +
+					'</div>'
+				);
+
+				expect( outerDivAfter, 'outer div' ).toBe( outerDivBefore );
+				expect( innerDivAfter, 'inner div' ).toBe( innerDivBefore );
+				expect( nestedOuterDivAfter, 'nested outer div' ).not.toBe( nestedOuterDivBefore );
+				expect( nestedInnerDivAfter, 'nested inner div' ).not.toBe( nestedInnerDivBefore );
+				expect( headingAfter, 'p' ).not.toBe( paragraphBefore );
+				expect( textAfter, '$text' ).not.toBe( textBefore );
+				expect( paragraph2After, 'p' ).toBe( paragraph2Before );
+				expect( text2After, '$text' ).toBe( text2Before );
+				expect( spy ).toHaveBeenCalled();
+			} );
+
+			it( 'should convert on removing a child', () => {
+				_setModelData( model,
+					'<complex>' +
+						'<complex toClass="true">' +
+							'<paragraph>foo</paragraph>' +
+							'<paragraph>bar</paragraph>' +
+						'</complex>' +
+					'</complex>'
+				);
+
+				const spy = vi.fn();
+
+				controller.downcastDispatcher.on( 'insert:complex', ( evt, data ) => {
+					expect( data.reconversion ).toBe( true );
+					spy();
+				} );
+
+				const [
+					outerDivBefore, innerDivBefore,
+					nestedOuterDivBefore, nestedInnerDivBefore,
+					paragraphBefore, textBefore
+				] = getNodes();
+
+				model.change( writer => {
+					writer.remove( modelRoot.getNodeByPath( [ 0, 0, 1 ] ) );
+				} );
+
+				const [
+					outerDivAfter, innerDivAfter,
+					nestedOuterDivAfter, nestedInnerDivAfter,
+					paragraphAfter, textAfter
+				] = getNodes();
+
+				expectResult(
+					'<div class="complex-outer">' +
+						'<div class="complex-inner">' +
+							'<div class="complex-outer">' +
+								'<div class="is-classy">' +
+									'<p>foo</p>' +
+								'</div>' +
+							'</div>' +
+						'</div>' +
+					'</div>'
+				);
+
+				expect( outerDivAfter, 'outer div' ).toBe( outerDivBefore );
+				expect( innerDivAfter, 'inner div' ).toBe( innerDivBefore );
+				expect( nestedOuterDivAfter, 'nested outer div' ).not.toBe( nestedOuterDivBefore );
+				expect( nestedInnerDivAfter, 'nested inner div' ).not.toBe( nestedInnerDivBefore );
+				expect( paragraphAfter, 'p' ).toBe( paragraphBefore );
+				expect( textAfter, '$text' ).toBe( textBefore );
+				expect( spy ).toHaveBeenCalled();
+			} );
+		} );
+
+		it( 'should throw an exception if invalid slot mode or filter was provided', () => {
+			model.schema.register( 'simple', {
+				allowIn: '$root'
+			} );
+
+			downcastHelpers.elementToStructure( {
+				model: {
+					name: 'simple',
+					children: true
+				},
+				view: ( modelElement, { writer } ) => {
+					const element = writer.createContainerElement( 'div' );
+
+					writer.insert( writer.createPositionAt( element, 0 ), writer.createSlot( 'foo' ) );
+
+					return element;
+				}
+			} );
+
+			model.schema.register( 'paragraph', {
+				inheritAllFrom: '$block',
+				allowIn: 'simple'
+			} );
+
+			downcastHelpers.elementToElement( {
+				model: 'paragraph',
+				view: 'p'
+			} );
+
+			expectToThrowCKEditorError( () => {
+				model.change( writer => {
+					const simple = writer.createElement( 'simple' );
+					const paragraph = writer.createElement( 'paragraph' );
+
+					writer.insert( paragraph, simple, 0 );
+					writer.insert( simple, modelRoot, 0 );
+				} );
+			}, /^conversion-slot-mode-unknown/, controller.downcastDispatcher, { modeOrFilter: 'foo' } );
+		} );
+
+		it( 'should throw an exception if slot filter results overlap', () => {
+			model.schema.register( 'complex', {
+				allowIn: '$root'
+			} );
+
+			downcastHelpers.elementToStructure( {
+				model: {
+					name: 'complex',
+					children: true
+				},
+				view: ( modelElement, { writer } ) => {
+					const outer = writer.createContainerElement( 'div' );
+					const inner1 = writer.createContainerElement( 'div', { class: 'inner-first' } );
+					const inner2 = writer.createContainerElement( 'div', { class: 'inner-second' } );
+
+					writer.insert( writer.createPositionAt( outer, 'end' ), inner1 );
+					writer.insert( writer.createPositionAt( outer, 'end' ), inner2 );
+
+					writer.insert( writer.createPositionAt( inner1, 0 ), writer.createSlot( element => element.index <= 1 ) );
+					writer.insert( writer.createPositionAt( inner2, 0 ), writer.createSlot( element => element.index >= 1 ) );
+
+					return outer;
+				}
+			} );
+
+			model.schema.register( 'paragraph', {
+				inheritAllFrom: '$block',
+				allowIn: 'complex'
+			} );
+
+			downcastHelpers.elementToElement( {
+				model: 'paragraph',
+				view: 'p'
+			} );
+
+			expectToThrowCKEditorError( () => {
+				model.change( writer => {
+					const complex = writer.createElement( 'complex' );
+
+					writer.insertElement( 'paragraph', complex, 0 );
+					writer.insertElement( 'paragraph', complex, 0 );
+					writer.insertElement( 'paragraph', complex, 0 );
+					writer.insert( complex, modelRoot, 0 );
+				} );
+			}, /^conversion-slot-filter-overlap/, controller.downcastDispatcher );
+		} );
+
+		it( 'should throw an exception if slot filter not include all children', () => {
+			model.schema.register( 'complex', {
+				allowIn: '$root'
+			} );
+
+			downcastHelpers.elementToStructure( {
+				model: {
+					name: 'complex',
+					children: true
+				},
+				view: ( modelElement, { writer } ) => {
+					const outer = writer.createContainerElement( 'div' );
+					const inner1 = writer.createContainerElement( 'div', { class: 'inner-first' } );
+					const inner2 = writer.createContainerElement( 'div', { class: 'inner-second' } );
+
+					writer.insert( writer.createPositionAt( outer, 'end' ), inner1 );
+					writer.insert( writer.createPositionAt( outer, 'end' ), inner2 );
+
+					writer.insert( writer.createPositionAt( inner1, 0 ), writer.createSlot( element => element.index < 1 ) );
+					writer.insert( writer.createPositionAt( inner2, 0 ), writer.createSlot( element => element.index > 1 ) );
+
+					return outer;
+				}
+			} );
+
+			model.schema.register( 'paragraph', {
+				inheritAllFrom: '$block',
+				allowIn: 'complex'
+			} );
+
+			downcastHelpers.elementToElement( {
+				model: 'paragraph',
+				view: 'p'
+			} );
+
+			expectToThrowCKEditorError( () => {
+				model.change( writer => {
+					const complex = writer.createElement( 'complex' );
+
+					writer.insertElement( 'paragraph', complex, 0 );
+					writer.insertElement( 'paragraph', complex, 0 );
+					writer.insertElement( 'paragraph', complex, 0 );
+					writer.insert( complex, modelRoot, 0 );
+				} );
+			}, /^conversion-slot-filter-incomplete/, controller.downcastDispatcher );
+		} );
+
+		// https://github.com/ckeditor/ckeditor5/issues/11163
+		it( 'should throw an exception when invoked for a model element that allows $text', () => {
+			model.schema.register( 'myElement', {
+				allowIn: '$root',
+
+				// This makes it accept $text.
+				allowContentOf: '$block'
+			} );
+
+			expectToThrowCKEditorError( () => {
+				downcastHelpers.elementToStructure( {
+					model: 'myElement',
+					view: ( modelElement, { writer } ) => {
+						return writer.createContainerElement( 'div' );
+					}
+				} );
+			}, /^conversion-element-to-structure-disallowed-text/, controller.downcastDispatcher, { elementName: 'myElement' } );
+		} );
+	} );
+
+	describe( 'attributeToElement()', () => {
+		beforeEach( () => {
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+		} );
+
+		it( 'should be chainable', () => {
+			expect( downcastHelpers.attributeToElement( { model: 'bold', view: 'strong' } ) ).toBe( downcastHelpers );
+		} );
+
+		it( 'config.view is a string', () => {
+			downcastHelpers.attributeToElement( { model: 'bold', view: 'strong' } );
+
+			model.change( writer => {
+				writer.insertText( 'foo', { bold: true }, modelRoot, 0 );
+			} );
+
+			expectResult( '<strong>foo</strong>' );
+		} );
+
+		it( 'can be overwritten using converterPriority', () => {
+			downcastHelpers.attributeToElement( { model: 'bold', view: 'strong' } );
+			downcastHelpers.attributeToElement( { model: 'bold', view: 'b', converterPriority: 'high' } );
+
+			model.change( writer => {
+				writer.insertText( 'foo', { bold: true }, modelRoot, 0 );
+			} );
+
+			expectResult( '<b>foo</b>' );
+		} );
+
+		it( 'config.view is a view element definition', () => {
+			downcastHelpers.attributeToElement( {
+				model: 'invert',
+				view: {
+					name: 'span',
+					classes: [ 'font-light', 'bg-dark' ]
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertText( 'foo', { invert: true }, modelRoot, 0 );
+			} );
+
+			expectResult( '<span class="bg-dark font-light">foo</span>' );
+			expect( viewRoot.getChild( 0 ).priority ).toBe( ViewAttributeElement.DEFAULT_PRIORITY );
+		} );
+
+		it( 'config.view allows specifying the element\'s priority', () => {
+			downcastHelpers.attributeToElement( {
+				model: 'invert',
+				view: {
+					name: 'span',
+					priority: 5
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertText( 'foo', { invert: true }, modelRoot, 0 );
+			} );
+
+			expect( viewRoot.getChild( 0 ).priority ).toBe( 5 );
+		} );
+
+		it( 'model attribute value is enum', () => {
+			downcastHelpers.attributeToElement( {
+				model: {
+					key: 'fontSize',
+					values: [ 'big', 'small' ]
+				},
+				view: {
+					big: {
+						name: 'span',
+						styles: {
+							'font-size': '1.2em'
+						}
+					},
+					small: {
+						name: 'span',
+						styles: {
+							'font-size': '0.8em'
+						},
+						priority: 5
+					}
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertText( 'foo', { fontSize: 'big' }, modelRoot, 0 );
+			} );
+
+			expect( viewRoot.getChild( 0 ).priority ).toBe( ViewAttributeElement.DEFAULT_PRIORITY );
+			expectResult( '<span style="font-size:1.2em">foo</span>' );
+
+			model.change( writer => {
+				writer.setAttribute( 'fontSize', 'small', modelRoot.getChild( 0 ) );
+			} );
+
+			expectResult( '<span style="font-size:0.8em">foo</span>' );
+			expect( viewRoot.getChild( 0 ).priority ).toBe( 5 );
+
+			model.change( writer => {
+				writer.removeAttribute( 'fontSize', modelRoot.getChild( 0 ) );
+			} );
+
+			expectResult( 'foo' );
+		} );
+
+		it( 'config.view is a function', () => {
+			downcastHelpers.attributeToElement( {
+				model: 'bold',
+				view: ( modelAttributeValue, { writer } ) => {
+					return writer.createAttributeElement( 'span', { style: 'font-weight:' + modelAttributeValue } );
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertText( 'foo', { bold: '500' }, modelRoot, 0 );
+			} );
+
+			expectResult( '<span style="font-weight:500">foo</span>' );
+		} );
+
+		it( 'config.model.name is given', () => {
+			downcastHelpers.attributeToElement( {
+				model: {
+					key: 'color',
+					name: '$text'
+				},
+				view: ( modelAttributeValue, { writer } ) => {
+					return writer.createAttributeElement( 'span', { style: 'color:' + modelAttributeValue } );
+				}
+			} );
+
+			downcastHelpers.elementToElement( {
+				model: 'smiley',
+				view: ( modelElement, { writer } ) => {
+					return writer.createEmptyElement( 'img', {
+						src: 'smile.jpg',
+						class: 'smiley'
+					} );
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertText( 'foo', { color: '#FF0000' }, modelRoot, 0 );
+				writer.insertElement( 'smiley', { color: '#FF0000' }, modelRoot, 3 );
+			} );
+
+			expectResult( '<span style="color:#FF0000">foo</span><img class="smiley" src="smile.jpg"></img>' );
+		} );
+
+		it( 'should not convert if creator returned null', () => {
+			downcastHelpers.elementToElement( { model: 'div', view: () => null } );
+
+			controller.downcastDispatcher.on( 'insert:div', ( evt, data, conversionApi ) => {
+				conversionApi.consumable.consume( data.item, evt.name );
+			}, { priority: 'lowest' } );
+
+			const modelElement = new ModelElement( 'div' );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div></div>' );
+		} );
+
+		it( 'should convert insert/change/remove of attribute in model into wrapping element in a view', () => {
+			const modelElement = new ModelElement( 'paragraph', null, new ModelText( 'foobar', { bold: true } ) );
+
+			downcastHelpers.attributeToElement( {
+				model: 'bold',
+				view: ( modelAttributeValue, { writer } ) => writer.createAttributeElement( 'b' )
+			} );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p><b>foobar</b></p></div>' );
+
+			model.change( writer => {
+				writer.removeAttribute( 'bold', writer.createRangeIn( modelElement ) );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+		} );
+
+		it( 'should convert insert/remove of attribute in model with wrapping element generating function as a parameter', () => {
+			const modelElement = new ModelElement( 'paragraph', null, new ModelText( 'foobar', { style: 'bold' } ) );
+
+			downcastHelpers.attributeToElement( {
+				model: 'style',
+				view: ( modelAttributeValue, { writer } ) => {
+					if ( modelAttributeValue == 'bold' ) {
+						return writer.createAttributeElement( 'b' );
+					}
+				}
+			} );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p><b>foobar</b></p></div>' );
+
+			model.change( writer => {
+				writer.removeAttribute( 'style', writer.createRangeIn( modelElement ) );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+		} );
+
+		it( 'should allow element creator to return null for unsupported elements', () => {
+			const modelElement = new ModelElement( 'paragraph', { style: 'bold' }, new ModelText( 'foobar', { style: 'bold' } ) );
+
+			downcastHelpers.attributeToElement( {
+				model: 'style',
+				view: ( modelAttributeValue, { writer }, data ) => {
+					expect( data.item.is( 'element' ) || data.item.is( '$textProxy' ), 'item or text proxy' ).toBe( true );
+					expect( data.range.is( 'range' ), 'range' ).toBe( true );
+					expect( data.attributeKey, 'key' ).toBe( 'style' );
+
+					if ( data.item.is( '$textProxy' ) && modelAttributeValue == 'bold' ) {
+						return writer.createAttributeElement( 'b' );
+					}
+				}
+			} );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ), 'after insert' ).toBe( '<div><p><b>foobar</b></p></div>' );
+
+			model.change( writer => {
+				writer.removeAttribute( 'style', writer.createRangeOn( modelElement ) );
+				writer.removeAttribute( 'style', writer.createRangeIn( modelElement ) );
+			} );
+
+			expect( viewToString( viewRoot ), 'after remove attribute' ).toBe( '<div><p>foobar</p></div>' );
+		} );
+
+		it( 'should update range on re-wrapping attribute (#475)', () => {
+			const modelElement = new ModelElement( 'paragraph', null, [
+				new ModelText( 'x' ),
+				new ModelText( 'foo', { link: 'http://foo.com' } ),
+				new ModelText( 'x' )
+			] );
+
+			downcastHelpers.attributeToElement( {
+				model: 'link',
+				view: ( modelAttributeValue, { writer } ) => {
+					return writer.createAttributeElement( 'a', { href: modelAttributeValue } );
+				}
+			} );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p>x<a href="http://foo.com">foo</a>x</p></div>' );
+
+			// Set new attribute on old link but also on non-linked characters.
+			model.change( writer => {
+				writer.setAttribute( 'link', 'http://foobar.com', writer.createRangeIn( modelElement ) );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p><a href="http://foobar.com">xfoox</a></p></div>' );
+		} );
+
+		it( 'should support unicode', () => {
+			const modelElement = new ModelElement( 'paragraph', null, [ 'நி', new ModelText( 'லைக்', { bold: true } ), 'கு' ] );
+
+			downcastHelpers.attributeToElement( {
+				model: 'bold',
+				view: ( modelAttributeValue, { writer } ) => writer.createAttributeElement( 'b' )
+			} );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p>நி<b>லைக்</b>கு</p></div>' );
+
+			model.change( writer => {
+				writer.removeAttribute( 'bold', writer.createRangeIn( modelElement ) );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p>நிலைக்கு</p></div>' );
+		} );
+
+		it( 'should be possible to override', () => {
+			const modelElement = new ModelElement( 'paragraph', null, new ModelText( 'foobar', { bold: true } ) );
+
+			downcastHelpers.attributeToElement( {
+				model: 'bold',
+				view: ( modelAttributeValue, { writer } ) => writer.createAttributeElement( 'b' )
+			} );
+			downcastHelpers.attributeToElement( {
+				model: 'bold',
+				view: ( modelAttributeValue, { writer } ) => writer.createAttributeElement( 'strong' ),
+				converterPriority: 'high'
+			} );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p><strong>foobar</strong></p></div>' );
+		} );
+
+		it( 'should not convert and not consume if creator function returned null', () => {
+			vi.spyOn( controller.downcastDispatcher, 'fire' );
+
+			const modelElement = new ModelElement( 'paragraph', null, new ModelText( 'foobar', { italic: true } ) );
+
+			downcastHelpers.attributeToElement( {
+				model: 'italic',
+				view: () => null
+			} );
+
+			const spy = vi.fn();
+			controller.downcastDispatcher.on( 'attribute:italic', spy );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+			expect( controller.downcastDispatcher.fire.mock.calls.some( args => args[ 0 ] === 'attribute:italic:$text' ) ).toBe( true );
+			expect( spy ).toHaveBeenCalled();
+		} );
+	} );
+
+	describe( 'attributeToAttribute()', () => {
+		beforeEach( () => {
+			downcastHelpers.elementToElement( { model: 'imageBlock', view: 'img' } );
+			downcastHelpers.elementToElement( {
+				model: 'paragraph',
+				view: ( modelItem, { writer } ) => writer.createContainerElement( 'p' )
+			} );
+
+			downcastHelpers.attributeToAttribute( {
+				model: 'class',
+				view: 'class'
+			} );
+		} );
+
+		it( 'should be chainable', () => {
+			expect( downcastHelpers.attributeToAttribute( { model: 'source', view: 'src' } ) ).toBe( downcastHelpers );
+		} );
+
+		it( 'config.view is a string', () => {
+			downcastHelpers.attributeToAttribute( { model: 'source', view: 'src' } );
+
+			model.change( writer => {
+				writer.insertElement( 'imageBlock', { source: 'foo.jpg' }, modelRoot, 0 );
+			} );
+
+			expectResult( '<img src="foo.jpg"></img>' );
+
+			model.change( writer => {
+				writer.removeAttribute( 'source', modelRoot.getChild( 0 ) );
+			} );
+
+			expectResult( '<img></img>' );
+		} );
+
+		it( 'can be overwritten using converterPriority', () => {
+			downcastHelpers.attributeToAttribute( { model: 'source', view: 'href' } );
+			downcastHelpers.attributeToAttribute( { model: 'source', view: 'src', converterPriority: 'high' } );
+
+			model.change( writer => {
+				writer.insertElement( 'imageBlock', { source: 'foo.jpg' }, modelRoot, 0 );
+			} );
+
+			expectResult( '<img src="foo.jpg"></img>' );
+		} );
+
+		it( 'model element name specified', () => {
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+
+			downcastHelpers.attributeToAttribute( {
+				model: {
+					name: 'imageBlock',
+					key: 'source'
+				},
+				view: 'src'
+			} );
+
+			model.change( writer => {
+				writer.insertElement( 'imageBlock', { source: 'foo.jpg' }, modelRoot, 0 );
+			} );
+
+			expectResult( '<img src="foo.jpg"></img>' );
+
+			model.change( writer => {
+				writer.rename( modelRoot.getChild( 0 ), 'paragraph' );
+			} );
+
+			expectResult( '<p></p>' );
+		} );
+
+		it( 'config.view is an object, model attribute value is enum', () => {
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+
+			downcastHelpers.attributeToAttribute( {
+				model: {
+					key: 'styled',
+					values: [ 'dark', 'light' ]
+				},
+				view: {
+					dark: {
+						key: 'class',
+						value: [ 'styled', 'styled-dark' ]
+					},
+					light: {
+						key: 'class',
+						value: [ 'styled', 'styled-light' ]
+					}
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertElement( 'paragraph', { styled: 'dark' }, modelRoot, 0 );
+			} );
+
+			expectResult( '<p class="styled styled-dark"></p>' );
+
+			model.change( writer => {
+				writer.setAttribute( 'styled', 'light', modelRoot.getChild( 0 ) );
+			} );
+
+			expectResult( '<p class="styled styled-light"></p>' );
+
+			model.change( writer => {
+				writer.removeAttribute( 'styled', modelRoot.getChild( 0 ) );
+			} );
+
+			expectResult( '<p></p>' );
+		} );
+
+		it( 'config.view is an object, model attribute value is enum, view has style', () => {
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+
+			downcastHelpers.attributeToAttribute( {
+				model: {
+					key: 'align',
+					values: [ 'right', 'center' ]
+				},
+				view: {
+					right: {
+						key: 'style',
+						value: {
+							'text-align': 'right'
+						}
+					},
+					center: {
+						key: 'style',
+						value: {
+							'text-align': 'center'
+						}
+					}
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertElement( 'paragraph', { align: 'right' }, modelRoot, 0 );
+			} );
+
+			expectResult( '<p style="text-align:right"></p>' );
+
+			model.change( writer => {
+				writer.setAttribute( 'align', 'center', modelRoot.getChild( 0 ) );
+			} );
+
+			expectResult( '<p style="text-align:center"></p>' );
+
+			model.change( writer => {
+				writer.removeAttribute( 'align', modelRoot.getChild( 0 ) );
+			} );
+
+			expectResult( '<p></p>' );
+		} );
+
+		it( 'config.view is an object, only name and key are provided', () => {
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+
+			downcastHelpers.attributeToAttribute( {
+				model: {
+					name: 'paragraph',
+					key: 'class'
+				},
+				view: {
+					name: 'paragraph',
+					key: 'class'
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertElement( 'paragraph', { class: 'dark' }, modelRoot, 0 );
+			} );
+
+			expectResult( '<p class="dark"></p>' );
+
+			model.change( writer => {
+				writer.setAttribute( 'class', 'light', modelRoot.getChild( 0 ) );
+			} );
+
+			expectResult( '<p class="light"></p>' );
+
+			model.change( writer => {
+				writer.removeAttribute( 'class', modelRoot.getChild( 0 ) );
+			} );
+
+			expectResult( '<p></p>' );
+		} );
+
+		it( 'config.view is a function', () => {
+			downcastHelpers.attributeToAttribute( {
+				model: 'styled',
+				view: ( attributeValue, conversionApi ) => {
+					// To ensure conversion API is provided.
+					expect( conversionApi.writer ).toBeInstanceOf( ViewDowncastWriter );
+
+					return { key: 'class', value: 'styled-' + attributeValue };
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertElement( 'imageBlock', { styled: 'pull-out' }, modelRoot, 0 );
+			} );
+
+			expectResult( '<img class="styled-pull-out"></img>' );
+		} );
+
+		it( 'config.view is a function that receives event data as a third argument', () => {
+			downcastHelpers.attributeToAttribute( {
+				model: 'styled',
+				view: ( attributeValue, conversionApi, data ) => {
+					// To ensure conversion API is provided.
+					expect( conversionApi.writer ).toBeInstanceOf( ViewDowncastWriter );
+
+					expect( data.item.is( 'element', 'imageBlock' ) ).toBe( true );
+					expect( data.range.is( 'range' ) ).toBe( true );
+					expect( data.attributeKey ).toBe( 'styled' );
+
+					return { key: 'class', value: 'styled-' + attributeValue };
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertElement( 'imageBlock', { styled: 'pull-out' }, modelRoot, 0 );
+			} );
+
+			expectResult( '<img class="styled-pull-out"></img>' );
+		} );
+
+		// #1587
+		it( 'config.view and config.model as strings in generic conversion (elements only)', () => {
+			const consoleWarnStub = vi.spyOn( console, 'warn' ).mockImplementation( () => {} );
+
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+
+			downcastHelpers.attributeToAttribute( { model: 'test', view: 'test' } );
+
+			model.change( writer => {
+				writer.insertElement( 'paragraph', { test: '1' }, modelRoot, 0 );
+				writer.insertElement( 'paragraph', { test: '2' }, modelRoot, 1 );
+			} );
+
+			expectResult( '<p test="1"></p><p test="2"></p>' );
+			expect( consoleWarnStub.mock.calls.length ).toBe( 0 );
+
+			model.change( writer => {
+				writer.removeAttribute( 'test', modelRoot.getChild( 1 ) );
+			} );
+
+			expectResult( '<p test="1"></p><p></p>' );
+		} );
+
+		// #1587
+		it( 'config.view and config.model as strings in generic conversion (elements + text)', () => {
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+
+			downcastHelpers.attributeToAttribute( { model: 'test', view: 'test' } );
+
+			expectToThrowCKEditorError( () => {
+				model.change( writer => {
+					writer.insertElement( 'paragraph', modelRoot, 0 );
+					writer.insertElement( 'paragraph', { test: '1' }, modelRoot, 1 );
+
+					writer.insertText( 'Foo', { test: '2' }, modelRoot.getChild( 0 ), 0 );
+					writer.insertText( 'Bar', { test: '3' }, modelRoot.getChild( 1 ), 0 );
+				} );
+			}, /^conversion-attribute-to-attribute-on-text/, controller.downcastDispatcher );
+		} );
+
+		it( 'should convert attribute insert/change/remove on a model node', () => {
+			const modelElement = new ModelElement( 'paragraph', { class: 'foo' }, new ModelText( 'foobar' ) );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p class="foo">foobar</p></div>' );
+
+			model.change( writer => {
+				writer.setAttribute( 'class', 'bar', modelElement );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p class="bar">foobar</p></div>' );
+
+			model.change( writer => {
+				writer.removeAttribute( 'class', modelElement );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+		} );
+
+		it( 'config.view and config.model as strings (class attribute)', () => {
+			const consoleWarnStub = vi.spyOn( console, 'warn' ).mockImplementation( () => {} );
+
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+			downcastHelpers.attributeToAttribute( { model: 'test', view: 'class' } );
+
+			model.change( writer => {
+				writer.insertElement( 'paragraph', { test: 'foo bar' }, modelRoot, 0 );
+				writer.insertElement( 'paragraph', { test: 'abc def' }, modelRoot, 1 );
+			} );
+
+			expectResult(
+				'<p class="bar foo"></p>' +
+				'<p class="abc def"></p>'
+			);
+			expect( consoleWarnStub.mock.calls.length ).toBe( 0 );
+
+			model.change( writer => {
+				writer.setAttribute( 'test', 'bar', modelRoot.getChild( 0 ) );
+				writer.removeAttribute( 'test', modelRoot.getChild( 1 ) );
+			} );
+
+			expectResult(
+				'<p class="bar"></p>' +
+				'<p></p>'
+			);
+		} );
+
+		it( 'config.view and config.model as strings (style attribute)', () => {
+			const consoleWarnStub = vi.spyOn( console, 'warn' ).mockImplementation( () => {} );
+
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+			downcastHelpers.attributeToAttribute( { model: 'test', view: 'style' } );
+
+			model.change( writer => {
+				writer.insertElement( 'paragraph', { test: 'background: red; padding: 4px 10px;' }, modelRoot, 0 );
+				writer.insertElement( 'paragraph', { test: 'color: blue; background: yellow;' }, modelRoot, 1 );
+			} );
+
+			expectResult(
+				'<p style="background:red;padding:4px 10px"></p>' +
+				'<p style="background:yellow;color:blue"></p>'
+			);
+			expect( consoleWarnStub.mock.calls.length ).toBe( 0 );
+
+			model.change( writer => {
+				writer.setAttribute( 'test', 'background: pink;', modelRoot.getChild( 0 ) );
+				writer.removeAttribute( 'test', modelRoot.getChild( 1 ) );
+			} );
+
+			expectResult(
+				'<p style="background:pink"></p>' +
+				'<p></p>'
+			);
+		} );
+
+		it( 'should be possible to override setAttribute', () => {
+			downcastHelpers.attributeToAttribute( {
+				model: 'class',
+				view: ( evt, data, conversionApi ) => {
+					conversionApi.consumable.consume( data.item, 'attribute:class' );
+				},
+				converterPriority: 'high'
+			} );
+
+			model.change( writer => {
+				const modelElement = new ModelElement( 'paragraph', { classes: 'foo' }, new ModelText( 'foobar' ) );
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			// No attribute set.
+			expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+		} );
+
+		it( 'should not convert or consume if element creator returned null', () => {
+			const callback = vi.fn().mockReturnValue( null );
+
+			downcastHelpers.attributeToAttribute( {
+				model: 'class',
+				view: callback,
+				converterPriority: 'high'
+			} );
+
+			const modelElement = new ModelElement( 'paragraph', { class: 'foo' }, new ModelText( 'foobar' ) );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p class="foo">foobar</p></div>' );
+
+			expect( callback ).toHaveBeenCalled();
+		} );
+	} );
+
+	describe( 'markerToElement()', () => {
+		let modelText, modelElement, range;
+
+		it( 'should be chainable', () => {
+			expect( downcastHelpers.markerToElement( { model: 'search', view: 'marker-search' } ) ).toBe( downcastHelpers );
+		} );
+
+		it( 'config.view is a string', () => {
+			downcastHelpers.markerToElement( { model: 'search', view: 'marker-search' } );
+
+			model.change( writer => {
+				writer.insertText( 'foo', modelRoot, 0 );
+
+				const range = writer.createRange( writer.createPositionAt( modelRoot, 1 ), writer.createPositionAt( modelRoot, 2 ) );
+				writer.addMarker( 'search', { range, usingOperation: false } );
+			} );
+
+			expectResult( 'f<marker-search></marker-search>o<marker-search></marker-search>o' );
+		} );
+
+		it( 'can be overwritten using converterPriority', () => {
+			downcastHelpers.markerToElement( { model: 'search', view: 'marker-search' } );
+			downcastHelpers.markerToElement( { model: 'search', view: 'search', converterPriority: 'high' } );
+
+			model.change( writer => {
+				writer.insertText( 'foo', modelRoot, 0 );
+				const range = writer.createRange( writer.createPositionAt( modelRoot, 1 ), writer.createPositionAt( modelRoot, 2 ) );
+				writer.addMarker( 'search', { range, usingOperation: false } );
+			} );
+
+			expectResult( 'f<search></search>o<search></search>o' );
+		} );
+
+		it( 'config.view is a view element definition', () => {
+			downcastHelpers.markerToElement( {
+				model: 'search',
+				view: {
+					name: 'span',
+					attributes: {
+						'data-marker': 'search'
+					}
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertText( 'foo', modelRoot, 0 );
+				const range = writer.createRange( writer.createPositionAt( modelRoot, 1 ), writer.createPositionAt( modelRoot, 2 ) );
+				writer.addMarker( 'search', { range, usingOperation: false } );
+			} );
+
+			expectResult( 'f<span data-marker="search"></span>o<span data-marker="search"></span>o' );
+		} );
+
+		it( 'config.view is a function', () => {
+			downcastHelpers.markerToElement( {
+				model: 'search',
+				view: ( data, { writer } ) => {
+					return writer.createUIElement( 'span', { 'data-marker': 'search', 'data-start': data.isOpening } );
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertText( 'foo', modelRoot, 0 );
+				const range = writer.createRange( writer.createPositionAt( modelRoot, 1 ), writer.createPositionAt( modelRoot, 2 ) );
+				writer.addMarker( 'search', { range, usingOperation: false } );
+			} );
+
+			expectResult( 'f<span data-marker="search" data-start="true"></span>o<span data-marker="search" data-start="false"></span>o' );
+		} );
+
+		describe( 'collapsed range', () => {
+			beforeEach( () => {
+				modelText = new ModelText( 'foobar' );
+				modelElement = new ModelElement( 'paragraph', null, modelText );
+
+				downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+
+				model.change( writer => {
+					writer.insert( modelElement, modelRootStart );
+				} );
+
+				range = model.createRange( model.createPositionAt( modelElement, 3 ), model.createPositionAt( modelElement, 3 ) );
+			} );
+
+			it( 'should insert and remove ui element', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => writer.createUIElement( 'span', { 'class': 'marker' } )
+				} );
+
+				model.change( writer => {
+					writer.addMarker( 'marker', { range, usingOperation: false } );
+				} );
+
+				expect( viewToString( viewRoot ) ).toBe( '<div><p>foo<span class="marker"></span>bar</p></div>' );
+
+				model.change( writer => {
+					writer.removeMarker( 'marker' );
+				} );
+
+				expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+			} );
+
+			it( 'should not convert if consumable was consumed', () => {
+				vi.spyOn( controller.downcastDispatcher, 'fire' );
+
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => writer.createUIElement( 'span', { 'class': 'marker' } )
+				} );
+
+				controller.downcastDispatcher.on( 'addMarker:marker', ( evt, data, conversionApi ) => {
+					conversionApi.consumable.consume( data.markerRange, 'addMarker:marker' );
+				}, { priority: 'high' } );
+
+				model.change( writer => {
+					writer.addMarker( 'marker', { range, usingOperation: false } );
+				} );
+
+				expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+				// fire was called (checked by the spy check above)
+			} );
+
+			it( 'should not convert if creator returned null', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: () => null
+				} );
+
+				model.change( writer => {
+					writer.addMarker( 'marker', { range, usingOperation: false } );
+				} );
+
+				expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+
+				model.change( writer => {
+					writer.removeMarker( 'marker' );
+				} );
+
+				expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+			} );
+		} );
+
+		describe( 'non-collapsed range', () => {
+			beforeEach( () => {
+				modelText = new ModelText( 'foobar' );
+				modelElement = new ModelElement( 'paragraph', null, modelText );
+
+				downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+
+				model.change( writer => {
+					writer.insert( modelElement, modelRootStart );
+				} );
+
+				range = model.createRange( model.createPositionAt( modelElement, 2 ), model.createPositionAt( modelElement, 5 ) );
+			} );
+
+			it( 'should insert and remove ui element - element as a creator', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => writer.createUIElement( 'span', { 'class': 'marker' } )
+				} );
+
+				model.change( writer => {
+					writer.addMarker( 'marker', { range, usingOperation: false } );
+				} );
+
+				expect( viewToString( viewRoot ) )
+					.toBe( '<div><p>fo<span class="marker"></span>oba<span class="marker"></span>r</p></div>' );
+
+				model.change( writer => {
+					writer.removeMarker( 'marker' );
+				} );
+
+				expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+			} );
+
+			it( 'should insert and remove ui element - function as a creator', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => writer.createUIElement( 'span', { 'class': data.markerName } )
+				} );
+
+				model.change( writer => {
+					writer.addMarker( 'marker', { range, usingOperation: false } );
+				} );
+
+				expect( viewToString( viewRoot ) )
+					.toBe( '<div><p>fo<span class="marker"></span>oba<span class="marker"></span>r</p></div>' );
+
+				model.change( writer => {
+					writer.removeMarker( 'marker' );
+				} );
+
+				expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+			} );
+
+			it( 'should insert and remove different opening and ending element', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => {
+						if ( data.isOpening ) {
+							return writer.createUIElement( 'span', { 'class': data.markerName, 'data-start': true } );
+						}
+
+						return writer.createUIElement( 'span', { 'class': data.markerName, 'data-end': true } );
+					}
+				} );
+
+				model.change( writer => {
+					writer.addMarker( 'marker', { range, usingOperation: false } );
+				} );
+
+				expect( viewToString( viewRoot ) ).toBe(
+					'<div><p>fo<span class="marker" data-start="true"></span>oba<span class="marker" data-end="true"></span>r</p></div>'
+				);
+
+				model.change( writer => {
+					writer.removeMarker( 'marker' );
+				} );
+
+				expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+			} );
+
+			it( 'should keep adjacent marker boundaries in model order when markers are added together', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => {
+						return writer.createUIElement( 'span', {
+							class: `${ data.markerName }-${ data.isOpening ? 'start' : 'end' }`
+						} );
+					}
+				} );
+
+				model.change( writer => {
+					writer.addMarker( 'marker:2', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 3 ), writer.createPositionAt( modelElement, 4 ) ),
+						usingOperation: false
+					} );
+					writer.addMarker( 'marker:1', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 2 ), writer.createPositionAt( modelElement, 3 ) ),
+						usingOperation: false
+					} );
+				} );
+
+				expect( viewToString( viewRoot ) ).toEqual( '<div><p>fo' +
+					'<span class="marker:1-start"></span>o<span class="marker:1-end"></span><span class="marker:2-start"></span>b' +
+					'<span class="marker:2-end"></span>ar</p></div>' );
+			} );
+
+			it( 'should keep adjacent marker boundaries in model order when the second marker is added later', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => {
+						return writer.createUIElement( 'span', {
+							class: `${ data.markerName }-${ data.isOpening ? 'start' : 'end' }`
+						} );
+					}
+				} );
+
+				model.change( writer => {
+					writer.addMarker( 'marker:1', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 2 ), writer.createPositionAt( modelElement, 3 ) ),
+						usingOperation: false
+					} );
+				} );
+
+				model.change( writer => {
+					writer.addMarker( 'marker:2', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 3 ), writer.createPositionAt( modelElement, 4 ) ),
+						usingOperation: false
+					} );
+				} );
+
+				expect( viewToString( viewRoot ) ).toEqual( '<div><p>fo' +
+					'<span class="marker:1-start"></span>o<span class="marker:1-end"></span><span class="marker:2-start"></span>b' +
+					'<span class="marker:2-end"></span>ar</p></div>' );
+			} );
+
+			it( 'adjacent markers do not overlap regardless of creation order', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => {
+						return writer.createUIElement( 'span', {
+							class: `${ data.markerName }-${ data.isOpening ? 'start' : 'end' }`
+						} );
+					}
+				} );
+
+				const rangeA = model.createRange( model.createPositionAt( modelElement, 0 ), model.createPositionAt( modelElement, 3 ) );
+				const rangeB = model.createRange( model.createPositionAt( modelElement, 3 ), model.createPositionAt( modelElement, 6 ) );
+
+				model.change( writer => {
+					writer.addMarker( 'marker:a', { range: rangeA, usingOperation: false } );
+					writer.addMarker( 'marker:b', { range: rangeB, usingOperation: false } );
+				} );
+
+				const expected =
+					'<div><p>' +
+					'<span class="marker:a-start"></span>foo<span class="marker:a-end"></span>' +
+					'<span class="marker:b-start"></span>bar<span class="marker:b-end"></span>' +
+					'</p></div>';
+
+				expect( viewToString( viewRoot ) ).toBe( expected );
+
+				// Remove all markers.
+				model.change( writer => {
+					writer.removeMarker( 'marker:a' );
+					writer.removeMarker( 'marker:b' );
+				} );
+
+				// Re-add in reversed order in a fresh change block so the differ
+				// processes them in the new order.
+				model.change( writer => {
+					writer.addMarker( 'marker:b', { range: rangeB, usingOperation: false } );
+					writer.addMarker( 'marker:a', { range: rangeA, usingOperation: false } );
+				} );
+
+				expect( viewToString( viewRoot ) ).toBe( expected );
+			} );
+
+			it( 'nested markers sharing the same start position preserve outer-first nesting order', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => {
+						return writer.createUIElement( 'span', {
+							class: `${ data.markerName }-${ data.isOpening ? 'start' : 'end' }`
+						} );
+					}
+				} );
+
+				// "foobar" — marker:outer spans [0,6], marker:inner spans [0,3].
+				// Both share the same start position but differ in end position.
+				const outerRange = model.createRange(
+					model.createPositionAt( modelElement, 0 ),
+					model.createPositionAt( modelElement, 6 )
+				);
+				const innerRange = model.createRange(
+					model.createPositionAt( modelElement, 0 ),
+					model.createPositionAt( modelElement, 3 )
+				);
+
+				model.change( writer => {
+					writer.addMarker( 'marker:outer', { range: outerRange, usingOperation: false } );
+					writer.addMarker( 'marker:inner', { range: innerRange, usingOperation: false } );
+				} );
+
+				const expected =
+					'<div><p>' +
+					'<span class="marker:outer-start"></span>' +
+					'<span class="marker:inner-start"></span>' +
+					'foo' +
+					'<span class="marker:inner-end"></span>' +
+					'bar' +
+					'<span class="marker:outer-end"></span>' +
+					'</p></div>';
+
+				expect( viewToString( viewRoot ) ).toBe( expected );
+
+				// Remove all markers.
+				model.change( writer => {
+					writer.removeMarker( 'marker:outer' );
+					writer.removeMarker( 'marker:inner' );
+				} );
+
+				// Re-add in reversed order to verify stability.
+				model.change( writer => {
+					writer.addMarker( 'marker:inner', { range: innerRange, usingOperation: false } );
+					writer.addMarker( 'marker:outer', { range: outerRange, usingOperation: false } );
+				} );
+
+				expect( viewToString( viewRoot ) ).toBe( expected );
+			} );
+
+			it( 'intersecting markers downcast consistently regardless of creation order', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => {
+						return writer.createUIElement( 'span', {
+							class: `${ data.markerName }-${ data.isOpening ? 'start' : 'end' }`
+						} );
+					}
+				} );
+
+				function r( start, end ) {
+					return model.createRange( model.createPositionAt( modelElement, start ), model.createPositionAt( modelElement, end ) );
+				}
+
+				// "foobar" — offsets 0..6
+				const markerRanges = {
+					base: r( 1, 5 ),
+					equal: r( 1, 5 ),
+					outsideStart: r( 0, 1 ),
+					overlapStart: r( 0, 2 ),
+					insideStart: r( 1, 3 ),
+					inside: r( 2, 4 ),
+					insideEnd: r( 4, 5 ),
+					overlapEnd: r( 4, 6 ),
+					outsideEnd: r( 5, 6 )
+				};
+
+				model.change( writer => {
+					for ( const [ name, range ] of Object.entries( markerRanges ) ) {
+						writer.addMarker( `marker:${ name }`, { range, usingOperation: false } );
+					}
+				} );
+
+				const result = viewToString( viewRoot );
+
+				// Remove all markers.
+				model.change( writer => {
+					for ( const name of Object.keys( markerRanges ) ) {
+						writer.removeMarker( `marker:${ name }` );
+					}
+				} );
+
+				// Re-add in reversed order in a fresh change block so the differ
+				// processes them in the new order.
+				model.change( writer => {
+					for ( const [ name, range ] of Object.entries( markerRanges ).reverse() ) {
+						writer.addMarker( `marker:${ name }`, { range, usingOperation: false } );
+					}
+				} );
+
+				expect( viewToString( viewRoot ) ).toBe( result );
+			} );
+
+			it( 'should not change adjacent marker positions when text spanning the boundary is wrapped with bold', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => {
+						return writer.createUIElement( 'span', {
+							class: `${ data.markerName }-${ data.isOpening ? 'start' : 'end' }`
+						} );
+					}
+				} );
+
+				downcastHelpers.attributeToElement( { model: 'bold', view: 'strong' } );
+				model.schema.extend( '$text', { allowAttributes: 'bold' } );
+
+				model.change( writer => {
+					writer.addMarker( 'marker:1', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 2 ), writer.createPositionAt( modelElement, 3 ) ),
+						usingOperation: false
+					} );
+					writer.addMarker( 'marker:2', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 3 ), writer.createPositionAt( modelElement, 4 ) ),
+						usingOperation: false
+					} );
+				} );
+
+				// Wrap text spanning the marker boundary (positions 1-5) with bold.
+				model.change( writer => {
+					writer.setAttribute(
+						'bold', true,
+						writer.createRange( writer.createPositionAt( modelElement, 1 ), writer.createPositionAt( modelElement, 5 ) )
+					);
+				} );
+
+				expect( viewToString( viewRoot ) ).toEqual( '<div><p>f<strong>o' +
+					'<span class="marker:1-start"></span>o<span class="marker:1-end"></span><span class="marker:2-start"></span>b' +
+					'<span class="marker:2-end"></span>a</strong>r</p></div>' );
+			} );
+
+			it( 'should not change adjacent marker positions when bold is removed from text spanning the boundary', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => {
+						return writer.createUIElement( 'span', {
+							class: `${ data.markerName }-${ data.isOpening ? 'start' : 'end' }`
+						} );
+					}
+				} );
+
+				downcastHelpers.attributeToElement( { model: 'bold', view: 'strong' } );
+				model.schema.extend( '$text', { allowAttributes: 'bold' } );
+
+				// Insert bold text and markers.
+				model.change( writer => {
+					writer.setAttribute(
+						'bold', true,
+						writer.createRange( writer.createPositionAt( modelElement, 1 ), writer.createPositionAt( modelElement, 5 ) )
+					);
+
+					writer.addMarker( 'marker:1', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 2 ), writer.createPositionAt( modelElement, 3 ) ),
+						usingOperation: false
+					} );
+					writer.addMarker( 'marker:2', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 3 ), writer.createPositionAt( modelElement, 4 ) ),
+						usingOperation: false
+					} );
+				} );
+
+				expect( viewToString( viewRoot ) ).toEqual( '<div><p>f<strong>o' +
+					'<span class="marker:1-start"></span>o<span class="marker:1-end"></span><span class="marker:2-start"></span>b' +
+					'<span class="marker:2-end"></span>a</strong>r</p></div>' );
+
+				// Remove bold from the same range.
+				model.change( writer => {
+					writer.removeAttribute(
+						'bold',
+						writer.createRange( writer.createPositionAt( modelElement, 1 ), writer.createPositionAt( modelElement, 5 ) )
+					);
+				} );
+
+				expect( viewToString( viewRoot ) ).toEqual( '<div><p>fo' +
+					'<span class="marker:1-start"></span>o<span class="marker:1-end"></span><span class="marker:2-start"></span>b' +
+					'<span class="marker:2-end"></span>ar</p></div>' );
+			} );
+
+			it( 'should keep adjacent marker boundary order when one marker is inside bold and the other is not', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => {
+						return writer.createUIElement( 'span', {
+							class: `${ data.markerName }-${ data.isOpening ? 'start' : 'end' }`
+						} );
+					}
+				} );
+
+				downcastHelpers.attributeToElement( { model: 'bold', view: 'strong' } );
+				model.schema.extend( '$text', { allowAttributes: 'bold' } );
+
+				// Make "foo" bold: <paragraph><$text bold>foo</$text>bar</paragraph>
+				model.change( writer => {
+					writer.setAttribute(
+						'bold', true,
+						writer.createRange( writer.createPositionAt( modelElement, 0 ), writer.createPositionAt( modelElement, 3 ) )
+					);
+				} );
+
+				// marker:1 at [1, 3) — inside the bold text.
+				// marker:2 at [3, 5) — outside the bold text.
+				// Adjacent at offset 3 (the bold boundary).
+				model.change( writer => {
+					writer.addMarker( 'marker:1', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 1 ), writer.createPositionAt( modelElement, 3 ) ),
+						usingOperation: false
+					} );
+					writer.addMarker( 'marker:2', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 3 ), writer.createPositionAt( modelElement, 5 ) ),
+						usingOperation: false
+					} );
+				} );
+
+				expect( viewToString( viewRoot ) ).toEqual( '<div><p><strong>f' +
+					'<span class="marker:1-start"></span>oo</strong>' +
+					'<span class="marker:1-end"></span><span class="marker:2-start"></span>' +
+					'ba<span class="marker:2-end"></span>r</p></div>' );
+			} );
+
+			it( 'should keep adjacent marker boundary order when the second marker is inside bold and the first is not', () => {
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => {
+						return writer.createUIElement( 'span', {
+							class: `${ data.markerName }-${ data.isOpening ? 'start' : 'end' }`
+						} );
+					}
+				} );
+
+				downcastHelpers.attributeToElement( { model: 'bold', view: 'strong' } );
+				model.schema.extend( '$text', { allowAttributes: 'bold' } );
+
+				// Make "bar" bold: <paragraph>foo<$text bold>bar</$text></paragraph>
+				model.change( writer => {
+					writer.setAttribute(
+						'bold', true,
+						writer.createRange( writer.createPositionAt( modelElement, 3 ), writer.createPositionAt( modelElement, 6 ) )
+					);
+				} );
+
+				// marker:1 at [1, 3) — outside the bold text.
+				// marker:2 at [3, 5) — inside the bold text.
+				// Adjacent at offset 3 (the bold boundary).
+				model.change( writer => {
+					writer.addMarker( 'marker:1', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 1 ), writer.createPositionAt( modelElement, 3 ) ),
+						usingOperation: false
+					} );
+					writer.addMarker( 'marker:2', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 3 ), writer.createPositionAt( modelElement, 5 ) ),
+						usingOperation: false
+					} );
+				} );
+
+				expect( viewToString( viewRoot ) ).toEqual( '<div><p>f' +
+					'<span class="marker:1-start"></span>oo' +
+					'<span class="marker:1-end"></span><span class="marker:2-start"></span>' +
+					'<strong>ba<span class="marker:2-end"></span>r</strong></p></div>' );
+			} );
+
+			it( 'should preserve adjacent marker positions when container element is renamed', () => {
+				model.schema.register( 'heading1', { inheritAllFrom: '$block' } );
+				downcastHelpers.elementToElement( { model: 'heading1', view: 'h1' } );
+
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => {
+						return writer.createUIElement( 'span', {
+							class: `${ data.markerName }-${ data.isOpening ? 'start' : 'end' }`
+						} );
+					}
+				} );
+
+				model.change( writer => {
+					writer.addMarker( 'marker:1', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 2 ), writer.createPositionAt( modelElement, 3 ) ),
+						usingOperation: false
+					} );
+					writer.addMarker( 'marker:2', {
+						range: writer.createRange( writer.createPositionAt( modelElement, 3 ), writer.createPositionAt( modelElement, 4 ) ),
+						usingOperation: false
+					} );
+				} );
+
+				expect( viewToString( viewRoot ) ).toEqual( '<div><p>fo' +
+					'<span class="marker:1-start"></span>o<span class="marker:1-end"></span><span class="marker:2-start"></span>b' +
+					'<span class="marker:2-end"></span>ar</p></div>' );
+
+				// Rename paragraph to heading1 — triggers reconversion of the container element.
+				model.change( writer => {
+					writer.rename( modelElement, 'heading1' );
+				} );
+
+				expect( viewToString( viewRoot ) ).toEqual( '<div><h1>fo' +
+					'<span class="marker:1-start"></span>o<span class="marker:1-end"></span><span class="marker:2-start"></span>b' +
+					'<span class="marker:2-end"></span>ar</h1></div>' );
+			} );
+
+			it( 'should not convert if consumable was consumed', () => {
+				vi.spyOn( controller.downcastDispatcher, 'fire' );
+
+				downcastHelpers.markerToElement( {
+					model: 'marker',
+					view: ( data, { writer } ) => writer.createUIElement( 'span', { 'class': 'marker' } )
+				} );
+				controller.downcastDispatcher.on( 'addMarker:marker', ( evt, data, conversionApi ) => {
+					conversionApi.consumable.consume( data.item, 'addMarker:marker' );
+				}, { priority: 'high' } );
+
+				model.change( writer => {
+					writer.addMarker( 'marker', { range, usingOperation: false } );
+				} );
+
+				expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+				// fire was called (checked by the spy check above)
+			} );
+
+			describe( 'marker boundary ordering', () => {
+				function markerView( data, { writer } ) {
+					return writer.createUIElement( 'span', {
+						class: `${ data.markerName }-${ data.isOpening ? 'start' : 'end' }`
+					} );
+				}
+
+				beforeEach( () => {
+					downcastHelpers.markerToElement( { model: 'marker', view: markerView } );
+				} );
+
+				it( 'two markers on identical ranges are ordered by name, outer-first regardless of creation order', () => {
+					// Model: <m1><m2>foobar</m2></m1>
+					const sameRange = () => writer => writer.createRange(
+						writer.createPositionAt( modelElement, 0 ),
+						writer.createPositionAt( modelElement, 6 )
+					);
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', {
+							range: sameRange()( writer ),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:2', {
+							range: sameRange()( writer ),
+							usingOperation: false
+						} );
+					} );
+
+					const expected =
+						'<div><p>' +
+							'<span class="marker:1-start"></span><span class="marker:2-start"></span>' +
+							'foobar' +
+							'<span class="marker:2-end"></span><span class="marker:1-end"></span>' +
+						'</p></div>';
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+						writer.removeMarker( 'marker:2' );
+					} );
+
+					// Re-add in reversed order — result must be identical.
+					model.change( writer => {
+						writer.addMarker( 'marker:2', {
+							range: sameRange()( writer ),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:1', {
+							range: sameRange()( writer ),
+							usingOperation: false
+						} );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+
+				it( 'three markers on identical ranges are ordered by name regardless of creation order', () => {
+					// Model: <alpha><bravo><charlie>foobar</charlie></bravo></alpha>
+					const sameRange = () => writer => writer.createRange(
+						writer.createPositionAt( modelElement, 0 ),
+						writer.createPositionAt( modelElement, 6 )
+					);
+
+					model.change( writer => {
+						writer.addMarker( 'marker:alpha', {
+							range: sameRange()( writer ),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:bravo', {
+							range: sameRange()( writer ),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:charlie', {
+							range: sameRange()( writer ),
+							usingOperation: false
+						} );
+					} );
+
+					const expected =
+						'<div><p>' +
+							'<span class="marker:alpha-start"></span>' +
+							'<span class="marker:bravo-start"></span>' +
+							'<span class="marker:charlie-start"></span>' +
+							'foobar' +
+							'<span class="marker:charlie-end"></span>' +
+							'<span class="marker:bravo-end"></span>' +
+							'<span class="marker:alpha-end"></span>' +
+						'</p></div>';
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:alpha' );
+						writer.removeMarker( 'marker:bravo' );
+						writer.removeMarker( 'marker:charlie' );
+					} );
+
+					// Re-add in reversed order — result must be identical.
+					model.change( writer => {
+						writer.addMarker( 'marker:charlie', {
+							range: sameRange()( writer ),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:bravo', {
+							range: sameRange()( writer ),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:alpha', {
+							range: sameRange()( writer ),
+							usingOperation: false
+						} );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+
+				it( 'two collapsed markers at the same position are inserted in creation order', () => {
+					// Model: foo<m1/><m2/>bar
+					const collapsedAt3 = writer => writer.createRange(
+						writer.createPositionAt( modelElement, 3 ),
+						writer.createPositionAt( modelElement, 3 )
+					);
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range: collapsedAt3( writer ), usingOperation: false } );
+						writer.addMarker( 'marker:2', { range: collapsedAt3( writer ), usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) )
+						.toEqual( '<div><p>foo<span class="marker:1-start"></span><span class="marker:2-start"></span>bar</p></div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+						writer.removeMarker( 'marker:2' );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range: collapsedAt3( writer ), usingOperation: false } );
+						writer.addMarker( 'marker:1', { range: collapsedAt3( writer ), usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) )
+						.toEqual( '<div><p>foo<span class="marker:2-start"></span><span class="marker:1-start"></span>bar</p></div>' );
+				} );
+
+				it( 'collapsed marker at the start of a non-collapsed marker lands after its start element', () => {
+					// Model: <m1>foobar</m1>, m2 collapsed at offset 0 (same as m1 start)
+					model.change( writer => {
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+						writer.addMarker( 'marker:2', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 0 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					const expected =
+						'<div><p>' +
+							'<span class="marker:1-start"></span>' +
+							'<span class="marker:2-start"></span>' +
+							'foobar' +
+							'<span class="marker:1-end"></span>' +
+						'</p></div>';
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+						writer.removeMarker( 'marker:2' );
+					} );
+
+					// Re-add in reversed order — result must be identical.
+					model.change( writer => {
+						writer.addMarker( 'marker:2', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 0 )
+							),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+
+				it( 'nested markers sharing the same end position preserve outer-last closing order', () => {
+					// Model: <m1>foo<m2>bar</m2></m1>
+					model.change( writer => {
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:2', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 3 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					const expected =
+						'<div><p>' +
+							'<span class="marker:1-start"></span>foo' +
+							'<span class="marker:2-start"></span>bar' +
+							'<span class="marker:2-end"></span><span class="marker:1-end"></span>' +
+						'</p></div>';
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+						writer.removeMarker( 'marker:2' );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 3 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+
+				it( 'outer marker spanning entire text with inner sub-range closes last regardless of creation order', () => {
+					// Model: <m1>fo<m2>ob</m2>ar</m1>
+					model.change( writer => {
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:2', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 2 ),
+								writer.createPositionAt( modelElement, 4 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					const expected =
+						'<div><p>' +
+							'<span class="marker:1-start"></span>fo' +
+							'<span class="marker:2-start"></span>ob<span class="marker:2-end"></span>' +
+							'ar<span class="marker:1-end"></span>' +
+						'</p></div>';
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+						writer.removeMarker( 'marker:2' );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 2 ),
+								writer.createPositionAt( modelElement, 4 )
+							),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+
+				it( 'three fully nested markers with distinct boundaries close in reverse-open order', () => {
+					// Model: <m1>fo<m2>o<m3>b</m3>a</m2>r</m1>
+					model.change( writer => {
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:2', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 2 ),
+								writer.createPositionAt( modelElement, 5 )
+							),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:3', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 3 ),
+								writer.createPositionAt( modelElement, 4 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					const expected =
+						'<div><p>' +
+							'<span class="marker:1-start"></span>fo' +
+							'<span class="marker:2-start"></span>o' +
+							'<span class="marker:3-start"></span>b<span class="marker:3-end"></span>a' +
+							'<span class="marker:2-end"></span>r<span class="marker:1-end"></span>' +
+						'</p></div>';
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+						writer.removeMarker( 'marker:2' );
+						writer.removeMarker( 'marker:3' );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:3', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 3 ),
+								writer.createPositionAt( modelElement, 4 )
+							),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:2', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 2 ),
+								writer.createPositionAt( modelElement, 5 )
+							),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+
+				it( 'partially overlapping markers produce deterministic output regardless of creation order', () => {
+					// Model: <m1>fo<m2>ob</m1>ar</m2>
+					model.change( writer => {
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 4 )
+							),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:2', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 2 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					const expected =
+						'<div><p>' +
+							'<span class="marker:1-start"></span>fo' +
+							'<span class="marker:2-start"></span>ob' +
+							'<span class="marker:1-end"></span>ar<span class="marker:2-end"></span>' +
+						'</p></div>';
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+						writer.removeMarker( 'marker:2' );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 2 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 4 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+
+				it( 'does not skip non-marker UIElements sitting at the start boundary', () => {
+					model.change( writer => {
+						writer.remove( writer.createRangeIn( modelRoot ) );
+
+						const p = writer.createElement( 'paragraph' );
+						writer.insert( p, modelRoot, 0 );
+					} );
+
+					// It'll be executed ONCE, so further insertion events will be ignored.
+					controller.downcastDispatcher.once( 'addMarker:marker:1', ( evt, data, conversionApi ) => {
+						const viewPosition = conversionApi.mapper.toViewPosition( data.markerRange.start );
+						const injected = conversionApi.writer.createUIElement( 'span', { class: 'injected' } );
+
+						conversionApi.writer.insert( viewPosition, injected );
+					}, { priority: 'high' } );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelRoot, 0 ),
+								writer.createPositionAt( modelRoot, 1 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					const expected =
+						'<div>' +
+							'<span class="marker:1-start"></span>' +
+							'<span class="injected"></span>' +
+							'<p></p>' +
+							'<span class="marker:1-end"></span>' +
+						'</div>';
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div>' +
+							'<span class="injected"></span>' +
+							'<p></p>' +
+						'</div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelRoot, 0 ),
+								writer.createPositionAt( modelRoot, 1 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+
+				it( 'orphaned end UIElement at the end boundary is skipped gracefully', () => {
+					// It'll be executed ONCE, so further insertion events will be ignored.
+					controller.downcastDispatcher.once( 'addMarker:marker:1', ( evt, data, conversionApi ) => {
+						const viewPosition = conversionApi.mapper.toViewPosition( data.markerRange.end );
+						const orphan = conversionApi.writer.createUIElement( 'span', { class: 'orphan' } );
+
+						conversionApi.writer.setCustomProperty( 'markerBoundaryType', 'end', orphan );
+						conversionApi.writer.setCustomProperty( 'markerBoundaryName', 'marker:orphan', orphan );
+						conversionApi.writer.insert( viewPosition, orphan );
+						// Intentionally NOT calling mapper.bindElementToMarker — no start element exists.
+					}, { priority: 'high' } );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					const expected =
+						'<div><p>' +
+							'<span class="marker:1-start"></span>' +
+							'foobar' +
+							'<span class="marker:1-end"></span>' +
+							'<span class="orphan"></span>' +
+						'</p></div>';
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'foobar' +
+							'<span class="orphan"></span>' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+			} );
+
+			describe( 'marker boundary ordering (separated batches)', () => {
+				function markerView( data, { writer } ) {
+					const tagName = data.isOpening ? 'marker-start' : 'marker-end';
+
+					return writer.createUIElement( tagName, { name: data.markerName } );
+				}
+
+				beforeEach( () => {
+					downcastHelpers.markerToElement( { model: 'marker', view: markerView } );
+				} );
+
+				it( 'identical ranges (shared start and end)', () => {
+					// Model: <m1><m2>foobar</m2></m1>
+					const range = model.createRange(
+						model.createPositionAt( modelElement, 0 ),
+						model.createPositionAt( modelElement, 6 )
+					);
+
+					const expected =
+						'<div><p>' +
+							'<marker-start name="marker:1"></marker-start>' +
+							'<marker-start name="marker:2"></marker-start>' +
+							'foobar' +
+							'<marker-end name="marker:2"></marker-end>' +
+							'<marker-end name="marker:1"></marker-end>' +
+						'</p></div>';
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:2"></marker-start>' +
+							'foobar' +
+							'<marker-end name="marker:2"></marker-end>' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+						writer.removeMarker( 'marker:2' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:1"></marker-start>' +
+							'foobar' +
+							'<marker-end name="marker:1"></marker-end>' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+
+				it( 'shared start, different end', () => {
+					// Model: <m1><m2>foo</m2>bar</m1>
+					const innerRange = model.createRange(
+						model.createPositionAt( modelElement, 0 ),
+						model.createPositionAt( modelElement, 3 )
+					);
+
+					const outerRange = model.createRange(
+						model.createPositionAt( modelElement, 0 ),
+						model.createPositionAt( modelElement, 6 )
+					);
+
+					const expected =
+						'<div><p>' +
+							'<marker-start name="marker:1"></marker-start>' +
+							'<marker-start name="marker:2"></marker-start>' +
+							'foo' +
+							'<marker-end name="marker:2"></marker-end>' +
+							'bar' +
+							'<marker-end name="marker:1"></marker-end>' +
+						'</p></div>';
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range: innerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:2"></marker-start>' +
+							'foo' +
+							'<marker-end name="marker:2"></marker-end>' +
+							'bar' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range: outerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+						writer.removeMarker( 'marker:2' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range: outerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:1"></marker-start>' +
+							'foobar' +
+							'<marker-end name="marker:1"></marker-end>' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range: innerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+
+				it( 'shared end, different start', () => {
+					// Model: <m1>foo<m2>bar</m2></m1>  (m1=[0,6], m2=[3,6])
+					const innerRange = model.createRange(
+						model.createPositionAt( modelElement, 3 ),
+						model.createPositionAt( modelElement, 6 )
+					);
+
+					const outerRange = model.createRange(
+						model.createPositionAt( modelElement, 0 ),
+						model.createPositionAt( modelElement, 6 )
+					);
+
+					const expected =
+						'<div><p>' +
+							'<marker-start name="marker:1"></marker-start>' +
+							'foo' +
+							'<marker-start name="marker:2"></marker-start>' +
+							'bar' +
+							'<marker-end name="marker:2"></marker-end>' +
+							'<marker-end name="marker:1"></marker-end>' +
+						'</p></div>';
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range: innerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'foo' +
+							'<marker-start name="marker:2"></marker-start>' +
+							'bar' +
+							'<marker-end name="marker:2"></marker-end>' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range: outerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+						writer.removeMarker( 'marker:2' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+
+					// Re-add in reversed batch order — result must be identical.
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range: outerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:1"></marker-start>' +
+							'foobar' +
+							'<marker-end name="marker:1"></marker-end>' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range: innerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+
+				it( 'three fully nested markers with distinct boundaries close in proper order', () => {
+					// Model: <m1>fo<m2>o<m3>b</m3>a</m2>r</m1>
+					const range1 = model.createRange(
+						model.createPositionAt( modelElement, 0 ),
+						model.createPositionAt( modelElement, 6 )
+					);
+
+					const range2 = model.createRange(
+						model.createPositionAt( modelElement, 2 ),
+						model.createPositionAt( modelElement, 5 )
+					);
+
+					const range3 = model.createRange(
+						model.createPositionAt( modelElement, 3 ),
+						model.createPositionAt( modelElement, 4 )
+					);
+
+					const expected =
+						'<div><p>' +
+							'<marker-start name="marker:1"></marker-start>fo' +
+							'<marker-start name="marker:2"></marker-start>o' +
+							'<marker-start name="marker:3"></marker-start>b<marker-end name="marker:3"></marker-end>a' +
+							'<marker-end name="marker:2"></marker-end>r<marker-end name="marker:1"></marker-end>' +
+						'</p></div>';
+
+					// Add innermost-first in separate batches.
+					model.change( writer => {
+						writer.addMarker( 'marker:3', { range: range3, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'foo<marker-start name="marker:3"></marker-start>b<marker-end name="marker:3"></marker-end>ar' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range: range2, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'fo<marker-start name="marker:2"></marker-start>o' +
+							'<marker-start name="marker:3"></marker-start>b<marker-end name="marker:3"></marker-end>a' +
+							'<marker-end name="marker:2"></marker-end>r' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range: range1, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+						writer.removeMarker( 'marker:2' );
+						writer.removeMarker( 'marker:3' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range: range1, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:1"></marker-start>foobar<marker-end name="marker:1"></marker-end>' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range: range2, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:1"></marker-start>fo' +
+							'<marker-start name="marker:2"></marker-start>oba' +
+							'<marker-end name="marker:2"></marker-end>r' +
+							'<marker-end name="marker:1"></marker-end>' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:3', { range: range3, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+
+				it( 'should preserve boundaries when removing the inner marker from identical ranges', () => {
+					// Model: <m1><m2>foobar</m2></m1> → remove m2 → <m1>foobar</m1>
+					const range = model.createRange(
+						model.createPositionAt( modelElement, 0 ),
+						model.createPositionAt( modelElement, 6 )
+					);
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range, usingOperation: false } );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:1"></marker-start>' +
+							'<marker-start name="marker:2"></marker-start>' +
+							'foobar' +
+							'<marker-end name="marker:2"></marker-end>' +
+							'<marker-end name="marker:1"></marker-end>' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:2' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:1"></marker-start>' +
+							'foobar' +
+							'<marker-end name="marker:1"></marker-end>' +
+						'</p></div>' );
+				} );
+
+				it( 'should preserve boundaries when removing the outer marker from shared end ranges', () => {
+					// Model: <m1>foo<m2>bar</m2></m1> → remove m1 → foo<m2>bar</m2>
+					const innerRange = model.createRange(
+						model.createPositionAt( modelElement, 3 ),
+						model.createPositionAt( modelElement, 6 )
+					);
+
+					const outerRange = model.createRange(
+						model.createPositionAt( modelElement, 0 ),
+						model.createPositionAt( modelElement, 6 )
+					);
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range: innerRange, usingOperation: false } );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range: outerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:1"></marker-start>' +
+							'foo' +
+							'<marker-start name="marker:2"></marker-start>' +
+							'bar' +
+							'<marker-end name="marker:2"></marker-end>' +
+							'<marker-end name="marker:1"></marker-end>' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'foo' +
+							'<marker-start name="marker:2"></marker-start>' +
+							'bar' +
+							'<marker-end name="marker:2"></marker-end>' +
+						'</p></div>' );
+				} );
+
+				it( 'should preserve boundaries when removing the middle marker from three nested markers', () => {
+					// Model: <m1>fo<m2>o<m3>b</m3>a</m2>r</m1> → remove m2 → <m1>foo<m3>b</m3>ar</m1>
+					model.change( writer => {
+						writer.addMarker( 'marker:3', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 3 ),
+								writer.createPositionAt( modelElement, 4 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 2 ),
+								writer.createPositionAt( modelElement, 5 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', {
+							range: writer.createRange(
+								writer.createPositionAt( modelElement, 0 ),
+								writer.createPositionAt( modelElement, 6 )
+							),
+							usingOperation: false
+						} );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:1"></marker-start>fo' +
+							'<marker-start name="marker:2"></marker-start>o' +
+							'<marker-start name="marker:3"></marker-start>b<marker-end name="marker:3"></marker-end>a' +
+							'<marker-end name="marker:2"></marker-end>r<marker-end name="marker:1"></marker-end>' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:2' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:1"></marker-start>fo' +
+							'o<marker-start name="marker:3"></marker-start>b<marker-end name="marker:3"></marker-end>a' +
+							'r<marker-end name="marker:1"></marker-end>' +
+						'</p></div>' );
+				} );
+
+				it( 'should preserve boundaries when removing the middle marker then the outer marker from three stacked markers', () => {
+					// Model: <m1><m2><m3>foobar</m3></m2></m1>
+					// → remove m2 → <m1><m3>foobar</m3></m1>
+					// → remove m1 → <m3>foobar</m3>
+					const range = model.createRange(
+						model.createPositionAt( modelElement, 0 ),
+						model.createPositionAt( modelElement, 6 )
+					);
+
+					model.change( writer => {
+						writer.addMarker( 'marker:3', { range, usingOperation: false } );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range, usingOperation: false } );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:1"></marker-start>' +
+							'<marker-start name="marker:2"></marker-start>' +
+							'<marker-start name="marker:3"></marker-start>' +
+							'foobar' +
+							'<marker-end name="marker:3"></marker-end>' +
+							'<marker-end name="marker:2"></marker-end>' +
+							'<marker-end name="marker:1"></marker-end>' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:2' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:1"></marker-start>' +
+							'<marker-start name="marker:3"></marker-start>' +
+							'foobar' +
+							'<marker-end name="marker:3"></marker-end>' +
+							'<marker-end name="marker:1"></marker-end>' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'<marker-start name="marker:3"></marker-start>' +
+							'foobar' +
+							'<marker-end name="marker:3"></marker-end>' +
+						'</p></div>' );
+				} );
+
+				it( 'should produce a deterministic view when three stacked markers are removed and re-added in correct order', () => {
+					// Model: <m1><m2><m3>foobar</m3></m2></m1>  (all on [0,6])
+					// → remove all at once → foobar
+					// → re-add in original order (m1, m2, m3) → same expected view
+					const range = model.createRange(
+						model.createPositionAt( modelElement, 0 ),
+						model.createPositionAt( modelElement, 6 )
+					);
+
+					const expected =
+						'<div><p>' +
+							'<marker-start name="marker:1"></marker-start>' +
+							'<marker-start name="marker:2"></marker-start>' +
+							'<marker-start name="marker:3"></marker-start>' +
+							'foobar' +
+							'<marker-end name="marker:3"></marker-end>' +
+							'<marker-end name="marker:2"></marker-end>' +
+							'<marker-end name="marker:1"></marker-end>' +
+						'</p></div>';
+
+					model.change( writer => {
+						writer.addMarker( 'marker:3', { range, usingOperation: false } );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range, usingOperation: false } );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:1' );
+						writer.removeMarker( 'marker:2' );
+						writer.removeMarker( 'marker:3' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+
+					// Re-add in original order — name-based sort must still produce the same result.
+					model.change( writer => {
+						writer.addMarker( 'marker:1', { range, usingOperation: false } );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:2', { range, usingOperation: false } );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:3', { range, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( expected );
+				} );
+
+				it( 'two collapsed markers at the same position added in separate batches are inserted in creation order', () => {
+					// Model: foo<m1/><m2/>bar
+					const collapsedAt3 = writer => writer.createRange(
+						writer.createPositionAt( modelElement, 3 ),
+						writer.createPositionAt( modelElement, 3 )
+					);
+
+					model.change( writer => {
+						writer.addMarker( 'marker:zzz', { range: collapsedAt3( writer ), usingOperation: false } );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:aaa', { range: collapsedAt3( writer ), usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'foo' +
+							'<marker-start name="marker:zzz"></marker-start><marker-start name="marker:aaa"></marker-start>' +
+							'bar' +
+						'</p></div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker:zzz' );
+						writer.removeMarker( 'marker:aaa' );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:aaa', { range: collapsedAt3( writer ), usingOperation: false } );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker:zzz', { range: collapsedAt3( writer ), usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div><p>' +
+							'foo' +
+							'<marker-start name="marker:aaa"></marker-start><marker-start name="marker:zzz"></marker-start>' +
+							'bar' +
+						'</p></div>' );
+				} );
+			} );
+		} );
+	} );
+
+	describe( 'markerToData()', () => {
+		let root;
+
+		beforeEach( () => {
+			root = model.document.getRoot();
+
+			model.schema.register( 'paragraph', { inheritAllFrom: '$block' } );
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+		} );
+
+		it( 'should be chainable', () => {
+			expect( downcastHelpers.markerToData( { model: 'search' } ) ).toBe( downcastHelpers );
+		} );
+
+		it( 'default conversion, inside text, non-collapsed, no name', () => {
+			downcastHelpers.markerToData( { model: 'search' } );
+
+			_setModelData( model, '<paragraph>Fo[ob]ar</paragraph>' );
+
+			model.change( writer => {
+				writer.addMarker( 'search', { range: model.document.selection.getFirstRange(), usingOperation: false } );
+			} );
+
+			expectResult( '<p>Fo<search-start></search-start>ob<search-end></search-end>ar</p>' );
+
+			model.change( writer => {
+				writer.removeMarker( 'search' );
+			} );
+
+			expectResult( '<p>Foobar</p>' );
+		} );
+
+		it( 'default conversion, inside text, non-collapsed, name', () => {
+			downcastHelpers.markerToData( { model: 'group' } );
+
+			_setModelData( model, '<paragraph>Fo[ob]ar</paragraph>' );
+
+			model.change( writer => {
+				writer.addMarker( 'group:foo:bar:baz', { range: model.document.selection.getFirstRange(), usingOperation: false } );
+			} );
+
+			expectResult( '<p>Fo<group-start name="foo:bar:baz"></group-start>ob<group-end name="foo:bar:baz"></group-end>ar</p>' );
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo:bar:baz' );
+			} );
+
+			expectResult( '<p>Foobar</p>' );
+		} );
+
+		it( 'default conversion, inside text, collapsed, no name', () => {
+			downcastHelpers.markerToData( { model: 'search' } );
+
+			_setModelData( model, '<paragraph>Foo[]bar</paragraph>' );
+
+			model.change( writer => {
+				writer.addMarker( 'search', { range: model.document.selection.getFirstRange(), usingOperation: false } );
+			} );
+
+			expectResult( '<p>Foo<search-start></search-start><search-end></search-end>bar</p>' );
+
+			model.change( writer => {
+				writer.removeMarker( 'search' );
+			} );
+
+			expectResult( '<p>Foobar</p>' );
+		} );
+
+		it( 'default conversion, inside text, collapsed, multiple markers, no name', () => {
+			downcastHelpers.markerToData( { model: 'group' } );
+
+			_setModelData( model, '<paragraph>Foo[]bar</paragraph>' );
+
+			model.change( writer => {
+				writer.addMarker( 'group:foo', { range: model.document.selection.getFirstRange(), usingOperation: false } );
+				writer.addMarker( 'group:abc', { range: model.document.selection.getFirstRange(), usingOperation: false } );
+			} );
+
+			expectResult(
+				'<p>' +
+				'Foo' +
+				'<group-start name="abc"></group-start><group-end name="abc"></group-end>' +
+				'<group-start name="foo"></group-start><group-end name="foo"></group-end>' +
+				'bar' +
+				'</p>'
+			);
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo' );
+				writer.removeMarker( 'group:abc' );
+			} );
+
+			expectResult( '<p>Foobar</p>' );
+		} );
+
+		it( 'default conversion, on two elements, no name', () => {
+			downcastHelpers.markerToData( { model: 'search' } );
+
+			_setModelData( model, '<paragraph>Foo</paragraph><paragraph>Bar</paragraph>' );
+
+			model.change( writer => {
+				const range = writer.createRangeIn( root );
+				writer.addMarker( 'search', { range, usingOperation: false } );
+			} );
+
+			expectResult( '<p data-search-start-before="">Foo</p><p data-search-end-after="">Bar</p>' );
+
+			model.change( writer => {
+				writer.removeMarker( 'search' );
+			} );
+
+			expectResult( '<p>Foo</p><p>Bar</p>' );
+		} );
+
+		it( 'default conversion, on two elements, name', () => {
+			downcastHelpers.markerToData( { model: 'group' } );
+
+			_setModelData( model, '<paragraph>Foo</paragraph><paragraph>Bar</paragraph>' );
+
+			model.change( writer => {
+				const range = writer.createRangeIn( root );
+				writer.addMarker( 'group:foo:bar:baz', { range, usingOperation: false } );
+			} );
+
+			expectResult( '<p data-group-start-before="foo:bar:baz">Foo</p><p data-group-end-after="foo:bar:baz">Bar</p>' );
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo:bar:baz' );
+			} );
+
+			expectResult( '<p>Foo</p><p>Bar</p>' );
+		} );
+
+		it( 'default conversion, on one element, name', () => {
+			downcastHelpers.markerToData( { model: 'group' } );
+
+			_setModelData( model, '<paragraph>Foobar</paragraph>' );
+
+			model.change( writer => {
+				const range = writer.createRangeIn( root );
+				writer.addMarker( 'group:foo:bar:baz', { range, usingOperation: false } );
+			} );
+
+			expectResult( '<p data-group-end-after="foo:bar:baz" data-group-start-before="foo:bar:baz">Foobar</p>' );
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo:bar:baz' );
+			} );
+
+			expectResult( '<p>Foobar</p>' );
+		} );
+
+		it( 'default conversion, collapsed before element, name', () => {
+			downcastHelpers.markerToData( { model: 'group' } );
+
+			_setModelData( model, '<paragraph>Foobar</paragraph>' );
+
+			model.change( writer => {
+				// Collapsed before <paragraph>.
+				const range = writer.createRange(
+					writer.createPositionFromPath( root, [ 0 ] )
+				);
+
+				writer.addMarker( 'group:foo:bar:baz', { range, usingOperation: false } );
+			} );
+
+			expectResult( '<p data-group-end-before="foo:bar:baz" data-group-start-before="foo:bar:baz">Foobar</p>' );
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo:bar:baz' );
+			} );
+
+			expectResult( '<p>Foobar</p>' );
+		} );
+
+		it( 'default conversion, collapsed after element, name', () => {
+			downcastHelpers.markerToData( { model: 'group' } );
+
+			_setModelData( model, '<paragraph>Foobar</paragraph>' );
+
+			model.change( writer => {
+				// Collapsed before <paragraph>.
+				const range = writer.createRange(
+					writer.createPositionFromPath( root, [ 1 ] )
+				);
+
+				writer.addMarker( 'group:foo:bar:baz', { range, usingOperation: false } );
+			} );
+
+			expectResult( '<p data-group-end-after="foo:bar:baz" data-group-start-after="foo:bar:baz">Foobar</p>' );
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo:bar:baz' );
+			} );
+
+			expectResult( '<p>Foobar</p>' );
+		} );
+
+		it( 'default conversion, mixed, multiple markers, name', () => {
+			downcastHelpers.markerToData( { model: 'group' } );
+
+			_setModelData( model, '<paragraph>Foo</paragraph><paragraph>Bar</paragraph>' );
+
+			model.change( writer => {
+				const range = writer.createRange(
+					writer.createPositionFromPath( root, [ 0 ] ),
+					writer.createPositionFromPath( root, [ 1, 2 ] )
+				);
+
+				writer.addMarker( 'group:foo:bar', { range, usingOperation: false } );
+				writer.addMarker( 'group:abc:xyz', { range, usingOperation: false } );
+			} );
+
+			expectResult(
+				'<p data-group-start-before="abc:xyz,foo:bar">Foo</p>' +
+				'<p>Ba<group-end name="abc:xyz"></group-end><group-end name="foo:bar"></group-end>r</p>'
+			);
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo:bar' );
+				writer.removeMarker( 'group:abc:xyz' );
+			} );
+
+			expectResult( '<p>Foo</p><p>Bar</p>' );
+		} );
+
+		it( 'default conversion, mixed #2, multiple markers, name', () => {
+			downcastHelpers.markerToData( { model: 'group' } );
+
+			_setModelData( model, '<paragraph>Foo</paragraph><paragraph>Bar</paragraph>' );
+
+			model.change( writer => {
+				const range = writer.createRange(
+					writer.createPositionFromPath( root, [ 0, 1 ] ),
+					writer.createPositionFromPath( root, [ 2 ] )
+				);
+
+				writer.addMarker( 'group:foo:bar', { range, usingOperation: false } );
+				writer.addMarker( 'group:abc:xyz', { range, usingOperation: false } );
+			} );
+
+			expectResult(
+				'<p>F<group-start name="abc:xyz"></group-start><group-start name="foo:bar"></group-start>oo</p>' +
+				'<p data-group-end-after="abc:xyz,foo:bar">Bar</p>'
+			);
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo:bar' );
+				writer.removeMarker( 'group:abc:xyz' );
+			} );
+
+			expectResult( '<p>Foo</p><p>Bar</p>' );
+		} );
+
+		it( 'default conversion, mixed #3, multiple markers, name', () => {
+			downcastHelpers.markerToData( { model: 'group' } );
+
+			_setModelData( model, '<paragraph>Foo</paragraph>' );
+
+			model.change( writer => {
+				const range = writer.createRange(
+					writer.createPositionFromPath( root, [ 0 ] ),
+					writer.createPositionFromPath( root, [ 0, 2 ] )
+				);
+
+				writer.addMarker( 'group:foo:bar', { range, usingOperation: false } );
+				writer.addMarker( 'group:abc:xyz', { range, usingOperation: false } );
+			} );
+
+			expectResult(
+				'<p data-group-start-before="abc:xyz,foo:bar">' +
+				'Fo<group-end name="abc:xyz"></group-end><group-end name="foo:bar"></group-end>o' +
+				'</p>'
+			);
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo:bar' );
+				writer.removeMarker( 'group:abc:xyz' );
+			} );
+
+			expectResult( '<p>Foo</p>' );
+		} );
+
+		it( 'default conversion, mixed #4, multiple markers, name', () => {
+			downcastHelpers.markerToData( { model: 'group' } );
+
+			_setModelData( model, '<paragraph>Foo</paragraph>' );
+
+			model.change( writer => {
+				const range = writer.createRange(
+					writer.createPositionFromPath( root, [ 0, 2 ] ),
+					writer.createPositionFromPath( root, [ 1 ] )
+				);
+
+				writer.addMarker( 'group:foo:bar', { range, usingOperation: false } );
+				writer.addMarker( 'group:abc:xyz', { range, usingOperation: false } );
+			} );
+
+			expectResult(
+				'<p data-group-end-after="abc:xyz,foo:bar">' +
+				'Fo<group-start name="abc:xyz"></group-start><group-start name="foo:bar"></group-start>o' +
+				'</p>'
+			);
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo:bar' );
+				writer.removeMarker( 'group:abc:xyz' );
+			} );
+
+			expectResult( '<p>Foo</p>' );
+		} );
+
+		it( 'default conversion, document fragment, text', () => {
+			const dataController = new DataController( model, new StylesProcessor() );
+			downcastHelpers = new DowncastHelpers( [ dataController.downcastDispatcher ] );
+
+			downcastHelpers.markerToData( { model: 'group' } );
+
+			let modelDocumentFragment;
+
+			model.change( writer => {
+				modelDocumentFragment = writer.createDocumentFragment();
+
+				writer.insertText( 'foobar', [], modelDocumentFragment, 0 );
+
+				const range = writer.createRange(
+					writer.createPositionFromPath( modelDocumentFragment, [ 2 ] ),
+					writer.createPositionFromPath( modelDocumentFragment, [ 5 ] )
+				);
+
+				modelDocumentFragment.markers.set( 'group:foo:bar', range );
+			} );
+
+			const expectedResult = 'fo<group-start name="foo:bar"></group-start>oba<group-end name="foo:bar"></group-end>r';
+
+			expect( dataController.stringify( modelDocumentFragment ) ).toBe( expectedResult );
+		} );
+
+		it( 'default conversion, document fragment, element', () => {
+			const dataController = new DataController( model, new StylesProcessor() );
+			downcastHelpers = new DowncastHelpers( [ dataController.downcastDispatcher ] );
+
+			downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+			downcastHelpers.markerToData( { model: 'group' } );
+
+			let modelDocumentFragment;
+
+			model.change( writer => {
+				modelDocumentFragment = writer.createDocumentFragment();
+
+				writer.insertElement( 'paragraph', [], modelDocumentFragment, 0 );
+
+				const range = writer.createRange(
+					writer.createPositionFromPath( modelDocumentFragment, [ 0 ] ),
+					writer.createPositionFromPath( modelDocumentFragment, [ 1 ] )
+				);
+
+				modelDocumentFragment.markers.set( 'group:foo:bar', range );
+			} );
+
+			const expectedResult = '<p data-group-end-after="foo:bar" data-group-start-before="foo:bar">&nbsp;</p>';
+
+			expect( dataController.stringify( modelDocumentFragment ) ).toBe( expectedResult );
+		} );
+
+		it( 'conversion callback, mixed, multiple markers, name', () => {
+			const customData = {
+				foo: 'bar',
+				abc: 'xyz'
+			};
+
+			downcastHelpers.markerToData( {
+				model: 'group',
+				view: ( markerName, conversionApi ) => {
+					const namePart = markerName.split( ':' )[ 1 ];
+
+					// To ensure conversion API is provided.
+					expect( conversionApi.writer ).toBeInstanceOf( ViewDowncastWriter );
+
+					return {
+						group: 'g',
+						name: namePart + '_' + customData[ namePart ]
+					};
+				}
+			} );
+
+			_setModelData( model, '<paragraph>Foo</paragraph><paragraph>Bar</paragraph>' );
+
+			model.change( writer => {
+				const range = writer.createRange(
+					writer.createPositionFromPath( root, [ 0 ] ),
+					writer.createPositionFromPath( root, [ 1, 2 ] )
+				);
+
+				writer.addMarker( 'group:foo', { range, usingOperation: false } );
+				writer.addMarker( 'group:abc', { range, usingOperation: false } );
+			} );
+
+			expectResult(
+				'<p data-g-start-before="abc_xyz,foo_bar">Foo</p>' +
+				'<p>Ba<g-end name="abc_xyz"></g-end><g-end name="foo_bar"></g-end>r</p>'
+			);
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo' );
+				writer.removeMarker( 'group:abc' );
+			} );
+
+			expectResult( '<p>Foo</p><p>Bar</p>' );
+		} );
+
+		it( 'conversion callback, mixed #2, multiple markers, name', () => {
+			const customData = {
+				foo: 'bar',
+				abc: 'xyz'
+			};
+
+			downcastHelpers.markerToData( {
+				model: 'group',
+				view: markerName => {
+					const namePart = markerName.split( ':' )[ 1 ];
+
+					return {
+						group: 'g',
+						name: namePart + '_' + customData[ namePart ]
+					};
+				}
+			} );
+
+			_setModelData( model, '<paragraph>Foo</paragraph><paragraph>Bar</paragraph>' );
+
+			model.change( writer => {
+				const range = writer.createRange(
+					writer.createPositionFromPath( root, [ 0, 1 ] ),
+					writer.createPositionFromPath( root, [ 2 ] )
+				);
+
+				writer.addMarker( 'group:foo', { range, usingOperation: false } );
+				writer.addMarker( 'group:abc', { range, usingOperation: false } );
+			} );
+
+			expectResult(
+				'<p>F<g-start name="abc_xyz"></g-start><g-start name="foo_bar"></g-start>oo</p>' +
+				'<p data-g-end-after="abc_xyz,foo_bar">Bar</p>'
+			);
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo' );
+				writer.removeMarker( 'group:abc' );
+			} );
+
+			expectResult( '<p>Foo</p><p>Bar</p>' );
+		} );
+
+		// Fix for a bug that happens for soft breaks in code blocks.
+		// In that case, soft break model element is not converted to a view element.
+		it( 'default conversion, over model element not mapped to the view', () => {
+			downcastHelpers.markerToData( { model: 'group' } );
+
+			model.schema.register( 'customElement', { inheritAllFrom: '$block' } );
+
+			controller.downcastDispatcher.on( 'insert:customElement', ( evt, data, conversionApi ) => {
+				const viewText = conversionApi.writer.createText( 'A' );
+				const viewPosition = conversionApi.mapper.toViewPosition( data.range.start );
+
+				conversionApi.writer.insert( viewPosition, viewText );
+				conversionApi.consumable.consume( data.item, evt.name );
+			} );
+
+			// <paragraph> added so it can store selection, otherwise it throws.
+			_setModelData( model, '<paragraph></paragraph><customElement></customElement>' );
+
+			model.change( writer => {
+				const range = writer.createRangeOn( root.getChild( 1 ) );
+
+				writer.addMarker( 'group:foo:bar:baz', { range, usingOperation: false } );
+			} );
+
+			expectResult( '<p></p><group-start name="foo:bar:baz"></group-start>A<group-end name="foo:bar:baz"></group-end>' );
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo:bar:baz' );
+			} );
+
+			expectResult( '<p></p>A' );
+		} );
+
+		it( 'can be overwritten using converterPriority', () => {
+			downcastHelpers.markerToData( {
+				model: 'group'
+			} );
+
+			downcastHelpers.markerToData( {
+				model: 'group',
+				view: markerName => {
+					const name = markerName.split( ':' )[ 1 ];
+
+					return {
+						group: 'g',
+						name
+					};
+				},
+				converterPriority: 'high'
+			} );
+
+			_setModelData( model, '<paragraph>F[ooba]r</paragraph>' );
+
+			model.change( writer => {
+				writer.addMarker( 'group:foo', { range: model.document.selection.getFirstRange(), usingOperation: false } );
+			} );
+
+			expectResult(
+				'<p>F<g-start name="foo"></g-start>ooba<g-end name="foo"></g-end>r</p>'
+			);
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo' );
+			} );
+
+			expectResult( '<p>Foobar</p>' );
+		} );
+
+		it( 'can be overwritten by custom callback', () => {
+			downcastHelpers.markerToData( {
+				model: 'group'
+			} );
+
+			downcastHelpers.add( dispatcher => {
+				dispatcher.on( 'addMarker:group', ( evt, data, conversionApi ) => {
+					conversionApi.consumable.consume( data.markerRange, evt.name );
+				}, { priority: 'high' } );
+			} );
+
+			_setModelData( model, '<paragraph>Foo[]bar</paragraph>' );
+
+			model.change( writer => {
+				writer.addMarker( 'group:foo', { range: model.document.selection.getFirstRange(), usingOperation: false } );
+			} );
+
+			expectResult( '<p>Foobar</p>' );
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo' );
+			} );
+
+			expectResult( '<p>Foobar</p>' );
+		} );
+
+		it( 'should not perform conversion if the callback returned falsy value', () => {
+			downcastHelpers.markerToData( {
+				model: 'group',
+				view: () => false
+			} );
+
+			_setModelData( model, '<paragraph>F[ooba]r</paragraph>' );
+
+			model.change( writer => {
+				writer.addMarker( 'group:foo', { range: model.document.selection.getFirstRange(), usingOperation: false } );
+			} );
+
+			expectResult( '<p>Foobar</p>' );
+
+			model.change( writer => {
+				writer.removeMarker( 'group:foo' );
+			} );
+
+			expectResult( '<p>Foobar</p>' );
+		} );
+	} );
+
+	describe( 'markerToHighlight()', () => {
+		it( 'should be chainable', () => {
+			expect( downcastHelpers.markerToHighlight( { model: 'comment', view: { classes: 'comment' } } ) ).toBe( downcastHelpers );
+		} );
+
+		it( 'config.view is a highlight descriptor', () => {
+			downcastHelpers.markerToHighlight( { model: 'comment', view: { classes: 'comment' } } );
+
+			model.change( writer => {
+				writer.insertText( 'foo', modelRoot, 0 );
+				const range = writer.createRange( writer.createPositionAt( modelRoot, 0 ), writer.createPositionAt( modelRoot, 3 ) );
+				writer.addMarker( 'comment', { range, usingOperation: false } );
+			} );
+
+			expectResult( '<span class="comment">foo</span>' );
+		} );
+
+		it( 'config.view is not polluted', () => {
+			const myView = { classes: 'comment' };
+
+			downcastHelpers.markerToHighlight( { model: 'comment', view: myView } );
+
+			model.change( writer => {
+				writer.insertText( 'foo', modelRoot, 0 );
+				const range = writer.createRange( writer.createPositionAt( modelRoot, 0 ), writer.createPositionAt( modelRoot, 3 ) );
+				writer.addMarker( 'comment', { range, usingOperation: false } );
+			} );
+
+			expect( myView ).toEqual( { classes: 'comment' } );
+		} );
+
+		it( 'can be overwritten using converterPriority', () => {
+			downcastHelpers.markerToHighlight( { model: 'comment', view: { classes: 'comment' } } );
+			downcastHelpers.markerToHighlight( { model: 'comment', view: { classes: 'new-comment' }, converterPriority: 'high' } );
+
+			model.change( writer => {
+				writer.insertText( 'foo', modelRoot, 0 );
+				const range = writer.createRange( writer.createPositionAt( modelRoot, 0 ), writer.createPositionAt( modelRoot, 3 ) );
+				writer.addMarker( 'comment', { range, usingOperation: false } );
+			} );
+
+			expectResult( '<span class="new-comment">foo</span>' );
+		} );
+
+		it( 'config.view is a function', () => {
+			downcastHelpers.markerToHighlight( {
+				model: 'comment',
+				view: data => {
+					// Assuming that the marker name is in a form of comment:commentType:commentId.
+					const [ , commentType, commentId ] = data.markerName.split( ':' );
+					return {
+						classes: [ 'comment', 'comment-' + commentType ],
+						attributes: { 'data-comment-id': commentId }
+					};
+				}
+			} );
+
+			model.change( writer => {
+				writer.insertText( 'foo', modelRoot, 0 );
+				const range = writer.createRange( writer.createPositionAt( modelRoot, 0 ), writer.createPositionAt( modelRoot, 3 ) );
+				writer.addMarker( 'comment:abc:id', { range, usingOperation: false } );
+			} );
+
+			expectResult( '<span class="comment comment-abc" data-comment-id="id">foo</span>' );
+		} );
+
+		it( 'applies default priority of 10 when descriptor has no priority', () => {
+			downcastHelpers.markerToHighlight( {
+				model: 'comment',
+				view: () => ( { classes: 'comment' } )
+			} );
+
+			model.change( writer => {
+				writer.insertText( 'foo', modelRoot, 0 );
+				const range = writer.createRange( writer.createPositionAt( modelRoot, 0 ), writer.createPositionAt( modelRoot, 3 ) );
+				writer.addMarker( 'comment', { range, usingOperation: false } );
+			} );
+
+			const span = viewRoot.getChild( 0 );
+
+			expect( span.priority ).toBe( ViewAttributeElement.DEFAULT_PRIORITY );
+		} );
+
+		it( 'should use descriptor priority when priority is explicitly provided', () => {
+			downcastHelpers.markerToHighlight( {
+				model: 'comment',
+				view: () => ( { classes: 'comment', priority: 5 } )
+			} );
+
+			model.change( writer => {
+				writer.insertText( 'foo', modelRoot, 0 );
+				const range = writer.createRange( writer.createPositionAt( modelRoot, 0 ), writer.createPositionAt( modelRoot, 3 ) );
+				writer.addMarker( 'comment', { range, usingOperation: false } );
+			} );
+
+			const span = viewRoot.getChild( 0 );
+
+			expect( span.priority ).toBe( 5 );
+		} );
+
+		describe( 'highlight', () => {
+			const highlightConfig = {
+				model: 'marker',
+				view: {
+					classes: 'highlight-class',
+					attributes: { title: 'title' }
+				},
+				converterPriority: 7
+			};
+
+			describe( 'on text', () => {
+				let markerRange;
+
+				beforeEach( () => {
+					downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+
+					const modelElement1 = new ModelElement( 'paragraph', null, new ModelText( 'foo' ) );
+					const modelElement2 = new ModelElement( 'paragraph', null, new ModelText( 'bar' ) );
+
+					model.change( writer => {
+						writer.insert( [ modelElement1, modelElement2 ], modelRootStart );
+					} );
+
+					markerRange = model.createRangeIn( modelRoot );
+				} );
+
+				it( 'should wrap and unwrap text nodes', () => {
+					downcastHelpers.markerToHighlight( highlightConfig );
+
+					model.change( writer => {
+						writer.addMarker( 'marker', { range: markerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div>' +
+						'<p>' +
+						'<span class="highlight-class" title="title">foo</span>' +
+						'</p>' +
+						'<p>' +
+						'<span class="highlight-class" title="title">bar</span>' +
+						'</p>' +
+						'</div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foo</p><p>bar</p></div>' );
+				} );
+
+				it( 'should be possible to overwrite', () => {
+					downcastHelpers.markerToHighlight( highlightConfig );
+					downcastHelpers.markerToHighlight( {
+						model: 'marker',
+						view: { classes: 'override-class' },
+						converterPriority: 'high'
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker', { range: markerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div>' +
+						'<p>' +
+						'<span class="override-class">foo</span>' +
+						'</p>' +
+						'<p>' +
+						'<span class="override-class">bar</span>' +
+						'</p>' +
+						'</div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foo</p><p>bar</p></div>' );
+				} );
+
+				it( 'should do nothing if descriptor is not provided or generating function returns null', () => {
+					downcastHelpers.markerToHighlight( {
+						model: 'marker',
+						view: () => null,
+						converterPriority: 'high'
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker', { range: markerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foo</p><p>bar</p></div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foo</p><p>bar</p></div>' );
+				} );
+
+				it( 'should do nothing if collapsed marker is converted', () => {
+					downcastHelpers.markerToHighlight( {
+						model: 'marker',
+						view: { classes: 'foo' },
+						converterPriority: 'high'
+					} );
+
+					markerRange = model.createRange( model.createPositionAt( modelRoot, 0 ), model.createPositionAt( modelRoot, 0 ) );
+
+					model.change( writer => {
+						writer.addMarker( 'marker', { range: markerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foo</p><p>bar</p></div>' );
+
+					model.change( () => {
+						model.markers._remove( 'marker' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foo</p><p>bar</p></div>' );
+				} );
+
+				it( 'should correctly wrap and unwrap multiple, intersecting markers', () => {
+					downcastHelpers.markerToHighlight( {
+						model: 'markerFoo',
+						view: { classes: 'foo' }
+					} );
+					downcastHelpers.markerToHighlight( {
+						model: 'markerBar',
+						view: { classes: 'bar' }
+					} );
+					downcastHelpers.markerToHighlight( {
+						model: 'markerXyz',
+						view: { classes: 'xyz' }
+					} );
+
+					const p1 = modelRoot.getChild( 0 );
+					const p2 = modelRoot.getChild( 1 );
+
+					model.change( writer => {
+						const range = writer.createRange( writer.createPositionAt( p1, 0 ), writer.createPositionAt( p1, 3 ) );
+						writer.addMarker( 'markerFoo', { range, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div>' +
+						'<p>' +
+						'<span class="foo">foo</span>' +
+						'</p>' +
+						'<p>bar</p>' +
+						'</div>' );
+
+					model.change( writer => {
+						const range = writer.createRange( writer.createPositionAt( p1, 1 ), writer.createPositionAt( p2, 2 ) );
+						writer.addMarker( 'markerBar', { range, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div>' +
+						'<p>' +
+						'<span class="foo">f</span>' +
+						'<span class="bar">' +
+						'<span class="foo">oo</span>' +
+						'</span>' +
+						'</p>' +
+						'<p>' +
+						'<span class="bar">ba</span>' +
+						'r' +
+						'</p>' +
+						'</div>' );
+
+					model.change( writer => {
+						const range = writer.createRange( writer.createPositionAt( p1, 2 ), writer.createPositionAt( p2, 3 ) );
+						writer.addMarker( 'markerXyz', { range, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div>' +
+						'<p>' +
+						'<span class="foo">f</span>' +
+						'<span class="bar">' +
+						'<span class="foo">' +
+						'o' +
+						'<span class="xyz">o</span>' +
+						'</span>' +
+						'</span>' +
+						'</p>' +
+						'<p>' +
+						'<span class="bar">' +
+						'<span class="xyz">ba</span>' +
+						'</span>' +
+						'<span class="xyz">r</span>' +
+						'</p>' +
+						'</div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'markerBar' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div>' +
+						'<p>' +
+						'<span class="foo">' +
+						'fo' +
+						'<span class="xyz">o</span>' +
+						'</span>' +
+						'</p>' +
+						'<p>' +
+						'<span class="xyz">bar</span>' +
+						'</p>' +
+						'</div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'markerFoo' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div>' +
+						'<p>' +
+						'fo' +
+						'<span class="xyz">o</span>' +
+						'</p>' +
+						'<p>' +
+						'<span class="xyz">bar</span>' +
+						'</p>' +
+						'</div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'markerXyz' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foo</p><p>bar</p></div>' );
+				} );
+
+				it( 'should do nothing if marker is applied and removed on empty-ish range', () => {
+					downcastHelpers.markerToHighlight( highlightConfig );
+
+					const p1 = modelRoot.getChild( 0 );
+					const p2 = modelRoot.getChild( 1 );
+
+					const markerRange = model.createRange( model.createPositionAt( p1, 3 ), model.createPositionAt( p2, 0 ) );
+
+					model.change( writer => {
+						writer.addMarker( 'marker', { range: markerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foo</p><p>bar</p></div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker', { range: markerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><p>foo</p><p>bar</p></div>' );
+				} );
+			} );
+
+			describe( 'on element', () => {
+				const highlightConfig = {
+					model: 'marker',
+					view: {
+						classes: 'highlight-class',
+						attributes: { title: 'title' },
+						id: 'customId'
+					},
+					converterPriority: 7
+				};
+
+				let markerRange, viewDocument;
+
+				beforeEach( () => {
+					viewDocument = new ViewDocument( new StylesProcessor() );
+
+					downcastHelpers.elementToElement( {
+						model: 'div',
+						view: () => {
+							const viewContainer = new ViewContainerElement( viewDocument, 'div' );
+
+							viewContainer._setCustomProperty( 'addHighlight', ( element, descriptor, writer ) => {
+								writer.addClass( descriptor.classes, element );
+							} );
+
+							viewContainer._setCustomProperty( 'removeHighlight', ( element, id, writer ) => {
+								writer.setAttribute( 'class', '', element );
+							} );
+
+							return viewContainer;
+						}
+					} );
+
+					const modelElement = new ModelElement( 'div', null, new ModelText( 'foo' ) );
+
+					model.change( writer => {
+						writer.insert( modelElement, modelRootStart );
+					} );
+
+					markerRange = model.createRangeOn( modelElement );
+
+					downcastHelpers.markerToHighlight( highlightConfig );
+				} );
+
+				it( 'should use addHighlight and removeHighlight on elements and not convert children nodes', () => {
+					model.change( writer => {
+						writer.addMarker( 'marker', { range: markerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div>' +
+						'<div class="highlight-class">' +
+						'foo' +
+						'</div>' +
+						'</div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><div>foo</div></div>' );
+				} );
+
+				it( 'should be possible to override', () => {
+					downcastHelpers.markerToHighlight( {
+						model: 'marker',
+						view: { classes: 'override-class' },
+						converterPriority: 'high'
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker', { range: markerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toEqual( '<div>' +
+						'<div class="override-class">' +
+						'foo' +
+						'</div>' +
+						'</div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><div>foo</div></div>' );
+				} );
+
+				it( 'should use default priority and id if not provided', () => {
+					const viewDiv = viewRoot.getChild( 0 );
+					downcastHelpers.markerToHighlight( {
+						model: 'marker2',
+						view: () => null,
+						converterPriority: 'high'
+					} );
+
+					viewDiv._setCustomProperty( 'addHighlight', ( element, descriptor ) => {
+						expect( descriptor.priority ).toBe( ViewAttributeElement.DEFAULT_PRIORITY );
+						expect( descriptor.id ).toBe( 'marker:foo-bar-baz' );
+					} );
+
+					viewDiv._setCustomProperty( 'removeHighlight', ( element, id ) => {
+						expect( id ).toBe( 'marker:foo-bar-baz' );
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker2', { range: markerRange, usingOperation: false } );
+					} );
+				} );
+
+				it( 'should do nothing if descriptor is not provided', () => {
+					downcastHelpers.markerToHighlight( {
+						model: 'marker2',
+						view: () => null
+					} );
+
+					model.change( writer => {
+						writer.addMarker( 'marker2', { range: markerRange, usingOperation: false } );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><div>foo</div></div>' );
+
+					model.change( writer => {
+						writer.removeMarker( 'marker2' );
+					} );
+
+					expect( viewToString( viewRoot ) ).toBe( '<div><div>foo</div></div>' );
+				} );
+			} );
+		} );
+	} );
+
+	function expectResult( string ) {
+		expect( _stringifyView( viewRoot, null, { ignoreRoot: true } ) ).toBe( string );
+	}
+
+	function getViewAttributes( modelElement ) {
+		const toStyle = modelElement.hasAttribute( 'toStyle' ) && { style: modelElement.getAttribute( 'toStyle' ) };
+		const toClass = modelElement.hasAttribute( 'toClass' ) && { class: 'is-classy' };
+
+		return {
+			...toStyle,
+			...toClass
+		};
+	}
+
+	function* getNodes( childIndex = 0 ) {
+		const main = viewRoot.getChild( childIndex );
+		yield main;
+
+		for ( const { item } of controller.view.createRangeIn( main ) ) {
+			if ( item.is( 'textProxy' ) ) {
+				// TreeWalker always create a new instance of a TextProxy so use referenced textNode.
+				yield item.textNode;
+			} else {
+				yield item;
+			}
+		}
+	}
+} );
+
+describe( 'downcast converters', () => {
+	let dispatcher, modelDoc, modelRoot, viewRoot, controller, modelRootStart, model;
+
+	beforeEach( () => {
+		model = new Model();
+		modelDoc = model.document;
+		modelRoot = modelDoc.createRoot();
+
+		controller = new EditingController( model, new StylesProcessor() );
+
+		viewRoot = controller.view.document.getRoot();
+		// Set name of view root the same as dom root.
+		// This is a mock of attaching view root to dom root.
+		controller.view.document.getRoot()._name = 'div';
+
+		dispatcher = controller.downcastDispatcher;
+		const downcastHelpers = new DowncastHelpers( [ dispatcher ] );
+		downcastHelpers.elementToElement( { model: 'paragraph', view: 'p' } );
+
+		modelRootStart = model.createPositionAt( modelRoot, 0 );
+	} );
+
+	describe( 'insertText()', () => {
+		it( 'should downcast text', () => {
+			model.change( writer => {
+				writer.insert( new ModelText( 'foobar' ), modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div>foobar</div>' );
+		} );
+
+		it( 'should support unicode', () => {
+			model.change( writer => {
+				writer.insert( new ModelText( 'நிலைக்கு' ), modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div>நிலைக்கு</div>' );
+		} );
+
+		it( 'should be possible to override it', () => {
+			dispatcher.on( 'insert:$text', ( evt, data, conversionApi ) => {
+				conversionApi.consumable.consume( data.item, 'insert' );
+			}, { converterPriority: 'high' } );
+
+			model.change( writer => {
+				writer.insert( new ModelText( 'foobar' ), modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div></div>' );
+		} );
+	} );
+
+	// Remove converter is by default already added in `EditingController` instance.
+	describe( 'remove()', () => {
+		let viewDocument;
+
+		beforeEach( () => {
+			viewDocument = new ViewDocument( new StylesProcessor() );
+		} );
+
+		it( 'should remove items from view accordingly to changes in model #1', () => {
+			const modelElement = new ModelElement( 'paragraph', null, new ModelText( 'foobar' ) );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			model.change( writer => {
+				writer.remove(
+					writer.createRange( writer.createPositionAt( modelElement, 2 ), writer.createPositionAt( modelElement, 4 ) )
+				);
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p>foar</p></div>' );
+		} );
+
+		it( 'should be possible to overwrite', () => {
+			dispatcher.on( 'remove', evt => evt.stop(), { priority: 'high' } );
+
+			const modelElement = new ModelElement( 'paragraph', null, new ModelText( 'foobar' ) );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			model.change( writer => {
+				writer.remove(
+					writer.createRange( writer.createPositionAt( modelElement, 2 ), writer.createPositionAt( modelElement, 4 ) )
+				);
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p>foobar</p></div>' );
+		} );
+
+		it( 'should support unicode', () => {
+			const modelElement = new ModelElement( 'paragraph', null, 'நிலைக்கு' );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			model.change( writer => {
+				writer.remove(
+					writer.createRange( writer.createPositionAt( modelElement, 0 ), writer.createPositionAt( modelElement, 6 ) )
+				);
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p>கு</p></div>' );
+		} );
+
+		it( 'should not remove view ui elements that are placed next to removed content', () => {
+			modelRoot._appendChild( new ModelText( 'fozbar' ) );
+			viewRoot._appendChild( [
+				new ViewText( viewDocument, 'foz' ),
+				new ViewUIElement( viewDocument, 'span' ),
+				new ViewText( viewDocument, 'bar' )
+			] );
+
+			// Remove 'b'.
+			model.change( writer => {
+				writer.remove(
+					writer.createRange( writer.createPositionAt( modelRoot, 3 ), writer.createPositionAt( modelRoot, 4 ) )
+				);
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div>foz<span></span>ar</div>' );
+
+			// Remove 'z'.
+			model.change( writer => {
+				writer.remove(
+					writer.createRange( writer.createPositionAt( modelRoot, 2 ), writer.createPositionAt( modelRoot, 3 ) )
+				);
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div>fo<span></span>ar</div>' );
+		} );
+
+		it( 'should remove correct amount of text when it is split by view ui element', () => {
+			modelRoot._appendChild( new ModelText( 'fozbar' ) );
+			viewRoot._appendChild( [
+				new ViewText( viewDocument, 'foz' ),
+				new ViewUIElement( viewDocument, 'span' ),
+				new ViewText( viewDocument, 'bar' )
+			] );
+
+			// Remove 'z<span></span>b'.
+			model.change( writer => {
+				writer.remove(
+					writer.createRange( writer.createPositionAt( modelRoot, 2 ), writer.createPositionAt( modelRoot, 4 ) )
+				);
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div>foar</div>' );
+		} );
+
+		it( 'should unbind elements', () => {
+			const modelElement = new ModelElement( 'paragraph' );
+
+			model.change( writer => {
+				writer.insert( modelElement, modelRootStart );
+			} );
+
+			const viewElement = controller.mapper.toViewElement( modelElement );
+			expect( viewElement ).not.toBeUndefined();
+			expect( controller.mapper.toModelElement( viewElement ) ).toBe( modelElement );
+
+			model.change( writer => {
+				writer.remove( modelElement );
+			} );
+
+			expect( controller.mapper.toViewElement( modelElement ) ).toBeUndefined();
+			expect( controller.mapper.toModelElement( viewElement ) ).toBeUndefined();
+		} );
+
+		it( 'should not break when remove() is used as part of unwrapping', () => {
+			const modelP = new ModelElement( 'paragraph', null, new ModelText( 'foo' ) );
+			const modelWidget = new ModelElement( 'widget', null, modelP );
+
+			const downcastHelpers = new DowncastHelpers( [ dispatcher ] );
+			downcastHelpers.elementToElement( { model: 'widget', view: 'widget' } );
+
+			model.change( writer => {
+				writer.insert( modelWidget, modelRootStart );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><widget><p>foo</p></widget></div>' );
+
+			const viewP = controller.mapper.toViewElement( modelP );
+
+			expect( viewP ).not.toBeUndefined();
+
+			model.change( writer => {
+				writer.unwrap( modelWidget );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p>foo</p></div>' );
+			// `modelP` is now bound with newly created view element.
+			expect( controller.mapper.toViewElement( modelP ) ).not.toBe( viewP );
+			// `viewP` is no longer bound with model element.
+			expect( controller.mapper.toModelElement( viewP ) ).toBeUndefined();
+			// View element from view root is bound to `modelP`.
+			expect( controller.mapper.toModelElement( viewRoot.getChild( 0 ) ) ).toBe( modelP );
+		} );
+
+		it( 'should work correctly if container element after ui element is removed', () => {
+			// Prepare a model and view structure.
+			// This is done outside of conversion to put view ui elements inside easily.
+			const modelP1 = new ModelElement( 'paragraph' );
+			const modelP2 = new ModelElement( 'paragraph' );
+
+			const viewP1 = new ViewContainerElement( viewDocument, 'p' );
+			const viewUi1 = new ViewUIElement( viewDocument, 'span' );
+			const viewUi2 = new ViewUIElement( viewDocument, 'span' );
+			const viewP2 = new ViewContainerElement( viewDocument, 'p' );
+
+			modelRoot._appendChild( [ modelP1, modelP2 ] );
+			viewRoot._appendChild( [ viewP1, viewUi1, viewUi2, viewP2 ] );
+
+			controller.mapper.bindElements( modelP1, viewP1 );
+			controller.mapper.bindElements( modelP2, viewP2 );
+
+			// Remove second paragraph element.
+			model.change( writer => {
+				writer.remove( writer.createRange( writer.createPositionAt( modelRoot, 1 ), writer.createPositionAt( modelRoot, 2 ) ) );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div><p></p><span></span><span></span></div>' );
+		} );
+
+		it( 'should work correctly if container element after text node is removed', () => {
+			const modelText = new ModelText( 'foo' );
+			const modelP = new ModelElement( 'paragraph' );
+
+			model.change( writer => {
+				writer.insert( [ modelText, modelP ], modelRootStart );
+			} );
+
+			model.change( writer => {
+				writer.remove( modelP );
+			} );
+
+			expect( viewToString( viewRoot ) ).toBe( '<div>foo</div>' );
+		} );
+	} );
+
+	describe( 'createViewElementFromDowncastHighlightDescriptor()', () => {
+		let viewWriter;
+
+		beforeEach( () => {
+			viewWriter = new ViewDowncastWriter( controller.view.document );
+		} );
+
+		it( 'should return attribute element from descriptor object', () => {
+			const descriptor = {
+				classes: 'foo-class',
+				attributes: { one: '1', two: '2' },
+				priority: 7
+			};
+			const element = createViewElementFromDowncastHighlightDescriptor( viewWriter, descriptor );
+
+			expect( element.is( 'attributeElement' ) ).toBe( true );
+			expect( element.name ).toBe( 'span' );
+			expect( element.priority ).toBe( 7 );
+			expect( element.hasClass( 'foo-class' ) ).toBe( true );
+
+			for ( const key of Object.keys( descriptor.attributes ) ) {
+				expect( element.getAttribute( key ) ).toBe( descriptor.attributes[ key ] );
+			}
+		} );
+
+		it( 'should return attribute element from descriptor object - array with classes', () => {
+			const descriptor = {
+				classes: [ 'foo-class', 'bar-class' ],
+				attributes: { one: '1', two: '2' },
+				priority: 7
+			};
+			const element = createViewElementFromDowncastHighlightDescriptor( viewWriter, descriptor );
+
+			expect( element.is( 'attributeElement' ) ).toBe( true );
+			expect( element.name ).toBe( 'span' );
+			expect( element.priority ).toBe( 7 );
+			expect( element.hasClass( 'foo-class' ) ).toBe( true );
+			expect( element.hasClass( 'bar-class' ) ).toBe( true );
+
+			for ( const key of Object.keys( descriptor.attributes ) ) {
+				expect( element.getAttribute( key ) ).toBe( descriptor.attributes[ key ] );
+			}
+		} );
+
+		it( 'should create element without class', () => {
+			const descriptor = {
+				attributes: { one: '1', two: '2' },
+				priority: 7
+			};
+			const element = createViewElementFromDowncastHighlightDescriptor( viewWriter, descriptor );
+
+			expect( element.is( 'attributeElement' ) ).toBe( true );
+			expect( element.name ).toBe( 'span' );
+			expect( element.priority ).toBe( 7 );
+
+			for ( const key of Object.keys( descriptor.attributes ) ) {
+				expect( element.getAttribute( key ) ).toBe( descriptor.attributes[ key ] );
+			}
+		} );
+
+		it( 'should create element without priority', () => {
+			const descriptor = {
+				classes: 'foo-class',
+				attributes: { one: '1', two: '2' }
+			};
+			const element = createViewElementFromDowncastHighlightDescriptor( viewWriter, descriptor );
+
+			expect( element.is( 'attributeElement' ) ).toBe( true );
+			expect( element.name ).toBe( 'span' );
+			expect( element.priority ).toBe( ViewAttributeElement.DEFAULT_PRIORITY );
+			expect( element.hasClass( 'foo-class' ) ).toBe( true );
+
+			for ( const key of Object.keys( descriptor.attributes ) ) {
+				expect( element.getAttribute( key ) ).toBe( descriptor.attributes[ key ] );
+			}
+		} );
+
+		it( 'should create element without attributes', () => {
+			const descriptor = {
+				classes: 'foo-class',
+				priority: 7
+			};
+			const element = createViewElementFromDowncastHighlightDescriptor( viewWriter, descriptor );
+
+			expect( element.is( 'attributeElement' ) ).toBe( true );
+			expect( element.name ).toBe( 'span' );
+			expect( element.priority ).toBe( 7 );
+			expect( element.hasClass( 'foo-class' ) ).toBe( true );
+		} );
+
+		it( 'should pass priority 0', () => {
+			const descriptor = {
+				priority: 0
+			};
+			const element = createViewElementFromDowncastHighlightDescriptor( viewWriter, descriptor );
+
+			expect( element.priority ).toBe( 0 );
+		} );
+	} );
+} );
+
+describe( 'downcast selection converters', () => {
+	let dispatcher, mapper, model, view, modelDoc, modelRoot, docSelection, viewDoc, viewRoot, viewSelection, downcastHelpers;
+
+	beforeEach( () => {
+		model = new Model();
+		modelDoc = model.document;
+		modelRoot = modelDoc.createRoot();
+		docSelection = modelDoc.selection;
+
+		model.schema.extend( '$text', { allowIn: '$root' } );
+
+		view = new EditingView( new StylesProcessor() );
+		viewDoc = view.document;
+		viewRoot = createViewRoot( viewDoc );
+		viewSelection = viewDoc.selection;
+
+		mapper = new Mapper();
+		mapper.bindElements( modelRoot, viewRoot );
+
+		dispatcher = new DowncastDispatcher( { mapper, viewSelection } );
+
+		dispatcher.on( 'insert:$text', insertText() );
+		dispatcher.on( 'insert', insertAttributesAndChildren(), { priority: 'lowest' } );
+
+		downcastHelpers = new DowncastHelpers( [ dispatcher ] );
+		downcastHelpers.attributeToElement( { model: 'bold', view: 'strong' } );
+		downcastHelpers.markerToHighlight( { model: 'marker', view: { classes: 'marker' }, converterPriority: 1 } );
+
+		// Default selection converters.
+		dispatcher.on( 'cleanSelection', cleanSelection() );
+		dispatcher.on( 'selection', convertRangeSelection(), { priority: 'low' } );
+		dispatcher.on( 'selection', convertCollapsedSelection(), { priority: 'low' } );
+	} );
+
+	afterEach( () => {
+		view.destroy();
+	} );
+
+	describe( 'default converters', () => {
+		describe( 'range selection', () => {
+			it( 'in same container', () => {
+				testSelection(
+					[ 1, 4 ],
+					'foobar',
+					'f{oob}ar'
+				);
+			} );
+
+			it( 'in same container with unicode characters', () => {
+				testSelection(
+					[ 2, 6 ],
+					'நிலைக்கு',
+					'நி{லைக்}கு'
+				);
+			} );
+
+			it( 'in same container, over attribute', () => {
+				testSelection(
+					[ 1, 5 ],
+					'fo<$text bold="true">ob</$text>ar',
+					'f{o<strong>ob</strong>a}r'
+				);
+			} );
+
+			it( 'in same container, next to attribute', () => {
+				testSelection(
+					[ 1, 2 ],
+					'fo<$text bold="true">ob</$text>ar',
+					'f{o}<strong>ob</strong>ar'
+				);
+			} );
+
+			it( 'in same attribute', () => {
+				testSelection(
+					[ 2, 4 ],
+					'f<$text bold="true">ooba</$text>r',
+					'f<strong>o{ob}a</strong>r'
+				);
+			} );
+
+			it( 'in same attribute, selection same as attribute', () => {
+				testSelection(
+					[ 2, 4 ],
+					'fo<$text bold="true">ob</$text>ar',
+					'fo{<strong>ob</strong>}ar'
+				);
+			} );
+
+			it( 'starts in text node, ends in attribute #1', () => {
+				testSelection(
+					[ 1, 3 ],
+					'fo<$text bold="true">ob</$text>ar',
+					'f{o<strong>o}b</strong>ar'
+				);
+			} );
+
+			it( 'starts in text node, ends in attribute #2', () => {
+				testSelection(
+					[ 1, 4 ],
+					'fo<$text bold="true">ob</$text>ar',
+					'f{o<strong>ob</strong>}ar'
+				);
+			} );
+
+			it( 'starts in attribute, ends in text node', () => {
+				testSelection(
+					[ 3, 5 ],
+					'fo<$text bold="true">ob</$text>ar',
+					'fo<strong>o{b</strong>a}r'
+				);
+			} );
+
+			it( 'consumes consumable values properly', () => {
+				// Add callback that will fire before default ones.
+				// This should prevent default callback doing anything.
+				dispatcher.on( 'selection', ( evt, data, conversionApi ) => {
+					expect( conversionApi.consumable.consume( data.selection, 'selection' ) ).toBe( true );
+				}, { priority: 'high' } );
+
+				// Similar test case as the first in this suite.
+				testSelection(
+					[ 1, 4 ],
+					'foobar',
+					'foobar' // No selection in view.
+				);
+			} );
+
+			it( 'should convert backward selection', () => {
+				testSelection(
+					[ 1, 3, 'backward' ],
+					'foobar',
+					'f{oo}bar'
+				);
+
+				expect( viewSelection.focus.offset ).toBe( 1 );
+			} );
+		} );
+
+		describe( 'collapsed selection', () => {
+			let marker, viewDocument;
+
+			beforeEach( () => {
+				viewDocument = new ViewDocument( new StylesProcessor() );
+			} );
+
+			it( 'in container', () => {
+				testSelection(
+					[ 1, 1 ],
+					'foobar',
+					'f{}oobar'
+				);
+			} );
+
+			it( 'in attribute', () => {
+				testSelection(
+					[ 3, 3 ],
+					'f<$text bold="true">ooba</$text>r',
+					'f<strong>oo{}ba</strong>r'
+				);
+			} );
+
+			it( 'in attribute and marker', () => {
+				_setModelData( model, 'fo<$text bold="true">ob</$text>ar' );
+
+				model.change( writer => {
+					const range = writer.createRange( writer.createPositionAt( modelRoot, 1 ), writer.createPositionAt( modelRoot, 5 ) );
+					marker = writer.addMarker( 'marker', { range, usingOperation: false } );
+					writer.setSelection( modelRoot, 3 );
+				} );
+
+				// Remove view children manually (without firing additional conversion).
+				viewRoot._removeChildren( 0, viewRoot.childCount );
+
+				// Convert model to view.
+				view.change( writer => {
+					const markers = [ [ marker.name, marker.getRange() ] ];
+
+					dispatcher.convert( model.createRangeIn( modelRoot ), markers, writer );
+					dispatcher.convertSelection( docSelection, model.markers, writer );
+				} );
+
+				// Stringify view and check if it is same as expected.
+				expect( _stringifyView( viewRoot, viewSelection, { showType: false } ) )
+					.toEqual( '<div>f<span class="marker">o<strong>o{}b</strong>a</span>r</div>' );
+			} );
+
+			it( 'in attribute and marker - no attribute', () => {
+				_setModelData( model, 'fo<$text bold="true">ob</$text>ar' );
+
+				model.change( writer => {
+					const range = writer.createRange( writer.createPositionAt( modelRoot, 1 ), writer.createPositionAt( modelRoot, 5 ) );
+					marker = writer.addMarker( 'marker', { range, usingOperation: false } );
+					writer.setSelection( modelRoot, 3 );
+					writer.removeSelectionAttribute( 'bold' );
+				} );
+
+				// Remove view children manually (without firing additional conversion).
+				viewRoot._removeChildren( 0, viewRoot.childCount );
+
+				// Convert model to view.
+				view.change( writer => {
+					const markers = [ [ marker.name, marker.getRange() ] ];
+
+					dispatcher.convert( model.createRangeIn( modelRoot ), markers, writer );
+					dispatcher.convertSelection( docSelection, model.markers, writer );
+				} );
+
+				// Stringify view and check if it is same as expected.
+				expect( _stringifyView( viewRoot, viewSelection, { showType: false } ) )
+					.toBe( '<div>f<span class="marker">o<strong>o</strong>[]<strong>b</strong>a</span>r</div>' );
+			} );
+
+			it( 'in marker - using highlight descriptor creator', () => {
+				downcastHelpers.markerToHighlight( {
+					model: 'marker2',
+					view: data => ( { classes: data.markerName } )
+				} );
+
+				_setModelData( model, 'foobar' );
+
+				model.change( writer => {
+					const range = writer.createRange( writer.createPositionAt( modelRoot, 1 ), writer.createPositionAt( modelRoot, 5 ) );
+					marker = writer.addMarker( 'marker2', { range, usingOperation: false } );
+					writer.setSelection( modelRoot, 3 );
+				} );
+
+				// Remove view children manually (without firing additional conversion).
+				viewRoot._removeChildren( 0, viewRoot.childCount );
+
+				// Convert model to view.
+				view.change( writer => {
+					const markers = [ [ marker.name, marker.getRange() ] ];
+
+					dispatcher.convert( model.createRangeIn( modelRoot ), markers, writer );
+					dispatcher.convertSelection( docSelection, model.markers, writer );
+				} );
+
+				// Stringify view and check if it is same as expected.
+				expect( _stringifyView( viewRoot, viewSelection, { showType: false } ) )
+					.toBe( '<div>f<span class="marker2">oo{}ba</span>r</div>' );
+			} );
+
+			it( 'should do nothing if creator return null', () => {
+				downcastHelpers.markerToHighlight( {
+					model: 'marker3',
+					view: () => null
+				} );
+
+				_setModelData( model, 'foobar' );
+
+				model.change( writer => {
+					const range = writer.createRange( writer.createPositionAt( modelRoot, 1 ), writer.createPositionAt( modelRoot, 5 ) );
+					marker = writer.addMarker( 'marker3', { range, usingOperation: false } );
+					writer.setSelection( modelRoot, 3 );
+				} );
+
+				// Remove view children manually (without firing additional conversion).
+				viewRoot._removeChildren( 0, viewRoot.childCount );
+
+				// Convert model to view.
+				view.change( writer => {
+					const markers = [ [ marker.name, marker.getRange() ] ];
+
+					dispatcher.convert( model.createRangeIn( modelRoot ), markers, writer );
+					dispatcher.convertSelection( docSelection, model.markers, writer );
+				} );
+
+				// Stringify view and check if it is same as expected.
+				expect( _stringifyView( viewRoot, viewSelection, { showType: false } ) )
+					.toBe( '<div>foo{}bar</div>' );
+			} );
+
+			// #1072 - if the container has only ui elements, collapsed selection attribute should be rendered after those ui elements.
+			it( 'selection with attribute before ui element - no non-ui children', () => {
+				_setModelData( model, '' );
+
+				// Add two ui elements to view.
+				viewRoot._appendChild( [
+					new ViewUIElement( viewDocument, 'span' ),
+					new ViewUIElement( viewDocument, 'span' )
+				] );
+
+				model.change( writer => {
+					writer.setSelection( writer.createRange( writer.createPositionFromPath( modelRoot, [ 0 ] ) ) );
+					writer.setSelectionAttribute( 'bold', true );
+				} );
+
+				// Convert model to view.
+				view.change( writer => {
+					dispatcher.convertSelection( docSelection, model.markers, writer );
+				} );
+
+				// Stringify view and check if it is same as expected.
+				expect( _stringifyView( viewRoot, viewSelection, { showType: false } ) )
+					.toBe( '<div><span></span><span></span><strong>[]</strong></div>' );
+			} );
+
+			// #1072.
+			it( 'selection with attribute before ui element - has non-ui children #1', () => {
+				_setModelData( model, 'x' );
+
+				model.change( writer => {
+					writer.setSelection( writer.createRange( writer.createPositionFromPath( modelRoot, [ 1 ] ) ) );
+					writer.setSelectionAttribute( 'bold', true );
+				} );
+
+				// Convert model to view.
+				view.change( writer => {
+					dispatcher.convert( model.createRangeIn( modelRoot ), [], writer );
+
+					// Add ui element to view.
+					const uiElement = new ViewUIElement( viewDocument, 'span' );
+					viewRoot._insertChild( 1, uiElement );
+
+					dispatcher.convertSelection( docSelection, model.markers, writer );
+				} );
+
+				// Stringify view and check if it is same as expected.
+				expect( _stringifyView( viewRoot, viewSelection, { showType: false } ) )
+					.toBe( '<div>x<strong>[]</strong><span></span></div>' );
+			} );
+
+			// #1072.
+			it( 'selection with attribute before ui element - has non-ui children #2', () => {
+				_setModelData( model, '<$text bold="true">x</$text>y' );
+
+				model.change( writer => {
+					writer.setSelection( writer.createRange( writer.createPositionFromPath( modelRoot, [ 1 ] ) ) );
+					writer.setSelectionAttribute( 'bold', true );
+				} );
+
+				// Convert model to view.
+				view.change( writer => {
+					dispatcher.convert( model.createRangeIn( modelRoot ), [], writer );
+
+					// Add ui element to view.
+					const uiElement = new ViewUIElement( viewDocument, 'span' );
+					viewRoot._insertChild( 1, uiElement, writer );
+					dispatcher.convertSelection( docSelection, model.markers, writer );
+				} );
+
+				// Stringify view and check if it is same as expected.
+				expect( _stringifyView( viewRoot, viewSelection, { showType: false } ) )
+					.toBe( '<div><strong>x{}</strong><span></span>y</div>' );
+			} );
+
+			it( 'consumes consumable values properly', () => {
+				// Add callbacks that will fire before default ones.
+				// This should prevent default callbacks doing anything.
+				dispatcher.on( 'selection', ( evt, data, conversionApi ) => {
+					expect( conversionApi.consumable.consume( data.selection, 'selection' ) ).toBe( true );
+				}, { priority: 'high' } );
+
+				dispatcher.on( 'attribute:bold', ( evt, data, conversionApi ) => {
+					expect( conversionApi.consumable.consume( data.item, 'attribute:bold' ) ).toBe( true );
+				}, { priority: 'high' } );
+
+				// Similar test case as above.
+				testSelection(
+					[ 3, 3 ],
+					'f<$text bold="true">ooba</$text>r',
+					'foobar' // No selection in view and no attribute.
+				);
+			} );
+		} );
+	} );
+
+	describe( 'clean-up', () => {
+		describe( 'convertRangeSelection', () => {
+			it( 'should remove all ranges before adding new range', () => {
+				testSelection(
+					[ 0, 2 ],
+					'foobar',
+					'{fo}obar'
+				);
+
+				testSelection(
+					[ 3, 5 ],
+					'foobar',
+					'foo{ba}r'
+				);
+
+				expect( viewSelection.rangeCount ).toBe( 1 );
+			} );
+		} );
+
+		describe( 'convertCollapsedSelection', () => {
+			it( 'should remove all ranges before adding new range', () => {
+				testSelection(
+					[ 2, 2 ],
+					'foobar',
+					'fo{}obar'
+				);
+
+				testSelection(
+					[ 3, 3 ],
+					'foobar',
+					'foo{}bar'
+				);
+
+				expect( viewSelection.rangeCount ).toBe( 1 );
+			} );
+		} );
+
+		describe( 'cleanSelection', () => {
+			it( 'should remove all ranges before adding new range', () => {
+				testSelection(
+					[ 3, 3 ],
+					'foobar',
+					'foo<strong>[]</strong>bar',
+					{ bold: 'true' }
+				);
+
+				view.change( writer => {
+					const modelRange = model.createRange( model.createPositionAt( modelRoot, 1 ), model.createPositionAt( modelRoot, 1 ) );
+					model.change( writer => {
+						writer.setSelection( modelRange );
+					} );
+
+					dispatcher.convertSelection( modelDoc.selection, model.markers, writer );
+				} );
+
+				expect( viewSelection.rangeCount ).toBe( 1 );
+
+				const viewString = _stringifyView( viewRoot, viewSelection, { showType: false } );
+				expect( viewString ).toBe( '<div>f{}oobar</div>' );
+			} );
+
+			it( 'should merge attribute elements from previous selection with overridden selection conversion', () => {
+				testSelection(
+					[ 3, 3 ],
+					'foobar',
+					'foo<strong>[]</strong>bar',
+					{ bold: 'true' }
+				);
+
+				const spy = vi.fn();
+
+				dispatcher.on( 'selection', ( evt, data, conversionApi ) => {
+					const selection = data.selection;
+
+					if ( !conversionApi.consumable.consume( selection, 'selection' ) ) {
+						return;
+					}
+
+					const viewRanges = [];
+
+					for ( const range of selection.getRanges() ) {
+						viewRanges.push( conversionApi.mapper.toViewRange( range ) );
+					}
+
+					conversionApi.writer.setSelection( viewRanges, { backward: selection.isBackward } );
+
+					spy();
+				} );
+
+				view.change( writer => {
+					const modelRange = model.createRange( model.createPositionAt( modelRoot, 1 ), model.createPositionAt( modelRoot, 1 ) );
+					model.change( writer => {
+						writer.setSelection( modelRange );
+					} );
+
+					dispatcher.convertSelection( modelDoc.selection, model.markers, writer );
+				} );
+
+				expect( spy ).toHaveBeenCalledOnce();
+				expect( viewSelection.rangeCount ).toBe( 1 );
+
+				const viewString = _stringifyView( viewRoot, viewSelection, { showType: false } );
+				expect( viewString ).toBe( '<div>f{}oobar</div>' );
+			} );
+
+			it( 'should do nothing if the attribute element had been already removed', () => {
+				testSelection(
+					[ 3, 3 ],
+					'foobar',
+					'foo<strong>[]</strong>bar',
+					{ bold: 'true' }
+				);
+
+				view.change( writer => {
+					// Remove <strong></strong> manually.
+					writer.mergeAttributes( viewSelection.getFirstPosition() );
+
+					const modelRange = model.createRange( model.createPositionAt( modelRoot, 1 ), model.createPositionAt( modelRoot, 1 ) );
+					model.change( writer => {
+						writer.setSelection( modelRange );
+					} );
+
+					dispatcher.convertSelection( modelDoc.selection, model.markers, writer );
+				} );
+
+				expect( viewSelection.rangeCount ).toBe( 1 );
+
+				const viewString = _stringifyView( viewRoot, viewSelection, { showType: false } );
+				expect( viewString ).toBe( '<div>f{}oobar</div>' );
+			} );
+
+			it( 'should clear fake selection', () => {
+				const modelRange = model.createRange( model.createPositionAt( modelRoot, 1 ), model.createPositionAt( modelRoot, 1 ) );
+
+				view.change( writer => {
+					writer.setSelection( modelRange, { fake: true } );
+
+					dispatcher.convertSelection( docSelection, model.markers, writer );
+				} );
+				expect( viewSelection.isFake ).toBe( false );
+			} );
+		} );
+	} );
+
+	describe( 'table cell selection converter', () => {
+		beforeEach( () => {
+			model.schema.register( 'table', { isLimit: true } );
+			model.schema.register( 'tr', { isLimit: true } );
+			model.schema.register( 'td', { isLimit: true } );
+
+			model.schema.extend( 'table', { allowIn: '$root' } );
+			model.schema.extend( 'tr', { allowIn: 'table' } );
+			model.schema.extend( 'td', { allowIn: 'tr' } );
+			model.schema.extend( '$text', { allowIn: 'td' } );
+
+			const downcastHelpers = new DowncastHelpers( [ dispatcher ] );
+
+			// "Universal" converter to convert table structure.
+			downcastHelpers.elementToElement( { model: 'table', view: 'table' } );
+			downcastHelpers.elementToElement( { model: 'tr', view: 'tr' } );
+			downcastHelpers.elementToElement( { model: 'td', view: 'td' } );
+
+			// Special converter for table cells.
+			dispatcher.on( 'selection', ( evt, data, conversionApi ) => {
+				const selection = data.selection;
+
+				if ( !conversionApi.consumable.test( selection, 'selection' ) || selection.isCollapsed ) {
+					return;
+				}
+
+				for ( const range of selection.getRanges() ) {
+					const node = range.start.parent;
+
+					if ( !!node && node.is( 'element', 'td' ) ) {
+						conversionApi.consumable.consume( selection, 'selection' );
+
+						const viewNode = conversionApi.mapper.toViewElement( node );
+						conversionApi.writer.addClass( 'selected', viewNode );
+					}
+				}
+			}, { priority: 'high' } );
+		} );
+
+		it( 'should not be used to convert selection that is not on table cell', () => {
+			testSelection(
+				[ 1, 5 ],
+				'f{o<$text bold="true">ob</$text>a}r',
+				'f{o<strong>ob</strong>a}r'
+			);
+		} );
+
+		it( 'should add a class to the selected table cell', () => {
+			testSelection(
+				// table tr#0 td#0 [foo, table tr#0 td#0 bar]
+				[ [ 0, 0, 0, 0 ], [ 0, 0, 0, 3 ] ],
+				'<table><tr><td>foo</td></tr><tr><td>bar</td></tr></table>',
+				'<table><tr><td class="selected">foo</td></tr><tr><td>bar</td></tr></table>'
+			);
+		} );
+
+		it( 'should not be used if selection contains more than just a table cell', () => {
+			testSelection(
+				// table tr td#1 f{oo bar, table tr#2 bar]
+				[ [ 0, 0, 0, 1 ], [ 0, 0, 1, 3 ] ],
+				'<table><tr><td>foo</td><td>bar</td></tr></table>',
+				'[<table><tr><td>foo</td><td>bar</td></tr></table>]'
+			);
+		} );
+	} );
+
+	// Tests if the selection got correctly converted.
+	// Because `setData` might use selection converters itself to set the selection, we can't use it
+	// to set the selection (because then we would test converters using converters).
+	// Instead, the `test` function expects to be passed `selectionPaths` which is an array containing two numbers or two arrays,
+	// that are offsets or paths of selection positions in root element.
+	function testSelection( selectionPaths, modelInput, expectedView, selectionAttributes = {} ) {
+		// Parse passed `modelInput` string and set it as current model.
+		_setModelData( model, modelInput );
+
+		// Manually set selection ranges using passed `selectionPaths`.
+		const startPath = typeof selectionPaths[ 0 ] == 'number' ? [ selectionPaths[ 0 ] ] : selectionPaths[ 0 ];
+		const endPath = typeof selectionPaths[ 1 ] == 'number' ? [ selectionPaths[ 1 ] ] : selectionPaths[ 1 ];
+
+		const startPos = model.createPositionFromPath( modelRoot, startPath );
+		const endPos = model.createPositionFromPath( modelRoot, endPath );
+
+		const isBackward = selectionPaths[ 2 ] === 'backward';
+		model.change( writer => {
+			writer.setSelection( writer.createRange( startPos, endPos ), { backward: isBackward } );
+
+			// And add or remove passed attributes.
+			for ( const key in selectionAttributes ) {
+				const value = selectionAttributes[ key ];
+
+				if ( value ) {
+					writer.setSelectionAttribute( key, value );
+				} else {
+					writer.removeSelectionAttribute( key );
+				}
+			}
+		} );
+
+		// Remove view children manually (without firing additional conversion).
+		viewRoot._removeChildren( 0, viewRoot.childCount );
+
+		// Convert model to view.
+		view.change( writer => {
+			dispatcher.convert( model.createRangeIn( modelRoot ), model.markers, writer );
+			dispatcher.convertSelection( docSelection, model.markers, writer );
+		} );
+
+		// Stringify view and check if it is same as expected.
+		expect( _stringifyView( viewRoot, viewSelection, { showType: false } ) ).toBe( '<div>' + expectedView + '</div>' );
+	}
+} );
+
+function viewToString( item ) {
+	let result = '';
+
+	if ( item instanceof ViewText ) {
+		result = item.data;
+	} else {
+		// ViewElement or ViewDocumentFragment.
+		for ( const child of item.getChildren() ) {
+			result += viewToString( child );
+		}
+
+		if ( item instanceof ViewElement ) {
+			result = '<' + item.name + viewAttributesToString( item ) + '>' + result + '</' + item.name + '>';
+		}
+	}
+
+	return result;
+}
+
+function viewAttributesToString( item ) {
+	let result = '';
+
+	for ( const key of item.getAttributeKeys() ) {
+		const value = item.getAttribute( key );
+
+		if ( value ) {
+			result += ' ' + key + '="' + value + '"';
+		}
+	}
+
+	return result;
+}

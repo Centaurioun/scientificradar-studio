@@ -1,0 +1,51 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, it, expect, beforeAll } from 'vitest';
+import { HtmlDataProcessor, ViewUpcastWriter, ViewDocument, StylesProcessor } from '@ckeditor/ckeditor5-engine';
+import { removeBoldWrapper } from '../../src/filters/removeboldwrapper.js';
+
+describe( 'PasteFromOffice - filters', () => {
+	const htmlDataProcessor = new HtmlDataProcessor( new ViewDocument( new StylesProcessor() ) );
+	describe( 'removeBoldWrapper', () => {
+		let writer, viewDocument;
+
+		beforeAll( () => {
+			viewDocument = new ViewDocument();
+			writer = new ViewUpcastWriter( viewDocument );
+		} );
+
+		it( 'should remove bold wrapper added by google docs', () => {
+			const inputData = '<b style="font-weight:normal;" id="docs-internal-guid-45309eee-7fff-33a3-6dbd-1234567890ab">' +
+				'<p>Hello world</p>' +
+				'</b>';
+			const documentFragment = htmlDataProcessor.toView( inputData );
+
+			removeBoldWrapper( documentFragment, writer );
+
+			expect( htmlDataProcessor.toData( documentFragment ) ).toBe( '<p>Hello world</p>' );
+		} );
+
+		it( 'should not remove non-bold tag with google id', () => {
+			const inputData = '<p id="docs-internal-guid-e4b9bad6-7fff-c086-3135-1234567890ab">Hello world</p>';
+			const documentFragment = htmlDataProcessor.toView( inputData );
+
+			removeBoldWrapper( documentFragment, writer );
+
+			expect( htmlDataProcessor.toData( documentFragment ) ).toBe(
+				'<p id="docs-internal-guid-e4b9bad6-7fff-c086-3135-1234567890ab">Hello world</p>' );
+		} );
+
+		it( 'should not remove bold tag without google id', () => {
+			const inputData = '<b>Hello world</b>';
+			const documentFragment = htmlDataProcessor.toView( inputData );
+
+			removeBoldWrapper( documentFragment, writer );
+
+			expect( htmlDataProcessor.toData( documentFragment ) ).toBe(
+				'<b>Hello world</b>' );
+		} );
+	} );
+} );

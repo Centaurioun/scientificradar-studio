@@ -1,0 +1,53 @@
+{
+  "name": "@centaurioun/ckeditor5-math",
+  "version": "49.0.1-dev.0",
+  "description": "CKEditor 5 v49.0.1 math compatibility branch (pre-release).",
+  "keywords": [
+    "ckeditor",
+    "ckeditor5",
+    "ckeditor 5",
+    "ckeditor5-feature",
+    "ckeditor5-plugin",
+    "ckeditor5-math",
+    "katex"
+  ],
+  "main": "src/index.ts",
+  "dependencies": {},
+  "devDependencies": {
+    "ckeditor5": "49.0.1",
+    "typescript": "5.9.3",
+    "esbuild": "0.28.2",
+    "@playwright/test": "1.64.1",
+    "vite": "8.3.5",
+    "katex": "0.19.1"
+  },
+  "engines": {
+    "node": ">=22",
+    "npm": ">=10"
+  },
+  "author": "Sauli Anto",
+  "license": "ISC",
+  "bugs": "https://github.com/Centaurioun/ckeditor5-math/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Centaurioun/ckeditor5-math.git"
+  },
+  "files": [
+    "src/**/*.ts",
+    "theme",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.release.json",
+    "build": "tsc -p tsconfig.release.json",
+    "build:smoke": "esbuild src/index.ts --bundle --format=esm --platform=browser --target=es2023 --loader:.svg=text --loader:.css=css --outdir=tmp/bundle --log-level=warning",
+    "test": "npm run typecheck && npm run build:smoke",
+    "dev:sample": "vite --host 127.0.0.1 --port 4179 --strictPort",
+    "test:browser": "playwright test --config playwright.config.mjs"
+  },
+  "private": true,
+  "peerDependencies": {
+    "ckeditor5": "^49.0.1"
+  }
+}

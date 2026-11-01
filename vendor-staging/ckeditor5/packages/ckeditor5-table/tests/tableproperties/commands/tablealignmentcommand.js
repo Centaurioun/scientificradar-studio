@@ -1,0 +1,234 @@
+/**
+ * @license Copyright (c) 2003-2026, CKSource Holding sp. z o.o. All rights reserved.
+ * For licensing, see LICENSE.md or https://ckeditor.com/legal/ckeditor-licensing-options
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+import { ModelTestEditor } from '@ckeditor/ckeditor5-core/tests/_utils/modeltesteditor.js';
+import { Paragraph } from '@ckeditor/ckeditor5-paragraph';
+
+import { _setModelData } from '@ckeditor/ckeditor5-engine';
+
+import { assertTableClass, modelTable } from '../../_utils/utils.js';
+import { TablePropertiesEditing } from '../../../src/tableproperties/tablepropertiesediting.js';
+import { TableAlignmentCommand } from '../../../src/tableproperties/commands/tablealignmentcommand.js';
+
+describe( 'table properties', () => {
+	describe( 'commands', () => {
+		describe( 'TableAlignmentCommand', () => {
+			let editor, model, command;
+
+			beforeEach( async () => {
+				editor = await ModelTestEditor.create( {
+					plugins: [ Paragraph, TablePropertiesEditing ]
+				} );
+
+				model = editor.model;
+				command = new TableAlignmentCommand( editor, 'center' );
+			} );
+
+			afterEach( () => {
+				return editor.destroy();
+			} );
+
+			describe( 'isEnabled', () => {
+				describe( 'collapsed selection', () => {
+					it( 'should be false if selection does not have table', () => {
+						_setModelData( model, '<paragraph>foo[]</paragraph>' );
+						expect( command.isEnabled ).toBe( false );
+					} );
+
+					it( 'should be true is selection has table', () => {
+						_setModelData( model, modelTable( [ [ '[]foo' ] ] ) );
+						expect( command.isEnabled ).toBe( true );
+					} );
+				} );
+
+				describe( 'non-collapsed selection', () => {
+					it( 'should be false if selection does not have table', () => {
+						_setModelData( model, '<paragraph>f[oo]</paragraph>' );
+						expect( command.isEnabled ).toBe( false );
+					} );
+
+					it( 'should be true if selection is in a table', () => {
+						_setModelData( model, modelTable( [ [ 'f[o]o' ] ] ) );
+						expect( command.isEnabled ).toBe( true );
+					} );
+
+					it( 'should be true if table is selected', () => {
+						_setModelData( model, '[' + modelTable( [ [ 'foo' ] ] ) + ']' );
+						expect( command.isEnabled ).toBe( true );
+					} );
+				} );
+			} );
+
+			describe( 'value', () => {
+				describe( 'collapsed selection', () => {
+					it( 'should be set if selected table has alignment property', () => {
+						_setModelData( model, modelTable( [ [ '[]foo' ] ], { tableAlignment: 'left' } ) );
+
+						expect( command.value ).toEqual( 'left' );
+					} );
+
+					it( 'should be undefined if selected table has set the default value', () => {
+						_setModelData( model, modelTable( [ [ '[]foo' ] ], { tableAlignment: 'center' } ) );
+
+						expect( command.value ).toBeUndefined();
+					} );
+
+					it( 'should be undefined if selected table has no alignment property', () => {
+						_setModelData( model, modelTable( [ [ '[]foo' ] ] ) );
+
+						expect( command.value ).toBeUndefined();
+					} );
+				} );
+
+				describe( 'non-collapsed selection', () => {
+					it( 'should be undefined if selection does not have table', () => {
+						_setModelData( model, '<paragraph>f[oo]</paragraph>' );
+
+						expect( command.value ).toBeUndefined();
+					} );
+
+					it( 'should be undefined if selected table has set the default value (selection inside table)', () => {
+						_setModelData( model, modelTable( [ [ 'f[o]o' ] ], { tableAlignment: 'center' } ) );
+
+						expect( command.value ).toBeUndefined();
+					} );
+
+					it( 'should be set if selection has table (selection inside table)', () => {
+						_setModelData( model, modelTable( [ [ 'f[o]o' ] ], { tableAlignment: 'left' } ) );
+
+						expect( command.value ).toEqual( 'left' );
+					} );
+
+					it( 'should be undefined if selected table has set the default value (selected table)', () => {
+						_setModelData( model, '[' + modelTable( [ [ 'foo' ] ], { tableAlignment: 'center' } ) + ']' );
+
+						expect( command.value ).toBeUndefined();
+					} );
+
+					it( 'should be set if selection has table (selected table)', () => {
+						_setModelData( model, '[' + modelTable( [ [ 'foo' ] ], { tableAlignment: 'left' } ) + ']' );
+
+						expect( command.value ).toEqual( 'left' );
+					} );
+				} );
+			} );
+
+			describe( 'execute()', () => {
+				it( 'should use provided batch', () => {
+					_setModelData( model, modelTable( [ [ 'foo[]' ] ] ) );
+					const batch = model.createBatch();
+					const spy = vi.spyOn( model, 'enqueueChange' );
+
+					command.execute( { value: 'right', batch } );
+					expect( spy ).toHaveBeenCalledWith( batch, expect.any( Function ) );
+				} );
+
+				describe( 'collapsed selection', () => {
+					it( 'should set selected table alignment to a passed value', () => {
+						_setModelData( model, modelTable( [ [ 'foo[]' ] ] ) );
+
+						command.execute( { value: 'right' } );
+
+						assertTableClass( editor, null, 'table-style-align-right' );
+					} );
+
+					it( 'should change selected table alignment to a passed value', () => {
+						_setModelData( model, modelTable( [ [ '[]foo' ] ], { tableAlignment: 'center' } ) );
+
+						command.execute( { value: 'right' } );
+
+						assertTableClass( editor, null, 'table-style-align-right' );
+					} );
+
+					it( 'should remove alignment from a selected table if no value is passed', () => {
+						_setModelData( model, modelTable( [ [ '[]foo' ] ], { tableAlignment: 'center' } ) );
+
+						command.execute();
+
+						assertTableClass( editor, '' );
+					} );
+
+					it( 'should not set alignment in a selected table if passed the default value', () => {
+						_setModelData( model, modelTable( [ [ '[]foo' ] ] ) );
+
+						command.execute( { value: 'center' } );
+
+						assertTableClass( editor, '' );
+					} );
+				} );
+
+				describe( 'non-collapsed selection (inside table)', () => {
+					it( 'should set selected table alignment to a passed value', () => {
+						_setModelData( model, modelTable( [ [ '[foo]' ] ] ) );
+
+						command.execute( { value: 'right' } );
+
+						assertTableClass( editor, null, 'table-style-align-right' );
+					} );
+
+					it( 'should change selected table alignment to a passed value', () => {
+						_setModelData( model, modelTable( [ [ '[foo]' ] ] ) );
+
+						command.execute( { value: 'right' } );
+
+						assertTableClass( editor, null, 'table-style-align-right' );
+					} );
+
+					it( 'should remove alignment from a selected table if no value is passed', () => {
+						_setModelData( model, modelTable( [ [ '[foo]' ] ] ) );
+
+						command.execute();
+
+						assertTableClass( editor, '' );
+					} );
+
+					it( 'should not set alignment in a selected table if passed the default value', () => {
+						_setModelData( model, modelTable( [ [ '[foo]' ] ] ) );
+
+						command.execute( { value: 'center' } );
+
+						assertTableClass( editor, '' );
+					} );
+				} );
+
+				describe( 'non-collapsed selection (outside table)', () => {
+					it( 'should set selected table alignment to a passed value', () => {
+						_setModelData( model, '[' + modelTable( [ [ 'foo' ] ] ) + ']' );
+
+						command.execute( { value: 'right' } );
+
+						assertTableClass( editor, null, 'table-style-align-right' );
+					} );
+
+					it( 'should change selected table alignment to a passed value', () => {
+						_setModelData( model, '[' + modelTable( [ [ 'foo' ] ] ) + ']' );
+
+						command.execute( { value: 'right' } );
+
+						assertTableClass( editor, null, 'table-style-align-right' );
+					} );
+
+					it( 'should remove alignment from a selected table if no value is passed', () => {
+						_setModelData( model, '[' + modelTable( [ [ 'foo' ] ] ) + ']' );
+
+						command.execute();
+
+						assertTableClass( editor, '' );
+					} );
+
+					it( 'should not set alignment in a selected table if passed the default value', () => {
+						_setModelData( model, '[' + modelTable( [ [ 'foo' ] ] ) + ']' );
+
+						command.execute( { value: 'center' } );
+
+						assertTableClass( editor, '' );
+					} );
+				} );
+			} );
+		} );
+	} );
+} );
