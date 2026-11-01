@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useStudio } from '@/lib/studio-context';
 import { getMediaDisplayPolicy } from '@/lib/editorial-rules';
 import { InteractiveArticleBodyRenderer } from '@/components/knowledge/knowledge-link-popover';
+import { trustedMediaSourceSet } from '@/lib/html-security';
 import {
   ArrowLeft,
   Edit3,
@@ -205,6 +206,7 @@ export function ArticlePreviewView({
           <InteractiveArticleBodyRenderer
             html={article.bodyHtml}
             knowledgeLinks={knowledgeLinks}
+            trustedImageSources={trustedMediaSourceSet(media.map((asset) => asset.src))}
           />
 
           {/* Taxonomy Tags Footer */}

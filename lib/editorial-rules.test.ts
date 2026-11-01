@@ -63,6 +63,8 @@ test('ensureUniqueSlug prevents collisions per locale', () => {
 test('validateSafeUrl blocks javascript: and data: schemes while allowing https and relative routes', () => {
   assert.equal(validateSafeUrl('https://en.wikipedia.org/wiki/Quantum_entanglement').valid, true);
   assert.equal(validateSafeUrl('/articles/jwst-exoplanet-spectra').valid, true);
+  assert.equal(validateSafeUrl('//external.example/path').valid, false);
+  assert.equal(validateSafeUrl('/\\\\external.example/path').valid, false);
   assert.equal(validateSafeUrl('javascript:alert(1)').valid, false);
   assert.equal(validateSafeUrl('data:text/html,<script>alert(1)</script>').valid, false);
 });
@@ -87,6 +89,65 @@ test('sanitizeAndDemoteBodyH1 strips scripts/handlers and demotes body H1 to H2 
   assert.ok(!res.sanitizedHtml.includes('<script'));
   assert.ok(!res.sanitizedHtml.includes('onclick='));
   assert.ok(!res.sanitizedHtml.includes('javascript:'));
+});
+
+test('HTML security policy removes malformed active markup and encoded handler/protocol variants', () => {
+  const dirty = [
+    '<IMG SRC=/__missing.png oNeRrOr="runCanary()">',
+    '<a href="JaVaScRiPt:runCanary()">unsafe link</a>',
+    '<a href="jav&#x61;script:runCanary()">encoded unsafe link</a>',
+    '<svg><foreignObject><img src=x onerror=runCanary()></foreignObject></svg>',
+    '<math><mtext><img src=x onerror=runCanary()></mtext></math>',
+    '<iframe src="https://example.invalid"></iframe><object data="x"></object><embed src="x">',
+    '<p style="background:url(javascript:runCanary())">styled active content</p>',
+    '<p>malformed<div onclick=runCanary()>nested</p>',
+  ].join('');
+
+  const { sanitizedHtml } = sanitizeAndDemoteBodyH1(dirty);
+  assert.doesNotMatch(sanitizedHtml, /onerror|onclick|javascript:|<svg|<math|foreignObject|<iframe|<object|<embed|style=/i);
+  assert.match(sanitizedHtml, /unsafe link/);
+  assert.match(sanitizedHtml, /encoded unsafe link/);
+  assert.match(sanitizedHtml, /styled active content/);
+  assert.match(sanitizedHtml, /malformed/);
+});
+
+test('HTML security policy preserves supported scientific formatting, references, figures and Unicode', () => {
+  const scientific = [
+    '<p>Ω β ∑ ≈ 10⁻⁶; DOI 10.1038/s41586-026-01492-x.</p>',
+    '<p><strong>Bold</strong> <em>emphasis</em> <u>underline</u> <s>strike</s> <sup>2</sup><sub>n</sub></p>',
+    '<blockquote><p>Quoted observation</p></blockquote>',
+    '<ol><li>First<ul><li>Nested second</li></ul></li></ol>',
+    '<pre><code>const x = "&lt;img&gt;";</code></pre>',
+    '<table><thead><tr><th scope="col">Measure</th></tr></thead><tbody><tr><td>±0.2</td></tr></tbody></table>',
+    '<figure><img src="/media/figure-1.png" alt="Phase diagram" width="640" height="480"><figcaption>Adapted with attribution.</figcaption></figure>',
+    '<p><a href="https://doi.org/10.1038/s41586-026-01492-x" target="_blank" rel="noopener noreferrer">Reference</a></p>',
+    '<p><a href="/articles/art-1" data-knowledge-term="quantum state" target="_self">quantum state</a></p>',
+    '<p>&lt;script&gt; is literal untrusted text.</p>',
+  ].join('');
+
+  const { sanitizedHtml, demotedH1Count } = sanitizeAndDemoteBodyH1(`<h1 id="body-heading">Body title</h1>${scientific}`);
+  assert.equal(demotedH1Count, 1);
+  assert.match(sanitizedHtml, /<h2[^>]*>Body title<\/h2>/);
+  for (const retained of ['Ω β ∑', '10.1038/s41586-026-01492-x', '<sup>2</sup>', '<sub>n</sub>', 'Nested second', '±0.2', 'Phase diagram', 'Adapted with attribution.', 'data-knowledge-term="quantum state"', '&lt;script&gt;']) {
+    assert.ok(sanitizedHtml.includes(retained), `expected supported scientific content to survive: ${retained}`);
+  }
+  assert.match(sanitizedHtml, /href="https:\/\/doi\.org\/10\.1038/);
+  assert.match(sanitizedHtml, /rel="noopener noreferrer"/);
+  assert.match(sanitizedHtml, /scope="col"/);
+  assert.doesNotMatch(sanitizedHtml, /<h1\b/i);
+});
+
+test('HTML security policy rejects data/blob URLs and handles empty or large safe documents', () => {
+  const urls = sanitizeAndDemoteBodyH1(
+    '<p><a href="data:text/html,runCanary()">data link</a><a href="blob:https://example.invalid/id">blob link</a></p><img src="data:image/png;base64,AAAA" alt="data image"><img src="blob:https://example.invalid/id" alt="blob image">',
+  ).sanitizedHtml;
+  assert.doesNotMatch(urls, /href="(?:data|blob):|src="(?:data|blob):/i);
+
+  assert.equal(sanitizeAndDemoteBodyH1('').sanitizedHtml, '');
+  const largeSafeHtml = `<p>${'scientific μ-data '.repeat(10_000)}</p>`;
+  const largeResult = sanitizeAndDemoteBodyH1(largeSafeHtml).sanitizedHtml;
+  assert.match(largeResult, /scientific μ-data/);
+  assert.equal((largeResult.match(/scientific μ-data/g) || []).length, 10_000);
 });
 
 test('convertMarkdownPasteToSafeHtml converts # H1 into H2 and preserves ## H2 / ### H3 (AT-05)', () => {

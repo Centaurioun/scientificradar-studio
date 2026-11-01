@@ -67,9 +67,9 @@ export default function GeneralSettingsPage() {
     setMessage('Exported local demo repository snapshot as JSON.');
   };
 
-  const handleImport = () => {
+  const handleImport = async () => {
     if (!jsonInput.trim()) return;
-    const res = importSnapshotJson(jsonInput);
+    const res = await importSnapshotJson(jsonInput);
     if (!res.ok) {
       setMessage(`Import failed: ${res.error}`);
     } else {

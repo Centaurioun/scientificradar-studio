@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { KnowledgeLink } from '@/lib/types';
+import { sanitizeEditorialHtml } from '@/lib/html-security';
 import { ExternalLink, BookOpen, X } from 'lucide-react';
 
 /**
@@ -179,10 +180,15 @@ export function KnowledgeLinkPopover({
 export function InteractiveArticleBodyRenderer({
   html,
   knowledgeLinks,
+  trustedImageSources = new Set<string>(),
 }: {
   html: string;
   knowledgeLinks: KnowledgeLink[];
+  trustedImageSources?: ReadonlySet<string>;
 }) {
+  const safeHtml = sanitizeEditorialHtml(html, { trustedImageSources }).html;
+  const safeFragment = (fragment: string) =>
+    sanitizeEditorialHtml(fragment, { trustedImageSources }).html;
   const renderInlineWithKnowledgeLinks = (inlineHtml: string, keyPrefix: string) => {
     const linkRegex = /<a\b[^>]*data-knowledge-term="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     const nodes: React.ReactNode[] = [];
@@ -197,7 +203,7 @@ export function InteractiveArticleBodyRenderer({
         nodes.push(
           <span
             key={`${keyPrefix}-txt-${lastIndex}`}
-            dangerouslySetInnerHTML={{ __html: slice }}
+            dangerouslySetInnerHTML={{ __html: safeFragment(slice) }}
           />
         );
       }
@@ -218,7 +224,7 @@ export function InteractiveArticleBodyRenderer({
         nodes.push(
           <span
             key={`${keyPrefix}-raw-${matchStart}`}
-            dangerouslySetInnerHTML={{ __html: fullMatch }}
+            dangerouslySetInnerHTML={{ __html: safeFragment(fullMatch) }}
           />
         );
       }
@@ -230,7 +236,7 @@ export function InteractiveArticleBodyRenderer({
       nodes.push(
         <span
           key={`${keyPrefix}-end-${lastIndex}`}
-          dangerouslySetInnerHTML={{ __html: inlineHtml.slice(lastIndex) }}
+          dangerouslySetInnerHTML={{ __html: safeFragment(inlineHtml.slice(lastIndex)) }}
         />
       );
     }
@@ -244,7 +250,7 @@ export function InteractiveArticleBodyRenderer({
   let blockMatch: RegExpExecArray | null;
   let idx = 0;
 
-  while ((blockMatch = blockRegex.exec(html)) !== null) {
+  while ((blockMatch = blockRegex.exec(safeHtml)) !== null) {
     const [, tag, inner] = blockMatch;
     const tagLower = tag.toLowerCase();
     const key = `blk-${idx++}`;
@@ -276,7 +282,7 @@ export function InteractiveArticleBodyRenderer({
         <ul
           key={key}
           className="list-disc pl-6 space-y-1 my-4"
-          dangerouslySetInnerHTML={{ __html: inner }}
+          dangerouslySetInnerHTML={{ __html: safeFragment(inner) }}
         />
       );
     } else if (tagLower === 'ol') {
@@ -284,7 +290,7 @@ export function InteractiveArticleBodyRenderer({
         <ol
           key={key}
           className="list-decimal pl-6 space-y-1 my-4"
-          dangerouslySetInnerHTML={{ __html: inner }}
+          dangerouslySetInnerHTML={{ __html: safeFragment(inner) }}
         />
       );
     } else {
@@ -299,7 +305,7 @@ export function InteractiveArticleBodyRenderer({
   if (blocks.length === 0) {
     return (
       <div className="prose prose-slate dark:prose-invert max-w-none leading-relaxed text-[17px] space-y-4">
-        <p>{renderInlineWithKnowledgeLinks(html, 'fallback')}</p>
+        <p>{renderInlineWithKnowledgeLinks(safeHtml, 'fallback')}</p>
       </div>
     );
   }
