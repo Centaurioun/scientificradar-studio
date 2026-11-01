@@ -44,20 +44,28 @@ export function computeArticleFingerprint(
     },
     scheduledAt: article.scheduledAt || '',
     publishedAt: article.publishedAt || '',
-    media: articleMedia.map((m) => ({
-      id: m.id,
-      altText: m.altText,
-      credit: m.credit,
-      licence: m.licence,
-      humanReviewedAlt: Boolean(m.humanReviewedAlt),
-    })),
-    sources: articleSources.map((s) => ({
-      id: s.id,
-      doi: s.doi || '',
-      url: s.url,
-      verificationStatus: s.verificationStatus,
-      humanClaimVerified: Boolean(s.humanClaimVerified),
-    })),
+    media: [...articleMedia]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((m) => ({
+        id: m.id,
+        filename: m.filename,
+        title: m.title,
+        altText: m.altText,
+        caption: m.caption || '',
+        credit: m.credit,
+        licence: m.licence,
+        humanReviewedAlt: Boolean(m.humanReviewedAlt),
+      })),
+    sources: [...articleSources]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((s) => ({
+        id: s.id,
+        title: s.title,
+        doi: s.doi || '',
+        url: s.url,
+        verificationStatus: s.verificationStatus,
+        humanClaimVerified: Boolean(s.humanClaimVerified),
+      })),
   });
 
   // Simple deterministic FNV-1a 32-bit hash encoded as hex + length
