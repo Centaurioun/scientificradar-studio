@@ -12,6 +12,7 @@ import {
   Tag,
   UserRole,
 } from './types';
+import { sanitizeEditorialHtml } from './html-security';
 
 /**
  * Normalizes a string into a URL-safe slug.
@@ -85,7 +86,7 @@ export function validateSafeUrl(url: string): {
     return { valid: false, reason: 'URL is empty' };
   }
 
-  if (trimmed.startsWith('/')) {
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//') && trimmed[1] !== '\\') {
     return { valid: true, isHttps: true };
   }
 
@@ -156,46 +157,16 @@ export function validateDoiSyntax(doi?: string): {
  * Sanitizes rich HTML content and converts any body <h1> tags into <h2>
  * so that the article Title remains the single rendered H1.
  */
-export function sanitizeAndDemoteBodyH1(rawHtml: string): {
+export function sanitizeAndDemoteBodyH1(rawHtml: string, trustedImageSources?: ReadonlySet<string>): {
   sanitizedHtml: string;
   demotedH1Count: number;
   removedUnsafeCount: number;
 } {
-  let html = rawHtml || '';
-  let removedUnsafeCount = 0;
-
-  // Strip <script>, <iframe>, <object>, <embed>, <style> tags
-  const scriptRegex = /<(script|iframe|object|embed|style)\b[^>]*>([\s\S]*?)<\/\1>/gi;
-  html = html.replace(scriptRegex, () => {
-    removedUnsafeCount += 1;
-    return '';
-  });
-
-  // Strip inline event handlers like onclick="...", onerror="..."
-  const eventHandlerRegex = /\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
-  html = html.replace(eventHandlerRegex, () => {
-    removedUnsafeCount += 1;
-    return '';
-  });
-
-  // Strip javascript: and data: in href/src attributes
-  const unsafeAttrRegex = /(href|src)\s*=\s*(?:"\s*(?:javascript|data|vbscript):[^"]*"|'\s*(?:javascript|data|vbscript):[^']*')/gi;
-  html = html.replace(unsafeAttrRegex, (_match, attr) => {
-    removedUnsafeCount += 1;
-    return `${attr}="#"`;
-  });
-
-  // Count and demote <h1>...</h1> in body to <h2>...</h2>
-  let demotedH1Count = 0;
-  html = html.replace(/<h1(\b[^>]*)>([\s\S]*?)<\/h1>/gi, (_match, attrs, inner) => {
-    demotedH1Count += 1;
-    return `<h2${attrs}>${inner}</h2>`;
-  });
-
+  const result = sanitizeEditorialHtml(rawHtml, { demoteBodyH1: true, trustedImageSources });
   return {
-    sanitizedHtml: html,
-    demotedH1Count,
-    removedUnsafeCount,
+    sanitizedHtml: result.html,
+    demotedH1Count: result.demotedH1Count,
+    removedUnsafeCount: result.removedUnsafeCount,
   };
 }
 

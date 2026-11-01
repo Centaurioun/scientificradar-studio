@@ -24,7 +24,7 @@ The project configuration uses 1440×900 as its baseline viewport. The smoke tes
 
 ## Current smoke coverage
 
-`tests/e2e/smoke.spec.ts` covers app startup, dashboard navigation/content, article editor writing controls, navigation from the article listing to an existing editor, local SEO audit UI, local scheduling UI, exact viewport readback, and the browser diagnostics capture contract. It performs no publish action, external service call, or durable content mutation.
+`tests/e2e/smoke.spec.ts` covers app startup, dashboard navigation/content, article editor writing controls, navigation from the article listing to an existing editor, local SEO audit UI, local scheduling UI, exact viewport readback, and the browser diagnostics capture contract. `tests/e2e/security.spec.ts` imports disposable backups through Settings and verifies static-page, article-preview, and knowledge-link canaries remain inert after storage reload; it also verifies invalid and simulated-failed imports preserve the saved snapshot. Both suites use isolated contexts and local routes only.
 
 ## Confirmed runtime defects reserved for later PRs
 
@@ -36,7 +36,7 @@ These are known failures from the 2026-11-01 isolated Brave runtime audit. PR-A 
 | SRS-RT-002 | Attempt a Draft→Scheduled calendar transition as Author and Editor; assert the shared editorial transition policy rejects unsupported transitions and storage remains unchanged. | Pending; no scheduling action in smoke tests. |
 | SRS-RT-003 | Use two same-origin tabs with ordered writes; after reload, assert the latest acknowledged value remains and stale writes are rejected or reconciled. | Pending; no cross-tab mutation in smoke tests. |
 | SRS-RT-004 | Upload a licensed disposable PNG in a fresh profile, restart the browser with the same temporary profile, and assert decoded image pixels remain available. | Pending; no upload in smoke tests. |
-| SRS-RT-005 | Import a disposable page containing an inert local event-handler canary; assert the canary never executes in static preview and unsafe markup is rejected or sanitized. | Pending; do not exercise the known unsafe sink in PR-A. |
+| SRS-RT-005 | Import a disposable page containing an inert local event-handler canary; assert the canary never executes in static preview and unsafe markup is rejected or sanitized. | Active PR-B regression; parser-based sanitization is verified in isolated local browser previews. |
 | SRS-RT-006 | Change linked source/media metadata, assert the SEO audit is marked stale, re-run it, then assert the updated report is fresh after reload. | Pending; no audit mutations in smoke tests. |
 | SRS-RT-007 | Save a newer value in a second tab, apply an older Quick Fix proposal, and assert the newer value is not overwritten. | Pending; no Quick Fix mutation in smoke tests. |
 | SRS-RT-008 | Render a 120+ character article title at the three required viewports and assert the full title stays visible without clipping. | Pending; layout remains unchanged. |
@@ -53,3 +53,11 @@ These are known failures from the 2026-11-01 isolated Brave runtime audit. PR-A 
 ## Baseline at implementation start
 
 On Node 26.12.1 and Bun 1.4.0: `bun install --frozen-lockfile` succeeded; `bun test lib/editorial-rules.test.ts` reported 14 passed / 0 failed; `bun run typecheck` succeeded; `bun run lint` exited 0 with one pre-existing `@next/next/no-img-element` warning at `components/editor/article-workspace.tsx:1454`; `bun run build` succeeded. These results describe the PR-A base before its edits, not the final branch.
+
+## PR-B HTML security and backup import
+
+The supported backup format is schema version 1. Versionless snapshots from PR-A are accepted as version 1; unknown future versions are rejected. Previously optional `dateTimePreferences` and `auditReportsByArticleId` receive defaults. Unknown optional record fields are retained. Import validates and sanitizes the complete candidate before a single IndexedDB root-record write, and reports success only after that write resolves. Failed validation or the simulated persistence-failure path leaves the prior saved state intact. This is atomic for that single IndexedDB write, but concurrent same-tab/cross-tab stale writes are not serialized here and remain PR-C acceptance work. Import is rejected when IndexedDB is unavailable.
+
+The HTML allowlist uses DOMPurify's parser in both browser and Node builds. It retains common scientific formatting, Unicode, DOI/link text, table/code semantics, and figure metadata while removing active elements, event attributes, styles, SVG/MathML markup, foreign content, and unsafe or untrusted media sources. Images may use same-application paths or exact registered local media sources; remote HTML media is not enabled by this policy.
+
+The PR-B browser regression first reproduced the baseline `img onerror` execution (the unique marker ran twice), then passed after sanitizer and import validation changes. Post-fix checks cover imported static-page and article-preview HTML, recognized knowledge-link markup, storage reload, and invalid/simulated-failed restore behavior. This is evidence for those controlled cases, not a claim that every future renderer or production system was tested.

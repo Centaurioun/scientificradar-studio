@@ -101,8 +101,9 @@ export function ArticleTiptapEditor({
           return true;
         }
 
-        // If rich HTML was pasted, sanitize scripts/handlers and demote any <h1> to <h2>
-        if (htmlData && (/<h1\b/i.test(htmlData) || /<script\b/i.test(htmlData) || /\son[a-z]+=/i.test(htmlData))) {
+        // Route all rich HTML through the same parser-based allowlist before
+        // Tiptap parses it, including markup without obvious attack tokens.
+        if (htmlData) {
           event.preventDefault();
           const sanitized = sanitizeAndDemoteBodyH1(htmlData);
           const notices: string[] = [];

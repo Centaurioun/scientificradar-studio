@@ -49,6 +49,7 @@ import {
   normalizeArticleTagIds,
   sanitizeAndDemoteBodyH1,
   slugify,
+  validateSafeUrl,
 } from './editorial-rules';
 import {
   DateTimePreferences,
@@ -56,6 +57,8 @@ import {
 } from './datetime/format';
 import { AuditReport, FixProposal } from './audit/types';
 import { computeArticleFingerprint, runArticleAudit } from './audit/run-article-audit';
+import { validateAndSanitizeSnapshot } from './backup-validation';
+import { trustedMediaSourceSet } from './html-security';
 
 const DB_NAME = 'scientificradar-studio-p0-db';
 const DB_VERSION = 1;
@@ -63,6 +66,7 @@ const STORE_NAME = 'studio_state';
 const STATE_KEY = 'root_snapshot_v1';
 
 export interface StudioDatabaseSnapshot {
+  schemaVersion?: 1;
   articles: Article[];
   pages: EditorialPage[];
   categories: Category[];
@@ -86,6 +90,7 @@ export interface StudioDatabaseSnapshot {
 
 function getInitialSeedSnapshot(): StudioDatabaseSnapshot {
   return {
+    schemaVersion: 1,
     articles: SEED_ARTICLES,
     pages: SEED_PAGES,
     categories: SEED_CATEGORIES,
@@ -191,7 +196,7 @@ interface StudioContextValue extends StudioDatabaseSnapshot {
   updateMenus: (menus: MenuConfig[]) => void;
   // Backup / Reset
   exportSnapshotJson: () => string;
-  importSnapshotJson: (rawJson: string) => { ok: boolean; error?: string };
+  importSnapshotJson: (rawJson: string) => Promise<{ ok: boolean; error?: string }>;
   resetDemoDatabase: () => Promise<void>;
 }
 
@@ -216,11 +221,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         if (db) {
           const saved = (await db.get(STORE_NAME, STATE_KEY)) as StudioDatabaseSnapshot | undefined;
           if (saved && saved.articles && saved.articles.length > 0) {
-            const migrated: StudioDatabaseSnapshot = {
-              ...saved,
-              dateTimePreferences: saved.dateTimePreferences || DEFAULT_ADMIN_DATETIME_PREFS,
-              auditReportsByArticleId: saved.auditReportsByArticleId || {},
-            };
+            const validated = validateAndSanitizeSnapshot(
+              JSON.stringify(saved),
+              trustedMediaSourceSet([...SEED_MEDIA.map((item) => item.src), ...saved.media.map((item) => item.src)])
+            );
+            if (!validated.snapshot) throw new Error(validated.error || 'Persisted snapshot is invalid');
+            const migrated = validated.snapshot as unknown as StudioDatabaseSnapshot;
             if (!cancelled) {
               setState(migrated);
               document.documentElement.classList.toggle('dark', migrated.theme === 'dark');
@@ -500,7 +506,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         articleInput.bodyHtml !== undefined
           ? articleInput.bodyHtml
           : existing?.bodyHtml || '<p></p>';
-      const sanitized = sanitizeAndDemoteBodyH1(rawHtml);
+      const sanitized = sanitizeAndDemoteBodyH1(
+        rawHtml,
+        trustedMediaSourceSet(prev.media.map((media) => media.src))
+      );
 
       const desiredSlug = articleInput.slug || existing?.slug || articleInput.title;
       const uniqueSlug = ensureUniqueSlug(
@@ -959,6 +968,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         const nextVersion = (current?.version || rev.version) + 1;
         const restoredArticle: Article = {
           ...rev.snapshot,
+          bodyHtml: sanitizeAndDemoteBodyH1(
+            rev.snapshot.bodyHtml,
+            trustedMediaSourceSet(prev.media.map((media) => media.src))
+          ).sanitizedHtml,
           version: nextVersion,
           updatedAt: now,
         };
@@ -1025,7 +1038,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
         for (const chg of acceptedChanges) {
           if (chg.targetPath === 'bodyHtml') {
-            const sanitized = sanitizeAndDemoteBodyH1(nextArticle.bodyHtml);
+            const sanitized = sanitizeAndDemoteBodyH1(
+              nextArticle.bodyHtml,
+              trustedMediaSourceSet(prev.media.map((media) => media.src))
+            );
             nextArticle.bodyHtml = sanitized.sanitizedHtml;
           } else if (chg.targetPath === 'summary') {
             nextArticle.summary = chg.after;
@@ -1065,6 +1081,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         const nextVersion = article.version + 1;
         nextArticle = {
           ...nextArticle,
+          bodyHtml: sanitizeAndDemoteBodyH1(
+            nextArticle.bodyHtml,
+            trustedMediaSourceSet(nextMedia.map((media) => media.src))
+          ).sanitizedHtml,
           version: nextVersion,
           updatedAt: now,
         };
@@ -1109,7 +1129,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         const now = new Date().toISOString();
         const existing = pageInput.id ? prev.pages.find((p) => p.id === pageInput.id) : undefined;
         const sanitized = sanitizeAndDemoteBodyH1(
-          pageInput.bodyHtml ?? existing?.bodyHtml ?? '<p></p>'
+          pageInput.bodyHtml ?? existing?.bodyHtml ?? '<p></p>',
+          trustedMediaSourceSet(prev.media.map((media) => media.src))
         );
         const page: EditorialPage = {
           id: existing?.id || pageInput.id || `page-${Date.now()}`,
@@ -1371,6 +1392,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const saveKnowledgeLink = useCallback(
     (klInput: Partial<KnowledgeLink> & { term: string; targetUrl: string }): KnowledgeLink => {
+      if (!validateSafeUrl(klInput.targetUrl).valid) {
+        throw new Error('Knowledge link target must be an HTTP(S) URL or same-application path');
+      }
       let saved!: KnowledgeLink;
       updateState((prev) => {
         const existing = klInput.id ? prev.knowledgeLinks.find((k) => k.id === klInput.id) : undefined;
@@ -1510,28 +1534,43 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   }, [state]);
 
   const importSnapshotJson = useCallback(
-    (rawJson: string): { ok: boolean; error?: string } => {
+    async (rawJson: string): Promise<{ ok: boolean; error?: string }> => {
+      if (simulateSaveFailure) {
+        return { ok: false, error: 'Persistence failure is enabled; no data was restored' };
+      }
+      const trustedSources = trustedMediaSourceSet([
+        ...SEED_MEDIA.map((item) => item.src),
+        ...stateRef.current.media.map((item) => item.src),
+      ]);
+      const validated = validateAndSanitizeSnapshot(rawJson, trustedSources);
+      if (!validated.snapshot) return { ok: false, error: validated.error || 'Invalid backup' };
+      const candidate = validated.snapshot as unknown as StudioDatabaseSnapshot;
+      candidate.articles = candidate.articles.map((article) => ({
+        ...article,
+        tagIds: normalizeArticleTagIds(article.tagIds || []).tagIds,
+      }));
+
       try {
-        const parsed = JSON.parse(rawJson) as StudioDatabaseSnapshot;
-        if (!parsed || !Array.isArray(parsed.articles) || !Array.isArray(parsed.categories)) {
-          return { ok: false, error: 'Invalid backup JSON structure' };
-        }
-        const normalizedArticles = parsed.articles.map((art) => ({
-          ...art,
-          tagIds: normalizeArticleTagIds(art.tagIds || []).tagIds,
-        }));
-        updateState(() => ({
-          ...parsed,
-          articles: normalizedArticles,
-          dateTimePreferences: parsed.dateTimePreferences || DEFAULT_ADMIN_DATETIME_PREFS,
-          auditReportsByArticleId: parsed.auditReportsByArticleId || {},
-        }));
+        const db = await getDb();
+        if (!db) return { ok: false, error: 'IndexedDB is unavailable; backup was not restored' };
+        // Await both the request and transaction completion. A successful put
+        // request alone is not treated as a durable restore receipt.
+        const transaction = db.transaction(STORE_NAME, 'readwrite');
+        await transaction.store.put(candidate, STATE_KEY);
+        await transaction.done;
+        stateRef.current = candidate;
+        setState(candidate);
+        setPersistenceMode('indexeddb');
+        document.documentElement.classList.toggle('dark', candidate.theme === 'dark');
         return { ok: true };
-      } catch (e) {
-        return { ok: false, error: (e as Error).message };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'IndexedDB write failed; previous state remains active',
+        };
       }
     },
-    [updateState]
+    [simulateSaveFailure]
   );
 
   const resetDemoDatabase = useCallback(async () => {

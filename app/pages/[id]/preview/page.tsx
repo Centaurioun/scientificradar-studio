@@ -4,6 +4,7 @@ import React, { use } from 'react';
 import Link from 'next/link';
 import { useStudio } from '@/lib/studio-context';
 import { ArrowLeft, Edit3, ShieldAlert } from 'lucide-react';
+import { sanitizeEditorialHtml, trustedMediaSourceSet } from '@/lib/html-security';
 
 export default function PagePreviewRoute({
   params,
@@ -11,7 +12,7 @@ export default function PagePreviewRoute({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const { pages } = useStudio();
+  const { pages, media } = useStudio();
   const page = pages.find((p) => p.id === id);
 
   if (!page) {
@@ -65,7 +66,11 @@ export default function PagePreviewRoute({
           )}
           <div
             className="prose prose-slate dark:prose-invert max-w-none leading-relaxed space-y-4"
-            dangerouslySetInnerHTML={{ __html: page.bodyHtml }}
+            dangerouslySetInnerHTML={{
+              __html: sanitizeEditorialHtml(page.bodyHtml, {
+                trustedImageSources: trustedMediaSourceSet(media.map((asset) => asset.src)),
+              }).html,
+            }}
           />
         </article>
       </div>
