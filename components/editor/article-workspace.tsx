@@ -138,6 +138,8 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
 
   // Verified Save State machine
   const [saveState, setSaveState] = useState<SaveState>('clean');
+  const draftEditRevisionRef = useRef(0);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [lastSavedAt, setLastSavedAt] = useState<string | undefined>(
     existingArticle?.updatedAt
   );
@@ -261,6 +263,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   }, [focusFieldById]);
 
   const markDirty = useCallback(() => {
+    draftEditRevisionRef.current += 1;
     setSaveState('dirty');
     setSaveError(null);
   }, []);
@@ -330,30 +333,37 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
 
   // Execute genuine verified repository persistence
   const performSave = useCallback(
-    async (createRevision: boolean, revisionSummary?: string): Promise<boolean> => {
-      setSaveState('saving');
-      setSaveError(null);
-      const receipt = await persistArticleDraft(currentDraftArticle, {
-        expectedVersion: lastSyncedVersionRef.current,
-        createRevision,
-        revisionSource: 'editor',
-        revisionSummary,
+    (createRevision: boolean, revisionSummary?: string): Promise<boolean> => {
+      const requestedDraftRevision = draftEditRevisionRef.current;
+      const queuedSave = saveQueueRef.current.then(async () => {
+        setSaveState('saving');
+        setSaveError(null);
+        const receipt = await persistArticleDraft(currentDraftArticle, {
+          expectedVersion: lastSyncedVersionRef.current,
+          createRevision,
+          revisionSource: 'editor',
+          revisionSummary,
+        });
+
+        if (!receipt.ok) {
+          setSaveState(
+            draftEditRevisionRef.current === requestedDraftRevision ? 'failed' : 'dirty'
+          );
+          setSaveError(receipt.error || 'Failed to persist draft to local repository.');
+          return false;
+        }
+
+        lastSyncedVersionRef.current = receipt.version;
+        setLastSavedAt(receipt.savedAt);
+        setVolatileWarning(receipt.volatileMemoryOnly);
+        if (receipt.demotedH1Count > 0) {
+          setDemotedNotice(receipt.demotedH1Count);
+        }
+        setSaveState(draftEditRevisionRef.current === requestedDraftRevision ? 'clean' : 'dirty');
+        return true;
       });
-
-      if (!receipt.ok) {
-        setSaveState('failed');
-        setSaveError(receipt.error || 'Failed to persist draft to local repository.');
-        return false;
-      }
-
-      lastSyncedVersionRef.current = receipt.version;
-      setLastSavedAt(receipt.savedAt);
-      setVolatileWarning(receipt.volatileMemoryOnly);
-      if (receipt.demotedH1Count > 0) {
-        setDemotedNotice(receipt.demotedH1Count);
-      }
-      setSaveState('clean');
-      return true;
+      saveQueueRef.current = queuedSave.then(() => undefined, () => undefined);
+      return queuedSave;
     },
     [persistArticleDraft, currentDraftArticle]
   );

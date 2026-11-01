@@ -2,6 +2,50 @@ import { expect, expectNoFatalBrowserFailures, test } from './fixtures';
 
 const articleId = 'art-quantum-repeater';
 
+async function installStudioWriteGate(page: import('@playwright/test').Page) {
+  await page.addInitScript(() => {
+    const originalPut = IDBObjectStore.prototype.put;
+    const win = window as typeof window & {
+      __holdStudioWrite?: boolean;
+      __releaseStudioWrite?: boolean;
+      __abortHeldStudioWrite?: boolean;
+    };
+    win.__holdStudioWrite = false;
+    win.__releaseStudioWrite = false;
+    win.__abortHeldStudioWrite = false;
+    IDBObjectStore.prototype.put = function (...args) {
+      const request = originalPut.apply(this, args);
+      if (win.__holdStudioWrite && this.name === 'studio_state' && args[1] === 'root_snapshot_v1') {
+        win.__holdStudioWrite = false;
+        const keepAlive = () => {
+          if (win.__releaseStudioWrite) {
+            if (win.__abortHeldStudioWrite) this.transaction.abort();
+            return;
+          }
+          const next = this.get('root_snapshot_v1');
+          next.onsuccess = keepAlive;
+        };
+        const next = this.get('root_snapshot_v1');
+        next.onsuccess = keepAlive;
+      }
+      return request;
+    };
+  });
+}
+
+async function setWriteGate(page: import('@playwright/test').Page, values: { hold?: boolean; release?: boolean; abort?: boolean }) {
+  await page.evaluate((gate) => {
+    const win = window as typeof window & {
+      __holdStudioWrite?: boolean;
+      __releaseStudioWrite?: boolean;
+      __abortHeldStudioWrite?: boolean;
+    };
+    if (gate.hold !== undefined) win.__holdStudioWrite = gate.hold;
+    if (gate.release !== undefined) win.__releaseStudioWrite = gate.release;
+    if (gate.abort !== undefined) win.__abortHeldStudioWrite = gate.abort;
+  }, values);
+}
+
 async function readPersistedArticle(page: import('@playwright/test').Page) {
   return page.evaluate(async (id) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -63,6 +107,64 @@ test('two tabs reject a stale article draft and retain the committed IndexedDB r
   await expect(staleTab.getByRole('textbox', { name: 'Article Title (H1)' })).toHaveValue(committedTitle);
   await expectNoFatalBrowserFailures(diagnostics);
   await staleTab.close();
+});
+
+test('an older in-flight receipt preserves a newer dirty draft until its IndexedDB save commits', async ({ page, diagnostics }) => {
+  await installStudioWriteGate(page);
+  await page.goto(`/articles/${articleId}/edit`);
+  const title = page.getByRole('textbox', { name: 'Article Title (H1)' });
+  await expect(title).toBeVisible();
+  const before = await readPersistedArticle(page);
+
+  const firstTitle = `First held draft ${Date.now()}`;
+  await setWriteGate(page, { hold: true });
+  await title.fill(firstTitle);
+  await expect(page.getByTestId('editor-save-indicator')).toContainText('Saving to local store…', { timeout: 10_000 });
+  const finalTitle = `Final held draft ${Date.now()}`;
+  await title.fill(finalTitle);
+  await expect(page.getByTestId('editor-save-indicator')).toContainText('Unsaved changes', { timeout: 10_000 });
+  await setWriteGate(page, { release: true });
+  await expect.poll(async () => (await readPersistedArticle(page))?.title, { timeout: 10_000 }).toBe(firstTitle);
+  await expect(page.getByTestId('editor-save-indicator')).toContainText('Unsaved changes', { timeout: 10_000 });
+  const unloadGuard = await page.evaluate(() => {
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(unloadGuard).toBe(true);
+  await expect(page.getByTestId('editor-save-indicator')).toContainText('Saved (Local)', { timeout: 10_000 });
+  const after = await readPersistedArticle(page);
+  expect(after?.title).toBe(finalTitle);
+  expect(after?.version).toBeGreaterThan(before?.version || 0);
+  await page.reload();
+  await expect(page.getByRole('textbox', { name: 'Article Title (H1)' })).toHaveValue(finalTitle);
+  expect((await readPersistedArticle(page))?.title).toBe(finalTitle);
+  await expectNoFatalBrowserFailures(diagnostics);
+});
+
+test('a failed older receipt keeps a newer draft dirty and lets its scheduled retry commit', async ({ page, diagnostics }) => {
+  await installStudioWriteGate(page);
+  await page.goto(`/articles/${articleId}/edit`);
+  const title = page.getByRole('textbox', { name: 'Article Title (H1)' });
+  await expect(title).toBeVisible();
+  const before = await readPersistedArticle(page);
+  const firstTitle = `Aborted older draft ${Date.now()}`;
+  await setWriteGate(page, { hold: true });
+  await title.fill(firstTitle);
+  await expect(page.getByTestId('editor-save-indicator')).toContainText('Saving to local store…', { timeout: 10_000 });
+  const finalTitle = `Final after abort ${Date.now()}`;
+  await title.fill(finalTitle);
+  await expect(page.getByTestId('editor-save-indicator')).toContainText('Unsaved changes', { timeout: 10_000 });
+  await setWriteGate(page, { abort: true, release: true });
+  await expect(page.getByTestId('editor-save-indicator')).toContainText('Unsaved changes', { timeout: 10_000 });
+  await expect(page.getByTestId('editor-save-indicator')).toContainText('Saved (Local)', { timeout: 10_000 });
+  const after = await readPersistedArticle(page);
+  expect(after?.title).toBe(finalTitle);
+  expect(after?.version).toBeGreaterThan(before?.version || 0);
+  await page.reload();
+  await expect(page.getByRole('textbox', { name: 'Article Title (H1)' })).toHaveValue(finalTitle);
+  expect((await readPersistedArticle(page))?.title).toBe(finalTitle);
+  await expectNoFatalBrowserFailures(diagnostics);
 });
 
 test('an outdated SEO Quick Fix is rejected against the latest persisted article', async ({ page, diagnostics }) => {
@@ -130,5 +232,9 @@ test('an aborted IndexedDB transaction reports failure and keeps the unsaved edi
   await expect(page.getByTestId('editor-save-indicator')).toContainText('Save failed', { timeout: 10_000 });
   await expect(title).toHaveValue(unsavedTitle);
   expect((await readPersistedArticle(page))?.title).toBe(before?.title);
+  const recoveredTitle = `Recovered after abort ${Date.now()}`;
+  await title.fill(recoveredTitle);
+  await expect(page.getByTestId('editor-save-indicator')).toContainText('Saved (Local)', { timeout: 10_000 });
+  expect((await readPersistedArticle(page))?.title).toBe(recoveredTitle);
   await expectNoFatalBrowserFailures(diagnostics);
 });

@@ -710,7 +710,6 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         setState(committed.snapshot);
         return { ok: true, savedAt: built.updatedArticle.updatedAt, version: built.updatedArticle.version, demotedH1Count: built.demotedH1Count, volatileMemoryOnly: false };
       } catch (err) {
-        setPersistenceMode('memory_fallback');
         return {
           ok: false,
           savedAt: new Date().toISOString(),
