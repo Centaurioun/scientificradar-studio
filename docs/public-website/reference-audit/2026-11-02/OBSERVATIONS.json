@@ -1,0 +1,182 @@
+{
+  "research_date": "2026-11-02",
+  "timezone": "Europe/Istanbul",
+  "tool": {
+    "name": "Playwright",
+    "version": "1.64.1",
+    "browser": "Google Chrome 155.0.8059.80",
+    "isolated_context": true,
+    "locale": "en-US",
+    "device_scale_factor": 1
+  },
+  "rea": {
+    "registered_in_codex_session": true,
+    "browser_connected": false,
+    "reason": "Mission requires an exact loopback CDP endpoint authorization; none was provided. Isolated Playwright fallback used."
+  },
+  "targets": [
+    {
+      "evidence_id": "BK-001..BK-004",
+      "url": "https://knowablemagazine.org/",
+      "status": "blocked",
+      "observation": "Cloudflare security verification interstitial; no bypass attempted",
+      "design_measurements": null
+    },
+    {
+      "evidence_id": "BK-005..BK-008",
+      "url": "https://knowablemagazine.org/content/article/living-world/2026/why-animal-blood-comes-in-different-colors",
+      "status": "blocked",
+      "observation": "Cloudflare security verification interstitial; no bypass attempted",
+      "design_measurements": null
+    },
+    {
+      "evidence_id": "PW-001..PW-004",
+      "url": "https://www.quantamagazine.org/how-spiders-spin-silk-dope-into-natures-toughest-material-20261028/",
+      "status": "observed",
+      "measurements": [
+        {
+          "evidence_id": "PW-001",
+          "viewport_css_px": [
+            1440,
+            900
+          ],
+          "document_width_css_px": 1440,
+          "document_height_css_px": 14207,
+          "h1_box_css_px": {
+            "x": 340,
+            "width": 760,
+            "height": 92
+          },
+          "h1_style": {
+            "font": "\"Noe Display\", Merriweather, Georgia, serif",
+            "size": "40px",
+            "lineHeight": "46px"
+          },
+          "body_text_box_width_css_px": 560,
+          "body_style": {
+            "font": "Merriweather, Georgia, serif",
+            "size": "16px",
+            "lineHeight": "30px"
+          },
+          "figures": 12,
+          "figcaption_count": 10,
+          "doi_url_matches": 4,
+          "doi_meta_fields": 0,
+          "headings": {
+            "h1": 1,
+            "h2": 10,
+            "h3": 7
+          }
+        },
+        {
+          "evidence_id": "PW-002",
+          "viewport_css_px": [
+            1024,
+            768
+          ],
+          "document_width_css_px": 1024,
+          "document_height_css_px": 15694,
+          "h1_box_css_px": {
+            "x": 132,
+            "width": 760,
+            "height": 92
+          },
+          "h1_style": {
+            "font": "\"Noe Display\", Merriweather, Georgia, serif",
+            "size": "40px",
+            "lineHeight": "46px"
+          },
+          "body_text_box_width_css_px": 560,
+          "body_style": {
+            "font": "Merriweather, Georgia, serif",
+            "size": "16px",
+            "lineHeight": "30px"
+          },
+          "figures": 12,
+          "figcaption_count": 10,
+          "doi_url_matches": 4,
+          "doi_meta_fields": 0,
+          "headings": {
+            "h1": 1,
+            "h2": 10,
+            "h3": 7
+          }
+        },
+        {
+          "evidence_id": "PW-003",
+          "viewport_css_px": [
+            390,
+            844
+          ],
+          "document_width_css_px": 390,
+          "document_height_css_px": 18954,
+          "h1_box_css_px": {
+            "x": 20,
+            "width": 350,
+            "height": 86.1
+          },
+          "h1_style": {
+            "font": "\"Noe Display\", Merriweather, Georgia, serif",
+            "size": "24.96px",
+            "lineHeight": "28.704px"
+          },
+          "body_text_box_width_css_px": 350,
+          "body_style": {
+            "font": "Merriweather, Georgia, serif",
+            "size": "16px",
+            "lineHeight": "30px"
+          },
+          "figures": 12,
+          "figcaption_count": 10,
+          "doi_url_matches": 4,
+          "doi_meta_fields": 0,
+          "headings": {
+            "h1": 1,
+            "h2": 10,
+            "h3": 7
+          }
+        },
+        {
+          "evidence_id": "PW-004",
+          "viewport_css_px": [
+            320,
+            700
+          ],
+          "document_width_css_px": 326,
+          "document_height_css_px": 20826,
+          "h1_box_css_px": {
+            "x": 20,
+            "width": 280,
+            "height": 86.1
+          },
+          "h1_style": {
+            "font": "\"Noe Display\", Merriweather, Georgia, serif",
+            "size": "24.96px",
+            "lineHeight": "28.704px"
+          },
+          "body_text_box_width_css_px": 280,
+          "body_style": {
+            "font": "Merriweather, Georgia, serif",
+            "size": "16px",
+            "lineHeight": "30px"
+          },
+          "figures": 12,
+          "figcaption_count": 10,
+          "doi_url_matches": 4,
+          "doi_meta_fields": 0,
+          "headings": {
+            "h1": 1,
+            "h2": 10,
+            "h3": 7
+          }
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Nature.com not visited",
+    "No WCAG certification, screen-reader, Lighthouse, LCP, INP or CLS claims",
+    "320px Quanta document-width difference was state-dependent and unexplained",
+    "Knowable/Quanta numeric comparison is incomplete"
+  ]
+}
