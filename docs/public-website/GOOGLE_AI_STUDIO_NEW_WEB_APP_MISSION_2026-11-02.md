@@ -1,9 +1,9 @@
-# Google AI Studio — ScientificRadar Web: New Isolated Public Site Prototype
+# Google AI Studio — ScientificRadar Web: New Standalone Reader Website v1
 
 **Date:** 2026-11-02
 **Mode:** NEW Google AI Studio Build app, NOT existing ScientificRadar Studio.
-**Goal:** A working, responsive, browser-testable public science-magazine website prototype.
-**Primary spec:** docs/public-website/SCIENTIFICRADAR_PUBLIC_WEBSITE_DESIGN_BLUEPRINT_2026-11-02.md in the existing Studio repository.
+**Goal:** A polished working, responsive, browser-testable ScientificRadar public website first version (with honest isolated demo data until Studio publishing is connected).
+**Primary spec:** Attached file SCIENTIFICRADAR_PUBLIC_WEBSITE_DESIGN_BLUEPRINT_2026-11-02.md, version 2.0, sourced from docs/public-website/ in the existing Studio repository.
 **Future GitHub repository:** Centaurioun/scientificradar-web (new, separate; owner will connect when ready).
 
 ## 0. Source and access gate
@@ -76,3 +76,106 @@ The owner will create/link a new GitHub repository (proposed Centaurioun/scienti
 Final response in Turkish: show working design, browser screenshots, functional routes and controls, stack actually used, test outcome, current gaps, font and image strategy, and verified new-repo commit only when available.
 
 **Success:** a high-quality, interactive, original scientific magazine website prototype ready for design review, not a vague plan and not a change to the existing admin panel.
+
+---
+
+## 7. Priority and phase gates: BUILD, not a plan or a fake backend
+
+Implement the owner-selected aesthetic faithfully at the level of ORIGINAL layout and hierarchy. Prioritize:
+- **P0-A:** Homepage, article page, navigation and mobile responsiveness (the visual experience should be compelling on first opening).
+- **P0-B:** Science reading fidelity: headings, links, figures, credits, references, tables and at least two substantive original example articles.
+- **P0-C:** Search, topics, 404, responsive fixtures, working controls and accessibility.
+- **P1:** Article-end author panel, section spotlights, restrained multimedia where actual demo assets exist, fine design-token tuning.
+- **P2/future only:** True publication backend, Studio data sync, production SEO indexability, cloud images/ads/newsletters, analytics and real hosting.
+
+**Do not stop when P0 is still broken.** The dashboard app is a completely separate project and must remain unchanged. The new public website must not embed CKEditor, Tiptap or a rich-text editing toolbar.
+
+### Site appearance and demo honesty
+
+The owner wants a genuine website experience, **not a giant visible placeholder banner or product called "Prototype"**. Name the app/site ScientificRadar. Let all navigation operate on demo articles without inventing a production backend. Keep developer documentation transparent: demo fixtures and no real publication. If a subtle demo notice is necessary, make it non-intrusive, truthful, and not a replacement for real UI.
+
+### Verify that all attachments were actually read
+
+Input set from the owner:
+1. Refined blueprint v2.0, Markdown attachment.
+2. THIS implementation mission, Markdown attachment.
+3. Knowable homepage screenshot.
+4. Knowable article screenshot.
+5. Quanta article screenshot.
+6. Optionally Codex reference-audit Markdown reports from docs/public-website/reference-audit/2026-11-02/.
+
+If any are absent, specifically name what is absent; do not pretend the new chat retains ChatGPT image uploads, repository mounted files or previous Google AI Studio state. Proceed from what is actually supplied. If Codex reports were not yet written, the design spec remains authoritative; later research can correct measured defaults without wholesale changes.
+
+## 8. Recommended project modules (adapt to actual framework)
+
+Keep the architecture clear enough that a human can later move the website into a shared monorepo if desired. Do not execute that move now.
+
+Suggested source ownership by responsibility:
+- app/(public)/layout: global fonts, metadata and server shell (if Next.js).
+- app/(public)/page: homepage assembled from content repository.
+- app/(public)/article/[slug]/page: semantic scientific article reader with error state.
+- app/(public)/topics/page and app/(public)/topics/[slug]/page: topic directory and listings.
+- app/(public)/search/page: shareable query URL and accessible results.
+- components/site: masthead, desktop+mobile navigation, footer.
+- components/editorial: lead story, card, article header, body renderer, figure, references, author panel, related stories.
+- lib/content: immutable typed mock article source behind an eventual published-content adapter.
+- styles or lib/design: named tokens, theme typography.
+- tests: route and interaction scripts.
+
+Use practical equivalents in a Vite/React preview. The public website should have no editor dependency, no indexedDB publication semantics and no imported Studio source.
+
+### Anti-degradation rules
+
+- Do NOT render only a static screenshot instead of actual route components.
+- Do NOT add fake hover elements that cannot be clicked by keyboard/touch.
+- Do NOT fetch and hotlink copyrighted Knowable/Quanta articles or asset URLs for live design.
+- Do NOT hide inaccessible links behind overlay elements or use arbitrary global z-index fixes.
+- Do NOT claim SEO/SSR functionality when using a client-only framework.
+- Do NOT assert tested LCP/INP/CLS without a real measured deployment.
+- Do NOT use externally collected email addresses in a fake newsletter.
+- Do NOT use an unrelated generated brand logo resembling Knowable.
+
+## 9. Realistic end-to-end checks (document failed and skipped honestly)
+
+| Test ID | Expected behavior |
+| --- | --- |
+| WEB-01 | Desktop home masthead, hero, first grid and lower modules render from typed fixtures |
+| WEB-02 | Category label navigates to filtered topic landing page |
+| WEB-03 | Independent chevron opens submenu; Escape closes; keyboard focus and outside click work |
+| WEB-04 | Mobile menu/accordion works at 390px and 320px without overflow |
+| WEB-05 | Article H1 title is unique, body contains readable long paragraphs, H2/H3 and author metadata |
+| WEB-06 | Captioned figure includes accurate demo/original credits; no image distortion or missing alt |
+| WEB-07 | References are actionable only if known; never synthetic DOI represented as true |
+| WEB-08 | Search returns matching stories, empty state and handles accented/Turkish strings |
+| WEB-09 | Topic filter, related story and footer links reach the expected URLs |
+| WEB-10 | Merriweather/Inter actual font loading or clearly reported fallback; inspect network |
+| WEB-11 | No HTML/JavaScript errors at desktop/tablet/mobile; screenshot review for visual hierarchy |
+| WEB-12 | Safe noindex/preview semantics, separate new app, no live services or Studio writes |
+
+For each test write observed PASS, FAIL, PARTIAL, SKIPPED and evidence details into docs/WEBSITE_PROTOTYPE_AUDIT.md; don't merely enumerate planned tests.
+
+## 10. Six-cycle iterative refinement (run on the ACTUAL new build)
+
+After initial implementation, use six review/refinement cycles, each with an inspectable before/after assessment:
+1. **Brand / aesthetics** — Compare actual site screenshots to owner references for large visual rhythm, tasteful serif typography, image positioning and editorial feel. Do not clone.
+2. **Information architecture** — Navigate ALL routes, headers, categories, dropdowns, hamburger menus, search and 404.
+3. **Long-read/scientific integrity** — Inspect two lengthy articles with heading hierarchy, wide figures, credits, tables, references, and narrow prose measure.
+4. **Responsive accessibility** — Test 1440, 1024, 390 and 320 widths, keyboard-only flow, touch targets, focus/contrast, text zoom.
+5. **Performance/security/SEO honesty** — Verify actual font/image network, bundle/build warnings, no copy-rights violations, noindex demo, safe links/HTML.
+6. **Adversarial verification** — Evaluate first load, reload, missing/empty fields, long headings, zero search results, broken image fixture and absent production connections; then re-run all applicable checks.
+
+This is not permission to claim a six-cycle PASS without a documented test run and visual evidence. Keep genuine blocked requirements explicitly listed rather than quietly changing the goalposts.
+
+## 11. Delivery gate and order of operations
+
+1. Read the BLUEPRINT v2.0 and this mission fully.
+2. Read Codex forensic reports if supplied (measurements are evidence, not authority to copy reference code).
+3. Implement the entire feasible new site in AI Studio sandbox.
+4. Run six cycles and actual browser verification.
+5. Show desktop and mobile screenshots from the rendered website and transparent audit.
+6. Create/sync to **a different new GitHub repository** (owner says the AI Studio GitHub export can create its own new repo). Suggested Centaurioun/scientificradar-web; confirm exact resulting repo URL from provider, do NOT infer.
+7. Report actual GitHub SHA and tested commit if export succeeded. Do not push the new site into Centaurioun/scientificradar-studio.
+8. Stop before public deployment or production integration, awaiting later owner decision.
+
+The desired end state is a usable public-facing website version for design evaluation with honest demo data, separate from the existing running editorial CMS.
+
