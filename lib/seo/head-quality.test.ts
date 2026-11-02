@@ -25,7 +25,7 @@ test('legacy ScientificRadar head reports duplicated description/twitter and con
   for (const rule of [
     'head.duplicate.description', 'head.duplicate.twitter:title',
     'head.duplicate.twitter:description', 'head.duplicate.og:type',
-    'head.og.type.conflict', 'head.keywords.legacy',
+    'head.og.type.conflict', 'head.duplicate.keywords', 'head.keywords.legacy',
   ]) assert.ok(found.includes(rule), 'Missing rule ' + rule);
 });
 
