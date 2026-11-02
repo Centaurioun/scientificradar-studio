@@ -434,7 +434,7 @@ For each first-pass version verify in actual browser (not only compile):
 9. Only one article H1; noindex demo correctly scoped; no fake published structured data.
 10. Lighthouse/mobile metrics reported only when actually measured, with environment, audit output and reproducible commands.
 
-Recommended artifacts in NEW web repository: docs/WEBSITE_PROTOTYPE_AUDIT.md, docs/design/DESIGN_TOKENS.md, docs/design/CONTENT_CONTRACT.md plus screenshots of the NEW original site. Do not place third-party reference screenshots into a public git repo without separate license review.
+Recommended artifacts in NEW web repository: docs/WEBSITE_BUILD_AUDIT.md, docs/design/DESIGN_TOKENS.md, docs/design/CONTENT_CONTRACT.md plus screenshots of the NEW original site. Do not place third-party reference screenshots into a public git repo without separate license review.
 
 ## 13. Codex external-site research and evidence precedence
 
