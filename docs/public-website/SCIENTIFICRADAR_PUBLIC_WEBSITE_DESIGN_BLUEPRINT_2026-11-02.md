@@ -1,10 +1,10 @@
 # ScientificRadar Public Website — Design, UX & Architecture Blueprint
 
-**Version:** 2.0 · 2026-11-02 (six-cycle expanded) (Europe/Istanbul)
+**Version:** 2.1 · 2026-11-02 (six-cycle + Codex REA reconciliation; Europe/Istanbul)
 **Document owner:** ScientificRadar
 **Repository containing this decision record:** https://github.com/Centaurioun/scientificradar-studio
 **Project:** ScientificRadar Web — reader-facing website, separate from ScientificRadar Studio
-**Status:** Owner-approved visual direction + implementation-level specification; Codex external-site forensic evidence pending. This document does not certify a built public site. This document is a SPECIFICATION, not an implementation certificate or production deployment authorization.
+**Status:** Owner-approved visual direction and implementation specification. Phase 1 and Phase 2 forensic reports now reviewed at commit 690e2fc8a0f9d5cb6f0e254ee5650f5762637250. No built website or production deployment certified.
 
 ## 0. Executive decision
 
@@ -462,4 +462,52 @@ The following are six SPECIFICATION critique passes, NOT actual browser tests or
 | 6. Verification & handoff | Can an agent declare PASS after only a screenshot? | Weak evidence traceability | Concrete viewport routes, interaction matrix, console/network tests, audited results and REA provenance boundary |
 
 **No production deployment or CMS integration approval is implied by this design document.**
+
+
+---
+
+## 15. Codex Phase 2: measured reference reconciliation (2026-11-02)
+
+**Research SHA:** 690e2fc8a0f9d5cb6f0e254ee5650f5762637250.
+**Evidence folder:** docs/public-website/reference-audit/2026-11-02/technical-deep-dive/.
+The 10 files there contain a computed-style CSV, original DOM/layout and interaction descriptions, six refinement cycles, original React/Next suggestions and explicit limitations. This section summarizes the actionable findings so Google AI Studio can work from this attached blueprint even if it cannot read GitHub.
+
+### 15.1 OBSERVED: only one publicly accessible Quanta article
+
+| Topic | Observed REA/Playwright evidence | Implication for ScientificRadar |
+| --- | --- | --- |
+| Prose width | 560 px inner text within a 688 px center section (64 px padding each side) at 1440 and 1024 viewport widths | Do not automatically replace the owner's 700 px initial reading token; compare 600 px and 700 px variants with actual article screenshots |
+| Desktop layout | 1160 px body composition at 1440 = 236 px rail + 688 px center + 236 px rail | Optional rails belong outside text column; omit rather than squeeze on tablet/mobile |
+| Mobile | At 390 px, prose 350 px, 20 px gutters, 60 px header, rails hidden; 320 px leaves 280 px prose | Prioritize one column, mobile reading order, safe gutters, no horizontal overflow |
+| Transition | Flex row at 600 px; flex column at 540 px; precise CSS breakpoint not verified | Choose our own content-driven breakpoint; do not copy a guessed Quanta threshold |
+| Typography | Body Merriweather 16 px / 30 px, Quanta H1 display Noe Display 40 / 46 px desktop | Preserve owner-approved Merriweather + Inter; keep optional independent display-font token |
+| Menu | Full screen menu opens, tested Escape did not dismiss; only limited sequence sampled | Our menu MUST support Escape, focus return, overlay handling and keyboard/touch, rather than reproducing a reference limitation |
+| HTML semantics | Observed main > div.post, no semantic article element in sampled route, one H1 | Implement our own semantic main/article hierarchy, proper time/author and caption markup |
+| Figures | 12 figure nodes, 7 figcaptions, possible nested wrappers; some DOI-host links | Do not treat every figure wrapper as unique image; give original figures alt/caption/credit/rights and authentic references only |
+| 320 px stress | Document scrollWidth 326 px; tooltip attribution remains unproven | Prevent our own overflow; do not mask it using blanket overflow-x hidden |
+
+These observations do not establish Quanta's actual component source code, framework internals, data API or other routes. Do NOT copy full third-party source, fonts, content or visual assets.
+
+### 15.2 Knowable: source page still blocked
+
+Both Knowable homepage and example long-read returned Cloudflare HTTP 403 verification in isolated REA and Playwright. There is NO verified Knowable computed style, DOM tree, responsive breakpoint or menu behavior. The owner's previously provided screenshots remain SCREENSHOT-ONLY visual evidence of centered branding, category navigation, lead hero, editorial grid and article reading hierarchy. The original ScientificRadar implementation must meet its OWN route/accessibility requirements.
+
+If AI Studio can lawfully access public reference URLs, document what it sees; if it cannot, use the owner-supplied screenshots. Do not attempt to bypass Cloudflare or pause the build for another reverse-engineering cycle.
+
+### 15.3 Implementation choices
+
+- Initial reading column: 700 px, configurable through one design token. Test a SECOND 600 px variant at 1440 and 1024 using real sample text; defer final owner selection. 560 px is a measured Quanta reference, NOT the required ScientificRadar width.
+- Continue distinct fluid figure max width around 1100 px, but validate CSS breakout within any grid/sidebar. No global overflow-x:hidden workaround. Test article figures, scientific tables, long titles, math and citations at 320 px and 390 px.
+- For visible normal website category links, prefer disclosure navigation with real anchor plus separate chevron button, normal Tab order, Escape and focus return. If designing a modal fullscreen drawer, add tested focus/scroll management. Avoid blindly using role=menu unless the full ARIA menu keyboard pattern is implemented.
+- Quanta's DOM used no article element on sampled route; ScientificRadar should use semantic main > article, one H1, structured date, author and citation metadata and accessible figure/figcaption pairs.
+- At least two original long-read demo articles must exercise real scientific structures, source links, missing metadata fallbacks and differing figure layouts. Do not invent verified study claims, DOIs, author credentials or media rights.
+- Original typed block renderer is a good demo interface; later Studio adapter must consume approved sanitized canonical published bodyHtml preserving source IDs, figure media IDs, TeX, references and tables. Do not mistake a simple text-only mock block renderer for a production-compatible article serialization layer.
+- Codex IMPLEMENTATION_EXAMPLES.md contains unexecuted illustrative React/CSS, NOT verified drop-in production components. Especially re-test wide figure positioning, citation source identity and mobile overflow.
+- Same-origin licensed Merriweather and Inter remain the font decision. Refrain from using Quanta's display/UI font binaries or copying Knowable's brand identity.
+
+### 15.4 Research-stop and build-start decision
+
+The independent Codex research is sufficient to start the NEW ScientificRadar Web website build in Google AI Studio. The recorded six research cycles are not six successful website tests. The NEW website must run its own six implementation review cycles with real screenshots/controls/tests, create/sync to a DIFFERENT GitHub repository, and leave ScientificRadar Studio and production services unmodified.
+
+**Precedence:** owner's design choices > proven measured reference observations > adjustable recommended tokens > implementation agent preference. Both Knowable references remain screenshot-only when inaccessible.
 
