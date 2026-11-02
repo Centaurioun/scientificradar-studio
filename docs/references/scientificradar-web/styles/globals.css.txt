@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+:root {
+  --sr-page-max: 1320px;
+  --sr-reading-max: 700px;
+  --sr-heading-max: 880px;
+  --sr-figure-max: 1100px;
+  --sr-gutter: clamp(16px, 3vw, 40px);
+  --sr-body-size: clamp(17px, 1.25vw, 19px);
+  --sr-prose-leading: 1.72;
+
+  --sr-paper: #FAFAF8;
+  --sr-surface: #F2F1EC;
+  --sr-ink: #181C21;
+  --sr-ink-secondary: #363E47;
+  --sr-muted: #525B65;
+  --sr-accent: #15747B;
+  --sr-accent-hover: #0E565C;
+  --sr-rule: #DCE2E4;
+  --sr-rule-subtle: #E8ECEE;
+}
+
+body {
+  background-color: var(--sr-paper);
+  color: var(--sr-ink);
+  font-family: var(--font-interface), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-editorial {
+  font-family: var(--font-editorial), Georgia, "Times New Roman", serif;
+}
+
+.font-sans {
+  font-family: var(--font-interface), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.font-math {
+  font-family: "KaTeX_Main", "Latin Modern Math", "STIX Two Math", "Cambria Math", Georgia, serif;
+}
+
+.site-container {
+  width: min(calc(100% - 2 * var(--sr-gutter)), var(--sr-page-max));
+  margin-inline: auto;
+}
+
+.article-prose {
+  width: 100%;
+  max-width: var(--sr-reading-max);
+  margin-inline: auto;
+  font-size: var(--sr-body-size);
+  line-height: var(--sr-prose-leading);
+  overflow-wrap: break-word;
+}
+
+.article-prose :where(img, video, svg) {
+  max-width: 100%;
+  height: auto;
+}
+
+.article-prose :where(pre, table) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

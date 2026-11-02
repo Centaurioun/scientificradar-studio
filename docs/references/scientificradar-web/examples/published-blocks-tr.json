@@ -1,0 +1,115 @@
+{
+  "contractVersion": "1.0.0",
+  "articleId": "ref-ornek-tr-001",
+  "revisionId": "rev-ref-tr-001-v1",
+  "revisionNumber": 1,
+  "slug": "ornek-bilimsel-makale-tr",
+  "locale": "tr",
+  "translationGroupId": "tg-reference-example-v1",
+  "editorialType": "explainer",
+  "status": "published",
+  "title": "Örnek Bilimsel Makale — Okuyucu Uyumluluğu",
+  "dek": "Tipografi, matematik ve kaynakça için sentetik test içeriği.",
+  "summary": "Bu örnek sentetiktir; gerçek bilimsel bulgu değildir.",
+  "categorySlug": "biology",
+  "subcategorySlugs": [],
+  "tagSlugs": [
+    "fixture"
+  ],
+  "authorIds": [
+    "author-fixture-001"
+  ],
+  "authors": [
+    {
+      "id": "author-fixture-001",
+      "name": "Illustrative Test Author",
+      "role": "Demo author",
+      "credentialsNote": "Synthetic fixture only",
+      "bio": "No real identity",
+      "isDemoPersona": true
+    }
+  ],
+  "publishedAt": "2026-11-03T00:00:00.000Z",
+  "readingTimeMinutes": 2,
+  "blocks": [
+    {
+      "type": "paragraph",
+      "id": "p-tr",
+      "text": "Bu yalnızca bir doğrulama paragrafıdır. Türkçe karakterler: İ ı ğ ş ö ü.",
+      "citations": [
+        "src-illustrative"
+      ]
+    },
+    {
+      "type": "heading",
+      "id": "denklemler",
+      "level": 2,
+      "text": "Denklemler"
+    },
+    {
+      "type": "math",
+      "id": "math-tr",
+      "tex": "E = mc^2",
+      "label": "Örnek denklem",
+      "explanation": "Fiziksel gerçekliğe ilişkin yeni bir iddia içermez."
+    },
+    {
+      "type": "table",
+      "id": "tablo-tr",
+      "table": {
+        "id": "t-001",
+        "caption": "Örnek tablo: test değerleri",
+        "headers": [
+          "Öğe",
+          "Değer"
+        ],
+        "rows": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "2"
+          ]
+        ],
+        "footnote": "Yalnızca görüntüleme testi"
+      }
+    },
+    {
+      "type": "figure",
+      "id": "figure-tr",
+      "figureNumber": "1",
+      "layout": "wide",
+      "media": {
+        "id": "media-demo-1",
+        "src": "/images/demo/spider-silk-hierarchy.svg",
+        "alt": "Örnek bilimsel diyagram",
+        "width": 1100,
+        "height": 700,
+        "caption": "Örnek diyagram: canlı yayında hak doğrulaması gerekir.",
+        "credit": "ScientificRadar repo demo illustration",
+        "license": "DEMO / RIGHTS RECHECK REQUIRED",
+        "rightsVerified": false
+      }
+    }
+  ],
+  "sources": [
+    {
+      "id": "src-illustrative",
+      "label": "1",
+      "title": "Illustrative reference, not an actual publication",
+      "authors": "Synthetic",
+      "publication": "Demo",
+      "year": "2026",
+      "isIllustrativeDemo": true,
+      "note": "Do not generate a real DOI"
+    }
+  ],
+  "relatedIds": [],
+  "seo": {
+    "title": "Okuyucu uyumluluk örneği — noindex",
+    "description": "Synthetic test article for preview compatibility only",
+    "noindex": true
+  }
+}
