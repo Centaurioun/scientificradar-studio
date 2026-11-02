@@ -17,6 +17,36 @@ export interface HeadQualityFinding {
   recommendation: string;
 }
 
+/**
+ * Extracts only metadata tags from a pasted head/document as inert text.
+ * Unlike DOMParser, this never creates resource-bearing nodes or initiates fetches.
+ * This bounded metadata parser is advisory (NOT a browser/HTML sanitizer).
+ */
+export function extractHeadEntriesFromMarkup(markup: string): HeadEntry[] {
+  const head = /<head\b[^>]*>([\s\S]*?)<\/head\s*>/i.exec(markup)?.[1] || markup;
+  const matches = head.match(/<title\b[^>]*>[\s\S]*?<\/title\s*>|<(?:meta|link)\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi) || [];
+  const entities = (value: string) =>
+    value.replace(/&amp;/gi, '&').replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'");
+  return matches.map((markupTag): HeadEntry => {
+    const tag = /^<\s*([a-z]+)/i.exec(markupTag)?.[1]?.toLowerCase() || '';
+    if (tag === 'title') {
+      return {
+        tag,
+        attributes: {},
+        text: entities(/<title\b[^>]*>([\s\S]*?)<\/title\s*>/i.exec(markupTag)?.[1] || ''),
+      };
+    }
+    const attributes: Record<string, string> = {};
+    const rawAttributes = markupTag.replace(/^<\s*(?:meta|link)\b/i, '').replace(/\/?>$/, '');
+    const pattern = /([^\s=\/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(rawAttributes))) {
+      attributes[match[1].toLowerCase()] = entities(match[2] ?? match[3] ?? match[4] ?? '');
+    }
+    return { tag, attributes };
+  });
+}
+
 export function inspectHeadEntries(
   entries: readonly HeadEntry[],
   pageUrl = ''
