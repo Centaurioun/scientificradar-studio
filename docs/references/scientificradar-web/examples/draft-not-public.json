@@ -1,0 +1,54 @@
+{
+  "contractVersion": "1.0.0",
+  "articleId": "ref-private-draft-001",
+  "revisionId": "rev-ref-private-v1",
+  "revisionNumber": 1,
+  "slug": "never-publish-this-preview",
+  "locale": "en",
+  "translationGroupId": "tg-reference-example-v1",
+  "editorialType": "explainer",
+  "status": "draft",
+  "title": "Illustrative Scientific Article — Reader Compatibility",
+  "dek": "Synthetic test content for typography, math and references.",
+  "summary": "This is a synthetic fixture, not a real scientific finding.",
+  "categorySlug": "biology",
+  "subcategorySlugs": [],
+  "tagSlugs": [
+    "fixture"
+  ],
+  "authorIds": [
+    "author-fixture-001"
+  ],
+  "authors": [
+    {
+      "id": "author-fixture-001",
+      "name": "Illustrative Test Author",
+      "role": "Demo author",
+      "credentialsNote": "Synthetic fixture only",
+      "bio": "No real identity",
+      "isDemoPersona": true
+    }
+  ],
+  "publishedAt": "2026-11-03T00:00:00.000Z",
+  "readingTimeMinutes": 2,
+  "blocks": [],
+  "bodyHtml": "<h2>Test section</h2><p>This is a <strong>synthetic</strong> paragraph with <em>emphasis</em>, H<sub>2</sub>O, 10<sup>2</sup> and <sup data-citation-source-id=\"src-illustrative\">[1]</sup>.</p><h3>Formula</h3><div data-math-tex=\"E = mc^2\" data-math-display=\"block\"></div><table><caption>Illustrative measurements</caption><thead><tr><th>Item</th><th>Value</th></tr></thead><tbody><tr><td>A</td><td>1</td></tr></tbody></table>",
+  "sources": [
+    {
+      "id": "src-illustrative",
+      "label": "1",
+      "title": "Illustrative reference, not an actual publication",
+      "authors": "Synthetic",
+      "publication": "Demo",
+      "year": "2026",
+      "isIllustrativeDemo": true,
+      "note": "Do not generate a real DOI"
+    }
+  ],
+  "relatedIds": [],
+  "seo": {
+    "title": "Reader compatibility fixture — noindex",
+    "description": "Synthetic test article for preview compatibility only",
+    "noindex": true
+  }
+}
