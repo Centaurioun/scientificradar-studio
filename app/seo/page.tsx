@@ -18,6 +18,7 @@ import { useStudio } from '@/lib/studio-context';
 import { runArticleAudit } from '@/lib/audit/run-article-audit';
 import { AuditStatusBadge } from '@/components/audit/audit-status';
 import { LocalizedDate } from '@/components/datetime/localized-date';
+import { HeadQualityInspector } from '@/components/audit/head-quality-inspector';
 
 export default function SeoCenterPage() {
   const {
@@ -184,6 +185,8 @@ export default function SeoCenterPage() {
             robots: noindex, nofollow
           </span>
         </div>
+
+        <HeadQualityInspector />
 
         {auditBanner && (
           <div
