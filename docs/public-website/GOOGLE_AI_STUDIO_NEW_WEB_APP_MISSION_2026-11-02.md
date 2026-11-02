@@ -1,10 +1,10 @@
-# Google AI Studio — ScientificRadar Web: New Standalone Reader Website v1
+# Google AI Studio — ScientificRadar Web: New Standalone Reader Website v1.1 — evidence-informed
 
 **Date:** 2026-11-02
 **Mode:** NEW Google AI Studio Build app, NOT existing ScientificRadar Studio.
 **Goal:** A polished working, responsive, browser-testable ScientificRadar public website first version (with honest isolated demo data until Studio publishing is connected).
-**Primary spec:** Attached file SCIENTIFICRADAR_PUBLIC_WEBSITE_DESIGN_BLUEPRINT_2026-11-02.md, version 2.0, sourced from docs/public-website/ in the existing Studio repository.
-**Future GitHub repository:** Centaurioun/scientificradar-web (new, separate; owner will connect when ready).
+**Primary spec:** Attached file SCIENTIFICRADAR_PUBLIC_WEBSITE_DESIGN_BLUEPRINT_2026-11-02.md, version 2.1, sourced from docs/public-website/ in the existing Studio repository.
+**GitHub export:** Use Google AI Studio's supported NEW repository creation/sync workflow and verify the actual resulting URL; proposed name Centaurioun/scientificradar-web. NEVER point this app at the existing Studio repository.
 
 ## 0. Source and access gate
 
@@ -63,7 +63,7 @@ Run the available lockfile install, typecheck, lint, build and browser tests; re
 
 Provide at least one first-pass visual design that can be revised through AI Studio annotations. Maintain central design tokens for easy later owner adjustments.
 
-Required project report: docs/WEBSITE_PROTOTYPE_AUDIT.md in the NEW app. Include run commands, design decisions, known limitations, browser test matrix, font delivery mode, image licensing, SEO/SSR status and screenshots/evidence.
+Required project report: docs/WEBSITE_BUILD_AUDIT.md in the NEW app. Include run commands, design decisions, known limitations, browser test matrix, font delivery mode, image licensing, SEO/SSR status and screenshots/evidence.
 
 ## 6. Acceptance and safe sync
 
@@ -152,7 +152,7 @@ Use practical equivalents in a Vite/React preview. The public website should hav
 | WEB-11 | No HTML/JavaScript errors at desktop/tablet/mobile; screenshot review for visual hierarchy |
 | WEB-12 | Safe noindex/preview semantics, separate new app, no live services or Studio writes |
 
-For each test write observed PASS, FAIL, PARTIAL, SKIPPED and evidence details into docs/WEBSITE_PROTOTYPE_AUDIT.md; don't merely enumerate planned tests.
+For each test write observed PASS, FAIL, PARTIAL, SKIPPED and evidence details into docs/WEBSITE_BUILD_AUDIT.md; don't merely enumerate planned tests.
 
 ## 10. Six-cycle iterative refinement (run on the ACTUAL new build)
 
@@ -168,7 +168,7 @@ This is not permission to claim a six-cycle PASS without a documented test run a
 
 ## 11. Delivery gate and order of operations
 
-1. Read the BLUEPRINT v2.0 and this mission fully.
+1. Read the BLUEPRINT v2.1 and this mission fully.
 2. Read Codex forensic reports if supplied (measurements are evidence, not authority to copy reference code).
 3. Implement the entire feasible new site in AI Studio sandbox.
 4. Run six cycles and actual browser verification.
@@ -178,4 +178,37 @@ This is not permission to claim a six-cycle PASS without a documented test run a
 8. Stop before public deployment or production integration, awaiting later owner decision.
 
 The desired end state is a usable public-facing website version for design evaluation with honest demo data, separate from the existing running editorial CMS.
+
+---
+
+## 12. Final research handoff and non-negotiable correction (2026-11-02)
+
+Reference research **completed** in the existing ScientificRadar Studio repo at commit 690e2fc8a0f9d5cb6f0e254ee5650f5762637250, folder docs/public-website/reference-audit/2026-11-02/technical-deep-dive/. The attached blueprint **v2.1**, section 15, includes a concise evidence-aware digest; do not require direct GitHub access to all ten research files to build the new app. If those detailed Markdown/CSV files are attached as well, treat them as optional supporting evidence, not higher priority than owner decisions.
+
+### Mandatory reading and input ordering
+
+1. Read full owner-approved blueprint v2.1.
+2. Read full mission v1.1.
+3. Analyze the owner's Knowable homepage screenshot, Knowable article screenshot and Quanta article screenshot **if actually attached in THIS new AI Studio chat**. They are visual references, NOT website assets. If unavailable, use the written spec and disclose the gap, rather than pretending they were read.
+4. Use measured Quanta facts from blueprint §15: desktop prose 560px, centered region 688px, optional side rails, mobile 350px prose and 20px gutters, responsive change between 540 and 600px, 320px stress overflow on reference. These are observations of ONE Quanta route, not mandatory ScientificRadar settings.
+5. Knowable could not be inspected live due to Cloudflare HTTP 403. DO NOT invent its actual measured CSS or menu behavior; translate user-provided screenshots and design decisions into original ScientificRadar components.
+
+### Technical success criteria refined by evidence
+
+- Keep original ScientificRadar branding and high-quality Knowable-led magazine homepage, not a copied source site or a generic dashboard. **Never display the term "Prototype" as the public site brand or permanent giant banner.**
+- Implement article reader with owner-selected Merriweather + Inter, initially 700px text measure and a simple internal 600px screenshot comparison (the reference's 560px is an optional benchmark). Let wide figures exceed text measure without breaking grid/overflow.
+- HTML semantics: main > article, exactly one H1, natural heading order, semantic figures/captions, author/date when genuinely supplied, safe bibliographic links and no fabricated DOI or license.
+- Navigation: real category link plus adjacent chevron disclosure, proper Escape/Tab/focus, keyboard/mobile. The Quanta reference menu did not close on Escape in the tested sequence: DO NOT copy that failure.
+- Test viewport 1440x900, 1024x768, 390x844 and **320x700**, explicitly computing document scrollWidth versus viewport and identifying any overflow rather than hiding it globally.
+- Preserve scientific content future-compatibility: Studio published snapshots will include canonical sanitized HTML, citation source IDs, figure IDs/media rights, TeX, tables and code. A simplified text-only mock article block type is fine for a design demo but MUST NOT be represented as a lossless Studio serializer. Keep a dedicated future adapter boundary, never implement an imaginary live CMS API.
+- Implemented code must be runnable, linted, typechecked and browser-tested; Codex code snippets are illustrative and have NOT been tested as a complete implementation. If unable to run a browser or full Next.js under AI Studio sandbox, state which tests were NOT executed and why.
+- Do not depend on being able to live-browse Knowable. Stop further third-party reverse engineering and build the original app now.
+
+### Audit output and user-facing delivery
+
+Create docs/WEBSITE_BUILD_AUDIT.md in the NEW website repository, with a transparent matrix of actual browser-tested route/interactions, screenshots, font network behavior, original media licensing, SEO/demo status, P0/P1 completeness, six implementation review cycles, known limitations and exact commands. It replaces an older audit filename that included the word prototype.
+
+Let Google AI Studio create a **new** GitHub repository through its native flow if available, using proposed name ScientificRadar Web / scientificradar-web. Check resulting owner and exact URL; verify post-export commit. Keep all original Studio code unchanged. Do not deploy to the public scientificradar.com domain, Cloudflare services or live storage. The owner will review layout, typography and reading widths before later integration.
+
+**End state: a functional reader website first version with original visual identity and clearly isolated demonstration data — not a documentation-only report, not an admin-panel rewrite, not a production publishing integration.**
 
