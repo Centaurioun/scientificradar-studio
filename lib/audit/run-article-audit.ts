@@ -437,6 +437,58 @@ export function runArticleAudit(params: RunArticleAuditParams): AuditReport {
     });
   }
 
+  // Advisory planned canonical metadata validation. This is input validation only:
+  // it does NOT inspect or certify the public website's rendered HTML/head.
+  const plannedCanonical = (article.seo?.canonical || '').trim();
+  let canonicalSyntaxValid = false;
+  if (plannedCanonical) {
+    try {
+      const parsed = new URL(plannedCanonical);
+      canonicalSyntaxValid =
+        parsed.protocol === 'https:' &&
+        Boolean(parsed.hostname) &&
+        !parsed.username &&
+        !parsed.password &&
+        !parsed.hash;
+    } catch {
+      canonicalSyntaxValid = false;
+    }
+  }
+  const sharedCanonical = plannedCanonical && allArticles.find(
+    (other) =>
+      other.id !== article.id &&
+      (other.seo?.canonical || '').trim().toLowerCase() === plannedCanonical.toLowerCase()
+  );
+  findings.push({
+    id: 'metadata.canonical.planned',
+    category: 'metadata',
+    status: !plannedCanonical || !canonicalSyntaxValid || sharedCanonical ? 'warning' : 'pass',
+    title: 'Planned Canonical URL (Editorial Input Only)',
+    description:
+      'Validates the proposed canonical field, not live HTML output. Production canonical rendering and redirects are unverified until a public publishing adapter exists.',
+    observed: !plannedCanonical
+      ? 'No canonical specified; the public renderer must choose the final published URL.'
+      : !canonicalSyntaxValid
+      ? 'Canonical must be an absolute HTTPS URL with no credentials or fragment.'
+      : sharedCanonical
+      ? 'Same canonical is assigned to another article: ' + sharedCanonical.title
+      : 'Valid proposed HTTPS canonical: ' + plannedCanonical,
+    recommendation: !plannedCanonical
+      ? 'Confirm the final public URL at publishing integration time; do not invent a production canonical in this prototype.'
+      : !canonicalSyntaxValid
+      ? 'Enter the intended absolute HTTPS URL without fragments or credentials.'
+      : sharedCanonical
+      ? 'Review the two articles and only share a canonical if this is an intentional duplicate-content relationship.'
+      : undefined,
+    fieldPath: 'seo.canonical',
+    inspectorTab: 'seo',
+    checkOrigin: 'local',
+    verifiedAt: executedAt,
+    canQuickFix: false,
+    canSuggestWithAI: false,
+    isPublicationBlocker: false,
+  });
+
   // 11. metadata.slug.valid
   const rawSlug = (article.slug || '').trim();
   const normalizedSlug = slugify(rawSlug);
