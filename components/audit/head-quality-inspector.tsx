@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { inspectHeadEntries, type HeadEntry, type HeadQualityFinding } from '@/lib/seo/head-quality';
+import { extractHeadEntriesFromMarkup, inspectHeadEntries, type HeadQualityFinding } from '@/lib/seo/head-quality';
 
 /**
  * Local-only inspection of pasted rendered markup; no requests or persistence.
@@ -16,13 +16,7 @@ export function HeadQualityInspector() {
 
   const inspect = () => {
     if (!markup.trim()) return;
-    // DOMParser yields an inert document; its contents are NEVER inserted into the page.
-    const document = new DOMParser().parseFromString(markup, 'text/html');
-    const entries: HeadEntry[] = Array.from(document.head.querySelectorAll('title, meta, link')).map((element) => ({
-      tag: element.tagName.toLowerCase(),
-      attributes: Object.fromEntries(Array.from(element.attributes).map((attribute) => [attribute.name, attribute.value])),
-      text: element.tagName.toLowerCase() === 'title' ? element.textContent || '' : undefined,
-    }));
+    const entries = extractHeadEntriesFromMarkup(markup);
     setTagCount(entries.length);
     setFindings(inspectHeadEntries(entries, pageUrl));
     setInspected(true);
