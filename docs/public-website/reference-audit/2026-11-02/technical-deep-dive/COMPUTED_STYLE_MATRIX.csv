@@ -1,0 +1,34 @@
+site,route_role,viewport_width,viewport_height,element,measured_width_px,measured_height_px,x_px,display,position,flex_direction,font_family,font_size_px,line_height_px,font_weight,horizontal_padding_px,notes,evidence
+Quanta,article,1440,900,.nav__inner,1229,80,105.5,block,relative,row,"Merriweather, Georgia, serif",16,27.2,400,0,Header inner region; 80px high,PW-2026-11-02
+Quanta,article,1440,900,.post__title,760,367.5,340,block,static,row,"Merriweather, Georgia, serif",40,0,400,0," ""Title wrapper max-width 760; vertical padding 64px 52px""",PW-2026-11-02
+Quanta,article,1440,900,h1,760,92,340,block,static,row,"Noe Display, Merriweather, Georgia, serif",40,46,700,0,One H1; measured content not reproduced,PW-2026-11-02
+Quanta,article,1440,900,.post__content,1160,1449.3,140,flex,relative,row,"Merriweather, Georgia, serif",16,0,400,0,Two 236px aside rails; center section 688px outer,PW-2026-11-02
+Quanta,article,1440,900,.js-router-anchors,688,1449.3,376,block,static,row,"Merriweather, Georgia, serif",16,0,400,64,560px inner prose width,PW-2026-11-02
+Quanta,article,1440,900,.js-router-anchors p,560,90,440,block,static,row,"Merriweather, Georgia, serif",16,30,400,0,30px bottom margin,PW-2026-11-02
+Quanta,article,1440,900,.js-router-anchors h2,560,30.8,440,block,static,row,"Merriweather, Georgia, serif",22,30.8,700,0,38.5px top and 19.25px bottom margins,PW-2026-11-02
+Quanta,article,1440,900,footer,1440,248.3,0,block,static,row,"Merriweather, Georgia, serif",16,27.2,400,0,Footer height,PW-2026-11-02
+Quanta,article,1024,768,.nav__inner,1024,80,0,block,relative,row,"Merriweather, Georgia, serif",16,27.2,400,0,Header inner fills viewport,PW-2026-11-02
+Quanta,article,1024,768,h1,760,92,132,block,static,row,"Noe Display, Merriweather, Georgia, serif",40,46,700,0,Title max-width retained,PW-2026-11-02
+Quanta,article,1024,768,.post__content,1024,1449.3,0,flex,relative,row,"Merriweather, Georgia, serif",16,0,400,0,Row mode at tablet width,PW-2026-11-02
+Quanta,article,1024,768,.js-router-anchors,688,1449.3,168,block,static,row,"Merriweather, Georgia, serif",16,0,400,64,560px inner prose width,PW-2026-11-02
+Quanta,article,1024,768,.js-router-anchors p,560,90,232,block,static,row,"Merriweather, Georgia, serif",16,30,400,0,30px bottom margin,PW-2026-11-02
+Quanta,article,1024,768,.js-router-anchors h2,560,30.8,232,block,static,row,"Merriweather, Georgia, serif",22,30.8,700,0,22px heading,PW-2026-11-02
+Quanta,article,1024,768,footer,1024,248.3,0,block,static,row,"Merriweather, Georgia, serif",16,27.2,400,0,Footer height,PW-2026-11-02
+Quanta,article,390,844,.nav__inner,390,60,0,block,relative,row,"Merriweather, Georgia, serif",16,27.2,400,0,Mobile header height 60px,PW-2026-11-02
+Quanta,article,390,844,h1,350,86.1,20,block,static,row,"Noe Display, Merriweather, Georgia, serif",24.96,28.704,700,0,20px page gutters,PW-2026-11-02
+Quanta,article,390,844,.post__content,390,2202.4,0,flex,relative,column,"Merriweather, Georgia, serif",16,0,400,0,Side rails display:none,PW-2026-11-02
+Quanta,article,390,844,.js-router-anchors,390,2202.4,0,block,static,row,"Merriweather, Georgia, serif",16,0,400,20,350px inner prose width,PW-2026-11-02
+Quanta,article,390,844,.js-router-anchors p,350,180,20,block,static,row,"Merriweather, Georgia, serif",16,30,400,0,30px bottom margin,PW-2026-11-02
+Quanta,article,390,844,.js-router-anchors h2,350,25.2,20,block,static,row,"Merriweather, Georgia, serif",18,25.2,700,0,31.5px top and 15.75px bottom margins,PW-2026-11-02
+Quanta,article,390,844,footer,390,542.5,0,block,static,row,"Merriweather, Georgia, serif",16,27.2,400,0,Footer reflows vertically,PW-2026-11-02
+Quanta,article,320,700,.nav__inner,320,60,0,block,relative,row,"Merriweather, Georgia, serif",16,27.2,400,0,Mobile header height 60px,PW-2026-11-02
+Quanta,article,320,700,h1,280,86.1,20,block,static,row,"Noe Display, Merriweather, Georgia, serif",24.96,28.704,700,0,20px page gutters,PW-2026-11-02
+Quanta,article,320,700,.post__content,320,2712.4,0,flex,relative,column,"Merriweather, Georgia, serif",16,0,400,0,Document scrollWidth 326px; 6px overflow,PW-2026-11-02
+Quanta,article,320,700,.js-router-anchors,320,2712.4,0,block,static,row,"Merriweather, Georgia, serif",16,0,400,20,280px inner prose width,PW-2026-11-02
+Quanta,article,320,700,.js-router-anchors p,280,210,20,block,static,row,"Merriweather, Georgia, serif",16,30,400,0,30px bottom margin,PW-2026-11-02
+Quanta,article,320,700,.js-router-anchors h2,280,25.2,20,block,static,row,"Merriweather, Georgia, serif",18,25.2,700,0,18px heading,PW-2026-11-02
+Quanta,article,320,700,footer,320,542.5,0,block,static,row,"Merriweather, Georgia, serif",16,27.2,400,0,Footer reflows vertically,PW-2026-11-02
+Knowable,homepage,1440,900,document,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown,403 Cloudflare verification; no layout measurement,REA ev_a0d911fb651a7d429d69dd5b2b8aac5dc37554af590b507f735bdc4e31a09a1a
+Quanta,article,1440,900,first figure,1440,792.7,0,block,static,row,"Merriweather, Georgia, serif",,,400,,First figure wrapper spans viewport; contains no img in inspected wrapper,PW-2026-11-02
+Quanta,article,390,844,first figure,390,339,0,block,static,row,"Merriweather, Georgia, serif",,,400,,First figure scales to viewport width; 30px top margin,PW-2026-11-02
+Quanta,article,320,700,first figure,320,321.1,0,block,static,row,"Merriweather, Georgia, serif",,,400,,Figure wrapper itself fits viewport; document overflow originates elsewhere,PW-2026-11-02
