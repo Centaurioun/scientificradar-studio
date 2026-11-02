@@ -16,7 +16,7 @@ These are REAL existing features. Do not build a second SEO dashboard or misrepr
 
 ## Gaps addressed in this PR
 
-1. Rendered Head Quality Inspector added inside existing \`/seo\`. Editors can paste output HTML of a **specific page** and optionally its original URL; browser DOMParser extracts inert head entries and local deterministic checks detect:
+1. Rendered Head Quality Inspector added inside existing \`/seo\`. Editors can paste output HTML of a **specific page** and optionally its original URL; a bounded inert-text parser extracts head entries and local deterministic checks detect:
    - Duplicate meta description, keywords, robots, Twitter title/description/card, Open Graph title/description/type/url.
    - Contradictory Open Graph page types, missing/duplicate/invalid canonical, canonical path/host mismatches.
    - Missing title/description, obsolete keywords and X-UA-Compatible declarations.
@@ -26,7 +26,7 @@ These are REAL existing features. Do not build a second SEO dashboard or misrepr
 2. Additional article-level *planned canonical* advisory warns when canonical input is blank, malformed, unsafe (non-HTTPS, credentials, fragment), or reused across another article. **It validates the editorial input, not emitted HTML.**
 3. Targeted \`bun test\`-style unit tests for old ScientificRadar duplicate meta head and article canonical cases.
 
-No pasted code is executed or rendered, sent to a server, or stored in IndexedDB. There is no live crawl. This is an advisory editor tool, NOT an HTML sanitizer or an automatic repair of current scientificradar.com.
+No pasted code is executed or rendered, sent to a server, or stored in IndexedDB. The parser does not construct a browser DOM, avoiding resource-loading side effects. It is a metadata inspection utility, not an HTML sanitizer or full HTML conformance validator. There is no live crawl. This is an advisory editor tool, NOT an HTML sanitizer or an automatic repair of current scientificradar.com.
 
 ## Still missing — separate, explicit production release gate
 
