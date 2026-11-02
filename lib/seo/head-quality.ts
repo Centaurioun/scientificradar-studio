@@ -46,6 +46,7 @@ export function inspectHeadEntries(
   for (const [key, matches] of [
     ['description', meta('description')],
     ['robots', meta('robots')],
+    ['keywords', meta('keywords')],
     ['twitter:card', meta('twitter:card')],
     ['twitter:title', meta('twitter:title')],
     ['twitter:description', meta('twitter:description')],
@@ -74,7 +75,7 @@ export function inspectHeadEntries(
       'Remove unused meta keywords; Google does not use this tag for ranking.');
   }
 
-  if (meta('http-equiv').length > 0 || entries.some((entry) =>
+  if (entries.some((entry) =>
     entry.tag.toLowerCase() === 'meta' && attr(entry, 'http-equiv').toLowerCase() === 'x-ua-compatible')) {
     add('head.legacy.compat', 'warning', 'Legacy browser compatibility metadata',
       'Detected a legacy http-equiv compatibility declaration.',
