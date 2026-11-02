@@ -1,16 +1,16 @@
 # ScientificRadar Public Website — Design, UX & Architecture Blueprint
 
-**Version:** 1.0 · 2026-11-02 (Europe/Istanbul)
+**Version:** 2.0 · 2026-11-02 (six-cycle expanded) (Europe/Istanbul)
 **Document owner:** ScientificRadar
 **Repository containing this decision record:** https://github.com/Centaurioun/scientificradar-studio
 **Project:** ScientificRadar Web — reader-facing website, separate from ScientificRadar Studio
-**Status:** Approved visual direction + proposed build defaults. This document is a SPECIFICATION, not an implementation certificate or production deployment authorization.
+**Status:** Owner-approved visual direction + implementation-level specification; Codex external-site forensic evidence pending. This document does not certify a built public site. This document is a SPECIFICATION, not an implementation certificate or production deployment authorization.
 
 ## 0. Executive decision
 
 Build an ORIGINAL, responsive, attractive public science magazine website, inspired principally by the visual language of Knowable Magazine, with selected long-read ideas from Quanta Magazine and accurate scientific metadata conventions from Nature.
 
-**First deliverable: a visual and interactive, locally working PROTOTYPE in a NEW Google AI Studio app and ultimately a SEPARATE GitHub repository, proposed name Centaurioun/scientificradar-web.** The existing ScientificRadar Studio application and its GitHub main MUST NOT be overwritten, imported wholesale, redeployed or restructured during the experiment.
+**First deliverable: a complete, responsive first-version website in a NEW Google AI Studio app and ultimately a SEPARATE GitHub repository, proposed name Centaurioun/scientificradar-web.** It can use honest fictional demo content until publication integration. Avoid a giant visible prototype banner or using 'prototype' as the public brand. The existing ScientificRadar Studio application and its GitHub main MUST NOT be overwritten, imported wholesale, redeployed or restructured during the experiment.
 
 Integrate the two apps in a separately accepted future phase through a controlled publishing/data interface. Studio's IndexedDB prototype does not automatically publish to a separate web application or server. Do not pretend it does.
 
@@ -87,7 +87,7 @@ Do not assume the AI Studio project automatically has access to screenshots prov
 
 ## 2. Product boundaries & stages
 
-### Stage A — public-facing visual prototype, NOW
+### Stage A — public-facing first-version website with isolated demo content, NOW
 - Create a fresh app named ScientificRadar Web, separate from existing ScientificRadar Studio.
 - Keep it light, with no CKEditor/Tiptap dependency and no monorepo/vendor-staging import.
 - Use static original demonstration data shaped like real content so navigation, article cards, filtering and reader pages actually work.
@@ -274,3 +274,192 @@ A public website should consume explicit, server-authorized published article sn
 - Next.js fonts: https://nextjs.org/docs/app/getting-started/fonts
 - Merriweather license/metadata: https://github.com/google/fonts/tree/main/ofl/merriweather
 - Studio architecture: https://github.com/Centaurioun/scientificradar-studio/blob/main/docs/SCIENTIFICRADAR_STUDIO_MASTER_SPEC.md
+
+---
+
+## 12. Implementation-ready design contract — version 2.0
+
+This appendix strengthens sections 0–11 without overruling the owner's aesthetic choices. Exact values are initial defaults, not irrevocable owner approvals. Centralize values as theme tokens rather than embedding them in components.
+
+### 12.1 Responsive geometry and composition
+
+| Region | Desktop >=1200px | Tablet 768–1199px | Mobile <=767px |
+| --- | --- | --- | --- |
+| Header | Centered original ScientificRadar wordmark, utilities and visible category row | Compact branding and selective nav collapse | Accessible compact header, menu toggle and search |
+| Home hero | Editorial large cover, headline contrast assured; compact variant supported | Scaled image, title remains legible | Full-bleed or inset crop with title BELOW image when overlay fails contrast |
+| Home cards | 3-column editorial grid | 2 columns | 1 column |
+| Reading page | 680–720px prose, centered or with a separate left/right rail OUTSIDE reading measure | Rail beneath body or collapsed | Full safe-width prose, no side rail |
+| Scientific figure | Natural flow or wider figure up to ~1100px; captions/rights | Fluid | Fluid; tables/code scroll independently |
+| Related cards | 3 columns | 2 | 1 |
+
+At 1440x900, 1024x768, 390x844 and a 320px stress width, verify that text, menus, tables, images and pagination are actually usable. Minimum body gutters ~16px; do not make sidebar widgets shrink the reading column.
+
+### 12.2 Component boundaries and behaviors
+
+Build small original reusable components: SiteHeader, PrimaryNavigation, CategoryDropdown, MobileMenu, LeadStory, EditorialCard, StoryCollection, ArticleHeader, ArticleReader, ScientificFigure, CitationList, AuthorProfile, RelatedStories, SearchResults, TopicsDirectory, Footer.
+
+Key UI contracts:
+- A category LABEL is a regular anchor to its category landing page. A SEPARATE chevron BUTTON toggles nested links. Hover may assist but never be required.
+- Menu toggle supports aria-expanded, aria-controls, keyboard Enter/Space, Escape, visible focus, outside click, focus return; submenu does not remain invisibly focusable.
+- The centered masthead is DISTINCT ScientificRadar branding. Do not reproduce Knowable's logo, brand stripe, image identity, card photography or category labels wholesale.
+- Use a generous but not permanently oversized first-story hero. Provide compact hero variant through a token/prop. High-contrast editorial text can appear on image only when verified; fallback text below image.
+- Empty image/metadata fields show graceful fallbacks rather than blank frames or fictitious credits. Card image area should have a consistent aspect ratio and alt text.
+- Category navigation, search, related stories and footer links must lead to real local routes; no dead interactive-looking elements.
+- Reusable article reading components preserve heading hierarchy and figure captions, source lists and DOI ONLY when real.
+
+### 12.3 Suggested tokens — all reviewable after screenshots
+
+| Token | Initial value | Purpose |
+| --- | --- | --- |
+| --sr-page-max | 1320px | Homepage and grids |
+| --sr-reading-max | 700px | Long-form body |
+| --sr-heading-max | 880px | Article title and dek |
+| --sr-figure-max | 1100px | Wide scientific artwork |
+| --sr-gutter | clamp(16px, 3vw, 40px) | Responsive outer padding |
+| --sr-body-size | clamp(17px, 1.3vw, 19px) | Long-read text |
+| --sr-prose-leading | 1.7 | Paragraph line-height |
+| --sr-paper | #FAFAF8 | Background |
+| --sr-ink | #181C21 | Body text |
+| --sr-accent | #15747B | Links and small accents |
+| --sr-rule | #DCE2E4 | Borders |
+
+Example CSS guidance for AI Studio (illustrative, not a demand to copy exact styling):
+
+    :root {
+      --sr-page-max: 1320px;
+      --sr-reading-max: 700px;
+      --sr-heading-max: 880px;
+      --sr-figure-max: 1100px;
+      --sr-gutter: clamp(16px, 3vw, 40px);
+      --sr-prose-leading: 1.7;
+    }
+    .site-container {
+      width: min(calc(100% - 2 * var(--sr-gutter)), var(--sr-page-max));
+      margin-inline: auto;
+    }
+    .article-prose {
+      width: 100%;
+      max-width: var(--sr-reading-max);
+      margin-inline: auto;
+      font-size: clamp(17px, 1.3vw, 19px);
+      line-height: var(--sr-prose-leading);
+    }
+    .article-prose :where(img, video, svg) { max-width: 100%; height: auto; }
+    .article-prose :where(pre, table) { max-width: 100%; overflow-x: auto; }
+
+Do not hardcode Merriweather into KaTeX/math typography. CSS theme tokens can evolve later through Studio's future website-settings publish workflow.
+
+### 12.4 Font-loading performance and rights
+
+- Merriweather Variable: prominent titles, H2/H3 and long-form article body; Inter Variable: menus, metadata, bylines, tags, form controls and figure credits.
+- Prefer Next.js next/font/local + checked-in licensed WOFF2 and OFL notice, or next/font/google that downloads during build and serves from same origin at runtime. Do not add third-party Google Fonts CSS calls at visitor runtime.
+- Load only required subsets/weights; confirm Turkish ı/İ, ğ/Ğ, ş/Ş and all English glyphs; test roman/italic and variable axis behavior.
+- Use font-display swap or a correctly measured fallback; document preload decisions and CLS effect. Do not blindly preload every variant.
+- No Cloudflare R2/font bucket needed. Use web host CDN/static cache and measure real delivery later. Never assert a performance win without tests.
+
+### 12.5 Data model and future API contract (NOT implemented during this phase)
+
+Proposed public content record fields: id, slug, locale, editorialType, publicationStatus, title, dek, excerpt, categorySlug, subcategorySlugs, tagSlugs, authors, publishedAt?, updatedAt?, hero? {src,alt,caption,credit,rightsVerified,license?}, bodyHtml or bodyBlocks, sources[] {id,title,url?,doi?}, relatedArticleIds[], seo?.
+
+Illustrative TypeScript interfaces for the separate reader website:
+
+    export type EditorialType = "news" | "feature" | "explainer" | "research-digest";
+    export type PublicationStatus = "demo" | "draft" | "published";
+    export interface PublicSource {
+      id: string; title: string; href?: string; doi?: string;
+    }
+    export interface PublicMedia {
+      src: string; alt: string; caption?: string; credit?: string;
+      rightsVerified: boolean; license?: string;
+    }
+    export interface PublicArticle {
+      id: string; slug: string; locale: "en" | "tr";
+      editorialType: EditorialType; status: PublicationStatus;
+      title: string; dek?: string; summary: string;
+      categorySlug: string; subcategorySlugs: string[]; tagSlugs: string[];
+      authorIds: string[]; publishedAt?: string; updatedAt?: string;
+      hero?: PublicMedia; bodyHtml?: string;
+      sources: PublicSource[]; relatedIds: string[];
+    }
+    export interface PublishedContentRepository {
+      listPublicArticles(options?: {
+        categorySlug?: string; query?: string; limit?: number;
+      }): Promise<PublicArticle[]>;
+      getPublicArticle(slug: string): Promise<PublicArticle | null>;
+    }
+
+Stage A should implement an in-memory typed fixture repository with ORIGINAL synthetic article examples, not direct IndexedDB access. Production must use a server-authenticated publishing pipeline and published snapshots; Studio's browser IndexedDB state is not a public server database. Any source or author metadata absent in the fixture MUST be omitted or explicitly labeled illustrative; never invent DOI, research outcome, author credentials or image license.
+
+Make a publication state distinction in future design: draft-only content must NEVER leak into public HTML, route lists, JSON bundles, structured data or sitemap. Unknown or unpublished slug -> not found. Handle missing media, invalid dates, orphan citations, no articles in category and long titles gracefully.
+
+### 12.6 Scientific content rendering invariants
+
+Current Studio uses canonical sanitized bodyHtml plus ProseMirror JSON. Reader website should ultimately consume a versioned PUBLISHED content snapshot with safe HTML or typed portable blocks, NOT mount editor engines. Preserve:
+- One visible H1 at article title surface, never another H1 in article body.
+- H2/H3 semantic hierarchy, inline and display TeX, KaTeX math rendering when truly integrated, figure IDs/captions/credit/rights, bibliography source identities, data-citation-source-id, footnotes, scientific table thead/tbody/th/caption, colspan/rowspan as allowed, and code indentation.
+- Stable sourceId/mediaId mapping, and no silent rewriting of citation targets.
+- Sanitized allowed HTML tags/attributes. Avoid unsafe direct HTML injection; DOMPurify or trusted server allowlisting must not strip science semantics.
+- If a citation source is missing, show an explicit conservative unavailable state, not a fabricated reference.
+- Good reading measure even around equations/figures; wide tables scroll separately at mobile width.
+
+This is a future integration contract, not a claim that the brand-new website is already connected to the CMS.
+
+### 12.7 SEO, indexing and share metadata
+
+**Stage A (demo content):** prevent preview indexing and production domain ownership, avoid real NewsArticle/Article schema claims for fictional content, use local route title/description where stack supports them, and do not assign the real scientificradar.com canonical prematurely.
+
+**Production later:** SSR/SSG/ISR strategy for public article/category pages, correct canonical/hreflang, Open Graph assets, sitemap/robots lifecycle, structured data consistent with real published article types and truthful dates, cache/revalidation on publish, and no leaked drafts.
+
+A React-only SPA can be a working first-version visual demo but DOES NOT by itself prove SEO-ready production architecture. Record that boundary explicitly if Google AI Studio sandbox cannot run Next.js.
+
+### 12.8 Performance, privacy, accessibility and media
+
+Production targets to MEASURE, not claim now: mobile LCP <=2.5s, CLS <=0.1 and INP <=200ms at 75th percentile. Keep hero compressed and correctly sized, prioritize true LCP image; lazy load only lower images. Use responsive WebP/AVIF where licensed; set intrinsic width/height to control layout shifts. Avoid unnecessary UI/animation dependencies. Same-origin static font caching, Lighthouse lab checks and real-user field measures later.
+
+Aim at WCAG 2.2 AA design: skip link, landmarks, semantic heading structure, focus-visible, meaningful alt, sufficient contrast, reduced-motion, 200/400% zoom and tested keyboard navigation. No fake audio playback, autoplay video, ad impression counts, subscribe completion or populated analytics. A newsletter demo must not accept and retain visitor email addresses without a real authorized service.
+
+Image rights: keep a source/permission ledger for every non-original media asset. The reference screenshots, source-page articles, logo and illustrations are ANALYSIS evidence and must never become public application assets by default.
+
+### 12.9 Browser test acceptance script
+
+For each first-pass version verify in actual browser (not only compile):
+1. At 1440x900: center masthead, active lead story, understandable first story grid without horizontal overflow.
+2. At 1024x768: category row does not overlap, hero flows, 2-column cards.
+3. At 390x844 and 320px stress: functional mobile menu, sane headings and figures, independent table overflow.
+4. Category label navigates; separate chevron opens submenu WITHOUT triggering navigation; Escape closes and restores focus; Tab/Enter/Space and click outside work.
+5. Search with query matching a demo title, uppercase/diacritic case and zero-result state; no fake spinner.
+6. Two separate >1000-word (where feasible) ORIGINAL sample reads, including paragraphs, H2/H3, at least one captioned scientific figure, source list, related articles and different image layouts.
+7. Unknown route shows 404; missing hero/media has legitimate fallback; credit not fabricated.
+8. Font loading via actual network panel: self-hosted files or explicitly documented build-time/fallback mode; Turkish characters render.
+9. Only one article H1; noindex demo correctly scoped; no fake published structured data.
+10. Lighthouse/mobile metrics reported only when actually measured, with environment, audit output and reproducible commands.
+
+Recommended artifacts in NEW web repository: docs/WEBSITE_PROTOTYPE_AUDIT.md, docs/design/DESIGN_TOKENS.md, docs/design/CONTENT_CONTRACT.md plus screenshots of the NEW original site. Do not place third-party reference screenshots into a public git repo without separate license review.
+
+## 13. Codex external-site research and evidence precedence
+
+A read-only reference investigation may be recorded at docs/public-website/reference-audit/2026-11-02/ under the EXISTING ScientificRadar Studio repository. Research may use REA with explicit browser permissions or Playwright/CDP fallback. Its purpose is to document OBSERVED structure, dimensions and interactions, not to acquire or reuse external source code/creative media.
+
+Precedence:
+1. Owner's final explicit decisions: Knowable-inspired homepage, Knowable/Quanta long read, Nature-like scientific metadata, Merriweather + Inter, separate app, no production changes.
+2. Evidence-backed, source-dated reference observations, clearly tagged as observed vs inferred.
+3. Proposed default tokens, further editable by owner.
+4. Implementation agent's decisions, logged as provisional.
+
+Codex should not modify the existing app or create a new website; it only writes evidence-based audit documents. A report in this folder is not automatically a design-approval decision.
+
+## 14. Six-cycle iterative refinement — document critique record
+
+The following are six SPECIFICATION critique passes, NOT actual browser tests or independent reviewer sign-off.
+
+| Cycle | Attack question | Gap identified | Repair |
+| --- | --- | --- | --- |
+| 1. Intent & identity | Will a generic magazine look like a copied Knowable site? | Inspiration not bounded | Exact role of Knowable homepage, Quanta long read and Nature semantics; original brand and licensed assets only |
+| 2. Navigation & experience | Are menus functional, accessible and distinct from category links? | One click surface for link+dropdown could conflict | Separate anchor + chevron; Escape, keyboard, mobile accordion, search, route tests |
+| 3. Readability & science | Do long scientific articles, tables, math and citations survive? | Layout mostly described visually | Explicit prose measure, wide figures, scientific HTML/metadata invariants and renderer contract |
+| 4. Architecture & publishing | Can Studio IndexedDB magically drive another app? | False assumption risk | Typed fixture adapter and later server-published snapshot contract; independent repository |
+| 5. Performance, rights & SEO | Would first version be fast, legal and truthful? | Insufficient asset/font/SSR distinctions | Same-origin fonts and rights ledger, demo noindex, meaningful tests, future SSR and CDN gates |
+| 6. Verification & handoff | Can an agent declare PASS after only a screenshot? | Weak evidence traceability | Concrete viewport routes, interaction matrix, console/network tests, audited results and REA provenance boundary |
+
+**No production deployment or CMS integration approval is implied by this design document.**
+
