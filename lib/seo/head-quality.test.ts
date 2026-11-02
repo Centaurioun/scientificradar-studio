@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { inspectHeadEntries, type HeadEntry } from './head-quality';
+import { extractHeadEntriesFromMarkup, inspectHeadEntries, type HeadEntry } from './head-quality';
 
 const m = (name: string, content: string): HeadEntry =>
   ({ tag: 'meta', attributes: { name, content } });
@@ -59,4 +59,19 @@ test('multiple og:image properties remain permitted (gallery images)', () => {
     p('og:image', 'https://scientificradar.com/b.png'),
     l('canonical', 'https://scientificradar.com/article'),
   ]), []);
+});
+
+test('pasted legacy HTML head is parsed as inert text with duplicate metadata preserved', () => {
+  const html = '<head><title>ScientificRadar</title>' +
+    '<meta name="description" content="One &amp; Two">' +
+    '<meta name="description" content="One &amp; Two">' +
+    '<meta property="og:type" content="article">' +
+    '<meta property="og:type" content="website">' +
+    '<link rel="canonical" href="https://scientificradar.com/"></head>' +
+    '<body><meta name="description" content="Out of head"></body>';
+  const entries = extractHeadEntriesFromMarkup(html);
+  assert.equal(entries.filter((entry) => entry.attributes.name === 'description').length, 2);
+  assert.ok(ids(entries).includes('head.duplicate.description'));
+  assert.ok(ids(entries).includes('head.og.type.conflict'));
+  assert.ok(!entries.some((entry) => entry.attributes.content === 'Out of head'));
 });
