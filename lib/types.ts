@@ -178,6 +178,14 @@ export interface KnowledgeLink {
 export type KnowledgeLinkRecord = KnowledgeLink;
 export type SourceRecord = ScientificSource;
 
+/** Independent rights decision; not a review of image accessibility text. */
+export interface MediaRightsApproval {
+  approved: boolean;
+  approvedBy: string;
+  approvedAt: string; // UTC ISO timestamp
+  evidenceRef: string; // durable evidence identifier
+}
+
 export interface MediaAsset {
   id: string;
   filename: string;
@@ -190,6 +198,7 @@ export interface MediaAsset {
   byteSize: number;
   altText: string;
   humanReviewedAlt?: boolean;
+  rightsApproval?: MediaRightsApproval;
   caption?: string;
   credit?: string;
   licence?: string;

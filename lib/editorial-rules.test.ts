@@ -354,6 +354,14 @@ test('runArticleAudit and evaluatePublishGate enforce v5 Scenario A (73/65 SEO t
       licence: 'CC BY 4.0',
       layout: 'locked',
       humanReviewedAlt: true,
+      // Explicit SYNTHETIC approval for the warning-only audit test.
+      // Production assets must require independently authenticated evidence.
+      rightsApproval: {
+        approved: true,
+        approvedBy: 'synthetic-test-reviewer',
+        approvedAt: '2026-10-30T10:00:00.000Z',
+        evidenceRef: 'synthetic:test-fixture-rights-evidence',
+      },
       createdAt: '2026-10-30T10:00:00Z',
     },
   ];

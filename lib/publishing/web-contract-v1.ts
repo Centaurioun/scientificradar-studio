@@ -247,6 +247,7 @@ export interface ValidateSnapshotOptions {
   enforceStrictStudioPrePublish?: boolean;
 }
 
+/** Transport description only: caller supplied fields are NEVER trusted by Studio. */
 export interface PublicationAuthorizationReceipt {
   receiptId: string;
   authorizedByActor: string;
@@ -1385,17 +1386,13 @@ export function mapStudioStatusToWebStatus(
   studioStatus: Article['status'],
   authorizationReceipt?: PublicationAuthorizationReceipt
 ): PublicationStatus {
-  const isAuthorizedPublicRelease = Boolean(
-    authorizationReceipt &&
-      authorizationReceipt.serverVerified === true &&
-      typeof authorizationReceipt.receiptId === 'string' &&
-      authorizationReceipt.receiptId.trim().length > 0
-  );
-
+  // A caller can forge serverVerified and receiptId. Only an authenticated
+  // backend can authorize a public revision (outside this Studio prototype).
+  void authorizationReceipt;
   switch (studioStatus) {
     case 'published':
     case 'approved':
-      return isAuthorizedPublicRelease ? 'published' : 'in_review';
+      return 'in_review';
     case 'in_review':
     case 'revision_requested':
       return 'in_review';
@@ -1411,18 +1408,17 @@ export function mapStudioStatusToWebStatus(
 }
 
 export function deriveMediaRightsVerified(asset: StudioMediaAsset): boolean {
-  const hasAlt =
-    typeof asset.altText === 'string' && asset.altText.trim().length >= 5;
-  const hasCredit =
-    typeof asset.credit === 'string' &&
-    asset.credit.trim().length > 0 &&
-    !/unverified|unknown|tbd|pending/i.test(asset.credit);
-  const hasLicense =
-    typeof asset.licence === 'string' &&
-    asset.licence.trim().length > 0 &&
-    !/unverified|unknown|tbd|pending/i.test(asset.licence);
+  const approval = asset.rightsApproval;
+  const at = typeof approval?.approvedAt === 'string' ? approval.approvedAt : '';
+  const parsed = new Date(at);
   return Boolean(
-    hasAlt && hasCredit && hasLicense && asset.humanReviewedAlt !== false
+    typeof asset.credit === 'string' && asset.credit.trim() &&
+    typeof asset.licence === 'string' && asset.licence.trim() &&
+    approval?.approved === true &&
+    typeof approval.approvedBy === 'string' && approval.approvedBy.trim() &&
+    typeof approval.evidenceRef === 'string' && approval.evidenceRef.trim() &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(at) &&
+    !Number.isNaN(parsed.getTime()) && parsed.toISOString() === at
   );
 }
 
@@ -1584,7 +1580,8 @@ export function serializeStudioArticleToSnapshotV1(
   const cleanTitle = stripHtmlTags(article.title);
   const cleanSummary = stripHtmlTags(article.summary);
   const cleanDek = stripHtmlTags(article.dek || article.summary);
-  const canonicalUrl = `https://scientificradar.com/${article.locale}/${primaryCat.slug}/${article.slug}`;
+  // Verified Web route is /article/[slug], not /{locale}/{category}/{slug}.
+  const canonicalUrl = `https://scientificradar.com/article/${encodeURIComponent(article.slug)}`;
 
   const snapshot: PublishedSnapshotRecordV1 = {
     contractVersion: PUBLICATION_CONTRACT_VERSION,
