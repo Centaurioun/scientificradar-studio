@@ -14,6 +14,7 @@ Kaynak: `origin/main` `057986ec4b6a2241c8210fa42eafda46ec49588f`; bulgular yerel
 | SRS-UX-08 | P2 | Yol ipucu tutarsızlığı | Doğrulandı | Slug / SEO preview | UI locale-prefixed örnek gösteriyor, Web canonical `/article/[slug]`; uzun slug kaybolduğu kanıtlanmadı. |
 | SRS-UX-09 | P2 | Prototype sınırlaması ve label | Davranış bilerek disconnected; label beklentisi kusurlu | Provider integrations | “Test Connection” yerel UI state değiştiriyor, network çağrısı yapmıyor ve bunu açıklıyor. Güvenlik açığı gözlenmedi. |
 | SRS-UX-10 | P2 / takip testi | Kanıt yetersiz | Bu turda üretilmedi | Bilimsel tablo dar ekranı | X-scroll sarmalayıcı var, fakat geniş tablo mobilde doğrulanmadı. |
+| SRS-UX-11 | P2 | Yeni canlı bulgu | Doğrulandı | Draft Reader Preview | Editör `DRAFT · V5` derken Reader Preview “Published Nov 3, 2026” tarihi gösteriyor; draft için yayın tarihi dili yanıltıcı. |
 | SRS-QA-01 | N/A | Test yürütme geçmişi | Sonraki tekrar tamamlandı | Playwright | Önceki süreç 35 pass çıktısından sonra Ctrl-C/130 ile sonlandı; yeni tekrar 35/35, exit 0. |
 
 ## Sınıflandırma
@@ -22,7 +23,9 @@ Kaynak: `origin/main` `057986ec4b6a2241c8210fa42eafda46ec49588f`; bulgular yerel
 - **Doğrulanmayan:** bu turda örnek veri veya test kapsamı ispat için yeterli değildi; varsayımla kusur yazılmadı.
 - **Eksik özellik:** istenen iş akışı/alan mevcut ürün yüzeyinde yok; mevcut güvenlik politikası veya kod hatası olduğu anlamına gelmez.
 - **Bilinçli prototip kısıtı:** dış sağlayıcı, auth/credential veya gerçek üretim servisi henüz yok; bu denetimde bunlar eklenmedi.
-- **Kısmi kapsam:** gövde editörü alt/üst indis desteklediği için “uygulamada hiç sub/sup yok” iddiası reddedildi; metadata alanları ayrıştırıldı.
+- **Kısmi kapsam:** LaTeX composer küçük bir inline örnekte preview oluşturdu; Tiptap/CKEditor geçişinde 4×4 QA tablo ve caption bu örnekte korundu. Bu, formül/citation/figure içerik sadakatinin tümüne genellenmedi.
+- **Canlı metadata:** Unicode semboller plain text olarak title/summary/table caption'da görüldü. Otomatik slug bu başlık için sayısal alt/üst indis karakterlerini düşürdü (`CO₂→co`, `CH₄→ch`, `H₂O→ho`, `Fe³⁺→fe`, `Ca²⁺→ca`, `x²→x`).
+- **Prototype sınırı:** Test Connection butonu yerel `no credentials or external endpoints configured` feedback'i verdi. Bu gerçek provider testi değildir; kart metni P0 sınırını açıkça anlatır.
 
 ## Altı çevrimli bağımsız inceleme
 
@@ -32,6 +35,10 @@ Kaynak: `origin/main` `057986ec4b6a2241c8210fa42eafda46ec49588f`; bulgular yerel
 4. **Haklar ve entegrasyon güvenlik sınırı:** hak modeli, fail-closed export kapısı, editör findings yönlendirmesi ve gerçek inspector tab/field listesi karşılaştırıldı. Provider buton davranışı ve network/credential yüzeyi incelendi; test için sır veya canlı endpoint kullanılmadı.
 5. **Uyumluluk/yanlış pozitif kontrolü:** IndexedDB/prototip sınırları, public sözleşme route'u, mevcut overflow wrappers ve Playwright test kapsamı incelendi. Gerçek telefon görünümü düzgün olduğu için mobil okuyucu geneline kusur atfedilmedi; provider yokluğu security breach olarak etiketlenmedi.
 6. **Adversarial son okuma:** her sonuç için kanıt/karşı kanıt, doğrulanmış/eksik/prototip ayrımı ve test sınırı kontrol edildi. Önceki Ctrl-C ile biten E2E çalışması pass kabul edilmedi; yeni bağımsız tekrar exit 0 ile tamamlandı.
+
+## Canlı Brave eklentisi
+
+`BRAVE_LIVE_INTERACTION_AUDIT.md`, `RESPONSIVE_VIEWPORT_MATRIX.md`, `FULL_NAVIGATION_COVERAGE.md`, `SCIENTIFIC_EDITOR_FUNCTIONAL_MATRIX.md` ve `CONFIRMED_DEFECTS_AND_FIX_RECOMMENDATIONS.md` aynı gün yapılan görünür Brave etkileşimlerini, yeni P2 bulgu SRS-UX-11'i ve kapsam sınırlarını ayrıntılandırır. QA-only taslak `[QA TEMP]` kaydı mevcut lokal IndexedDB'de bırakıldı; kalıcı silmenin recoverable davranışı doğrulanmadığı için silinmedi.
 
 ## Yerel doğrulama
 
