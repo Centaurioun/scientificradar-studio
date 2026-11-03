@@ -25,6 +25,8 @@ Tarih: 2026-11-03. Bu, görünür Brave'de gerçek Studio localhost sekmesinde y
 | Mobile (390px) | 1440 / 1440 | `220px 0px 220px` | **P0 tekrar üretildi: orta kolon sıfır, makale gövdesi kullanılmaz** |
 | 320px | 1440 / 1440 | `220px 0px 220px` | **P0 tekrar üretildi: orta kolon sıfır** |
 
+Kullanıcının verdiği mevcut yayımlanmış makale appshot'ı aynı route/state üzerinde yeniden denendi (outer browser 2520 CSS px, internal Mobile 390). `article` 308px idi; H1 ve standfirst normale yakın wrap etti, fakat `article-prose` ve ilk body paragraph 0px idi. Body paragraf yüksekliği 12,088px ölçüldü. Böylece `H1` ölçümü tek başına layout sağlıklı sanısı veriyor; body içeriği ve gerçek prose genişliği ayrıca ölçülmeli.
+
 ## Yorum ve öneri
 
 Gerçek telefon viewport'u responsive media query'leri çalıştırıp tek kolona düşüyor; masaüstünde dar bir element olarak preview edilen okuyucuda viewport breakpoint'leri host pencereyi görüp yan panelleri açık bırakıyor. Sadece CSS `max-width:390px` iframe/element genişliğini temsil etmiyor. Sabit simülatör çerçevesi/iframe ile izole viewport en doğru seçenek: medya query'leri gerçek okuyucu penceresinin ölçüsüne göre hesaplanır; admin panel CSS'siyle okuyucu CSS'si ayrılır. Alternatif container query, yalnız reader bileşenleri bu sorgulara göre yeniden düzenlenirse aynı sonucu daha hafif DOM'la verir ama mevcut viewport temelli stillerin kapsamlı dönüşümünü gerektirir. Öneri: önce isolated iframe/preview document, yükseklik ve viewport senkronu; ikinci seçenekse container-query tabanlı responsive reader refactor + snapshot/visual regression.

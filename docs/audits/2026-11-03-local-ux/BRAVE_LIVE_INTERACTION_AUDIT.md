@@ -59,6 +59,12 @@ Test makalesinde mevcut seed medyası kullanıldı. Publish (Demo) kapısı “L
 | 1440×900 | 0px | `220px 0px 220px` | 492px | Orta kolon sıfır; reader kırılıyor |
 | 1920×1080 | 0px | `220px 0px 220px` | 492px | Orta kolon sıfır; reader kırılıyor |
 
+### Kullanıcının verdiği yayımlanmış makale üzerinde ek repro
+
+Kullanıcının paylaştığı Brave appshot'taki mevcut route (`/articles/art-quantum-repeater/edit`) ve yayımlanmış “Heralded Quantum Entanglement…” makalesiyle, QA taslağından bağımsız olarak canlı Brave'de tekrar denendi. Outer browser viewport yaklaşık 2520 CSS px, Reader Preview iç mod Mobile 390 seçiliydi. `article` genişliği 308px ve H1/standfirst sarmalaması normal görünürken, reader body grid `220px 0px 220px` üretti; `.article-prose` ve ilk gerçek body paragrafının genişliği 0px idi. İlk paragraf yüksekliği 12,088px, başlık bölümleri 1,389–1,973px yüksekliğe çıktı. Ekran görüntüsündeki harf harf dikey makale gövdesi bu DOM ölçümleriyle doğrulandı. Bu, P0'u yalnız `[QA TEMP]` içeriğine bağlı olmaktan çıkarır ve gerçek seeded yayımlanmış örnekte de doğrular.
+
+User appshot kendi içinde gerçek görsel kanıttır; browser chrome/tab listesini taşıdığından bu içerik PR'a kopyalanmadı. Benim ölçümüm görünür Brave'deki aynı route ve state üzerinde alındı. Mevcut `evidence/embedded-preview-390-body.png` makale gövdesinin sıfır kolon problemine ait önceki audit ekranını gösterir.
+
 Sayfa scrollWidth'ünün viewport ile aynı kalması embedded okuyucunun çalıştığını göstermez: problem iç grid'in orta kolonunun 0 px olmasıdır. Gerçek 390 ve 320 viewport'ları ile masaüstü içinde 390 px simüle edilmiş reader farklı sonuç verdi. Bu gözlem SRS-UX-01'i ekrandan yeniden doğrular. Tablet gerçek viewport'u da genel overflow üretmedi fakat 768/1024'te merkez içerik okunabilir genişliğe ulaşmadı.
 
 Article listesinde masaüstü gerçek DOM ölçümü: tablo 1359px, yatay scroll container 1136px (1440px browser, sidebar ve sayfa padding'i sonrası). Tablo kendi kabında yatay kayıyor ve document overflow üretmiyor; dashboard'ın 320px overflow bulgusundan ayrı tutulmalıdır. Birçok uzun tablo hücresine `whitespace-nowrap` uygulanmış olduğundan mobilde onlarca sütuna eşdeğer yatay gezinme yükü oluşur. Öneri: geniş desktop'ta kullanılabilir alanı kullan, orta ölçekte öncelikli kolonlar + ikincil detay, mobilde taranabilir kart/accordion sun; DOI rozeti yalnız gerçek DOI metadata sayıyorsa DOI diye etiketlensin.
