@@ -31,12 +31,26 @@ export type SourceVerificationStatus =
   | 'needs_review'
   | 'broken_url';
 
+export type EditorialArticleType = 'news' | 'feature' | 'explainer' | 'research-digest';
+
+export interface LegacyArticleProvenance {
+  legacyId: string;
+  legacyUrlPath: string;
+  importedAt: string;
+  sourceSystem: string;
+  redirectRequired?: boolean;
+}
+
 export interface Article {
   id: string;
   locale: Locale;
   title: string;
   slug: string;
+  dek?: string; // Explicit Web standfirst / subheadline; falls back to summary when omitted
   summary: string;
+  editorialType?: EditorialArticleType;
+  translationGroupId?: string;
+  legacyProvenance?: LegacyArticleProvenance;
   body: Record<string, unknown>; // Tiptap JSON
   bodyHtml: string; // Sanitized HTML representation for fast preview/search
   status: ArticleStatus;

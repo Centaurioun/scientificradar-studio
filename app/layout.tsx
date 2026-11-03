@@ -1,8 +1,23 @@
 import type { Metadata } from 'next';
+import { Inter, Merriweather } from 'next/font/google';
 import 'ckeditor5/ckeditor5.css';
 import 'katex/dist/katex.min.css';
 import './globals.css';
 import { StudioProvider } from '@/lib/studio-context';
+
+const inter = Inter({
+  subsets: ['latin', 'latin-ext'],
+  variable: '--font-interface',
+  display: 'swap',
+});
+
+const merriweather = Merriweather({
+  subsets: ['latin', 'latin-ext'],
+  weight: ['400', '700'],
+  style: ['normal', 'italic'],
+  variable: '--font-editorial',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'ScientificRadar Studio — Editorial CMS Prototype',
@@ -28,7 +43,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${inter.variable} ${merriweather.variable}`}
+    >
       <body suppressHydrationWarning className="antialiased">
         <StudioProvider>{children}</StudioProvider>
       </body>

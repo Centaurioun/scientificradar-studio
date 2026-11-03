@@ -785,6 +785,36 @@ export function runArticleAudit(params: RunArticleAuditParams): AuditReport {
       canSuggestWithAI: false,
       isPublicationBlocker: false,
     });
+
+    const hasCredit =
+      Boolean(featuredAsset.credit?.trim()) &&
+      !/unverified|unknown|tbd|pending/i.test(featuredAsset.credit || '');
+    const hasLicence =
+      Boolean(featuredAsset.licence?.trim()) &&
+      !/unverified|unknown|tbd|pending/i.test(featuredAsset.licence || '');
+    const rightsVerified = hasCredit && hasLicence;
+    findings.push({
+      id: 'images.rights.verified',
+      category: 'images',
+      status: rightsVerified ? 'pass' : 'warning',
+      title: 'Figure Attribution Credit & License (Web Contract v1.0.0)',
+      description:
+        'ScientificRadar Web Contract v1.0.0 requires non-empty credit and license attribution on every published figure.',
+      observed: rightsVerified
+        ? `Credit: "${featuredAsset.credit}" · License: "${featuredAsset.licence}"`
+        : `Missing or unverified credit/license (Credit: "${featuredAsset.credit || 'none'}", License: "${featuredAsset.licence || 'none'}")`,
+      recommendation: rightsVerified
+        ? undefined
+        : 'Specify both Credit and Licence in the Figure inspector before exporting a public Web snapshot.',
+      fieldPath: 'featuredMediaId',
+      inspectorTab: 'media',
+      focusElementId: 'inspector-featured-media',
+      checkOrigin: 'local',
+      verifiedAt: executedAt,
+      canQuickFix: false,
+      canSuggestWithAI: false,
+      isPublicationBlocker: false,
+    });
   }
 
   // 22. integrity.sources.present, 23. integrity.doi.syntax, 24. integrity.doi.registered, 25. integrity.claim_supported

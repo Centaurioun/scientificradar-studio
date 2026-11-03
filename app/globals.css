@@ -778,4 +778,186 @@
   overflow-x: auto;
 }
 
+/* ============================================================================
+   ScientificRadar Web Pinned Reader Scope (.sr-web-preview-scope)
+   Pinned to Web SHA 3b096e84023ca1ba358b7d7dd4f25f17185fc8d7 / Contract v1.0.0
+   Strictly scoped so Studio admin chrome is unaffected.
+   ============================================================================ */
+
+.sr-web-preview-scope {
+  --sr-page-max: 1320px;
+  --sr-reading-max: 700px;
+  --sr-heading-max: 880px;
+  --sr-figure-max: 1100px;
+  --sr-gutter: clamp(16px, 3vw, 40px);
+
+  --sr-body-size: clamp(17px, 1.25vw, 19px);
+  --sr-prose-leading: 1.72;
+
+  --sr-paper: #FAFAF8;
+  --sr-surface: #F2F1EC;
+  --sr-ink: #181C21;
+  --sr-ink-secondary: #363E47;
+  --sr-muted: #525B65;
+  --sr-accent: #15747B;
+  --sr-accent-hover: #0E565C;
+  --sr-rule: #DCE2E4;
+  --sr-rule-subtle: #E8ECEE;
+
+  background-color: var(--sr-paper);
+  color: var(--sr-ink);
+  font-family: var(--font-interface), "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  text-rendering: optimizeLegibility;
+}
+
+.sr-web-preview-scope .font-editorial {
+  font-family: var(--font-editorial), "Merriweather", "Source Serif 4", Georgia, Cambria, "Times New Roman", serif;
+}
+
+.sr-web-preview-scope .font-sans {
+  font-family: var(--font-interface), "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.sr-web-preview-scope .font-math {
+  font-family: "KaTeX_Main", "Latin Modern Math", "STIX Two Math", "Cambria Math", Georgia, serif;
+}
+
+.sr-web-preview-scope .site-container {
+  width: 100%;
+  max-width: var(--sr-page-max);
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: var(--sr-gutter);
+  padding-right: var(--sr-gutter);
+}
+
+.sr-web-preview-scope .article-prose {
+  font-family: var(--font-editorial), "Merriweather", "Source Serif 4", Georgia, Cambria, "Times New Roman", serif;
+  font-size: var(--sr-body-size);
+  line-height: var(--sr-prose-leading);
+  color: var(--sr-ink);
+  max-width: var(--sr-reading-max);
+  overflow-wrap: break-word;
+}
+
+.sr-web-preview-scope .article-prose p {
+  margin-bottom: 1.45em;
+}
+
+.sr-web-preview-scope .article-prose h2 {
+  font-family: var(--font-editorial), "Merriweather", Georgia, serif;
+  font-size: clamp(1.45rem, 2.2vw, 1.95rem);
+  line-height: 1.24;
+  font-weight: 700;
+  color: var(--sr-ink);
+  margin-top: 2.2em;
+  margin-bottom: 0.7em;
+  letter-spacing: -0.015em;
+  scroll-margin-top: 6rem;
+}
+
+.sr-web-preview-scope .article-prose h3 {
+  font-family: var(--font-editorial), "Merriweather", Georgia, serif;
+  font-size: clamp(1.18rem, 1.6vw, 1.4rem);
+  line-height: 1.32;
+  font-weight: 700;
+  color: var(--sr-ink);
+  margin-top: 1.8em;
+  margin-bottom: 0.55em;
+  letter-spacing: -0.01em;
+  scroll-margin-top: 6rem;
+}
+
+.sr-web-preview-scope .article-prose a {
+  color: var(--sr-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+
+.sr-web-preview-scope .article-prose a:hover {
+  color: var(--sr-accent-hover);
+  text-decoration-thickness: 2px;
+}
+
+.sr-web-preview-scope .article-prose blockquote {
+  margin: 1.8em 0;
+  padding: 0.5em 0 0.5em 1.25rem;
+  border-left: 3px solid var(--sr-accent);
+  color: var(--sr-ink-secondary);
+  font-style: italic;
+}
+
+.sr-web-preview-scope .article-prose ul,
+.sr-web-preview-scope .article-prose ol {
+  margin: 1.25em 0 1.5em 1.5rem;
+}
+
+.sr-web-preview-scope .article-prose ul {
+  list-style-type: disc;
+}
+
+.sr-web-preview-scope .article-prose ol {
+  list-style-type: decimal;
+}
+
+.sr-web-preview-scope .article-prose li {
+  margin-bottom: 0.5em;
+}
+
+.sr-web-preview-scope .article-prose pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  background-color: #161B22;
+  color: #E6EDF3;
+  padding: 1.15rem 1.25rem;
+  border-radius: 0.375rem;
+  overflow-x: auto;
+  margin: 1.75em 0;
+}
+
+.sr-web-preview-scope .article-prose :not(pre) > code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.875em;
+  background-color: var(--sr-surface);
+  color: var(--sr-ink);
+  padding: 0.15em 0.35em;
+  border-radius: 0.25rem;
+  border: 1px solid var(--sr-rule);
+}
+
+.sr-web-preview-scope .article-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-interface), "Inter", sans-serif;
+  font-size: 0.925rem;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-web-preview-scope .article-prose th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--sr-ink);
+  background-color: var(--sr-surface);
+  border-bottom: 2px solid var(--sr-rule);
+  padding: 0.65rem 0.85rem;
+}
+
+.sr-web-preview-scope .article-prose td {
+  border-bottom: 1px solid var(--sr-rule-subtle);
+  padding: 0.65rem 0.85rem;
+  color: var(--sr-ink-secondary);
+  vertical-align: top;
+}
+
+.sr-web-preview-scope .article-prose .katex-display {
+  margin: 1em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25rem 0;
+}
+
+
 
