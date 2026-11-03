@@ -8,7 +8,7 @@
 
 | Dosya | Senaryo | Gözlem |
 |---|---|---|
-| [dashboard-320.png](evidence/dashboard-320.png) | Dashboard, 320 px | Üst “New Page” / “New Article” eylemleri sağ tarafta kesiliyor. |
+| [dashboard-320.png](evidence/dashboard-320.png) | Dashboard, 320×700 px | “New Article” sağ kenarı x=345.9 px; document scrollWidth 346 px, 320 px viewport'u aşıyor. |
 | [embedded-preview-390-body.png](evidence/embedded-preview-390-body.png) | Desktop içi 390 px simülasyon | Body paragrafı sıfır genişliğe düştüğü için harf başına satır oluşturuyor. |
 | [real-browser-390.png](evidence/real-browser-390.png) | Gerçek browser 390 px | Gerçek mobil viewport tek kolon, normal satır genişliği. |
 | [real-browser-320.png](evidence/real-browser-320.png) | Gerçek browser 320 px | Gerçek dar mobil viewport tek kolon, normal satır genişliği. |
@@ -23,6 +23,8 @@
 | 1440×900 + embedded 320 | Yok | 238 px grid, 220/0/220; body 0 px | **P0 hata** |
 | Gerçek 390×844 | Yok | 358 px, tek kolon | Reader geçer; Studio panelinin tüm işlevleri bu ölçümde kapsamlı denetlenmedi |
 | Gerçek 320×700 | Yok | 288 px, tek kolon | Reader geçer; dashboard eylemleri ayrı kusurlu |
+
+Dashboard 320×700 ayrı route/ölçümdür: `documentElement.scrollWidth=346`; “New Article” action bounds x=229.6–345.9 px. Bu page-level overflow, reader/table scroll matrislerine genellenemez.
 
 `scrollWidth === clientWidth` sayfa seviyesinde taşma olmadığını gösterir. Embedded preview içindeki center 0 olduğundan içerik kendi alanında taşma/katlanma belirtileri gösterebilir; bu ölçüm page-level overflow anlamına gelmez.
 

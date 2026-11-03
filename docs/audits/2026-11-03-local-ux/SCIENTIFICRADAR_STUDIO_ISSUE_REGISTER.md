@@ -5,7 +5,7 @@ Kaynak: `origin/main` `057986ec4b6a2241c8210fa42eafda46ec49588f`; bulgular yerel
 | ID | Öncelik | Sınıf | Durum | Etkilenen alan | Kısa karar |
 |---|---|---|---|---|---|
 | SRS-UX-01 | P0 | Responsive kusur | Doğrulandı | Editör içi Web Article Preview 390/320 | Simüle edilen genişlikte orta sütun 0 px; gerçek telefon görünümünde tek sütun çalışıyor. |
-| SRS-UX-02 | P1 | Responsive kusur | Doğrulandı (önceki aynı SHA ekran görüntüsü) | Dashboard 320 px | Üst “New Page”/“New Article” eylemleri kesiliyor; bu turda taze screenshot yok. |
+| SRS-UX-02 | P1 | Responsive kusur | Doğrulandı, bu turda yeniden üretildi | Dashboard 320 px | “New Article” sağ kenarı x=345.9 px; viewport 320 px ve document scrollWidth 346 px. |
 | SRS-UX-03 | P1 | Responsive kullanılabilirlik | Doğrulandı | Articles table | 1387 px tablo mobil kabuk içinde 1030+ px yatay kaydırma istiyor; document-level overflow yok. |
 | SRS-UX-04 | P1 | Eksik editör iş akışı | Doğrulandı | Figure rights | Strict public export hak kanıtı yoksa engelleniyor; UI onay kanıtı girişi sunmuyor, bulgu hedefi eşleşmiyor. |
 | SRS-UX-05 | P2 | Yanıltıcı sayaç | Kod yolu doğrulandı | Articles source badge | Gösterilen “DOI” sayısı kaynak kimliği sayısı; DOI metadata sayısı değil. Canlı kaynak dağılımı sayılmadı. |

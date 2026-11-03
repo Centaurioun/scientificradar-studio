@@ -36,10 +36,10 @@ Yalıtılmış Chromium ölçümü (sunum/cihaz ölçeği 1):
 
 ### P1 — Dashboard eylemleri 320 px genişlikte kesiliyor
 
-**Durum:** Doğrulandı (önceki, aynı commit'te alınmış gerçek Chromium ekran görüntüsü); bu çalışma turunda yeniden alınmış ekran görüntüsü henüz yok.
-**Kanıt dosyası:** `../../../../../../.codex/visualizations/2026/11/03/01a19ed7-7c1e-7f80-999a-9f9dd6b9768b/scientificradar-dashboard-320.png` (tam yerel yol, rapor üstbilgisindeki ortam diziniyle birlikte çözülmelidir). Desktop sidebar mobilde daralıyor; dashboard üstündeki “New Page”/“New Article” eylemleri viewport dışına taşıp kırpılıyor.
+**Durum:** Doğrulandı; bu turda yeniden üretildi ve ekran görüntüsü alındı.
+**Kanıt:** [dashboard-320.png](evidence/dashboard-320.png). İzole Chromium 320×700 ölçümünde dashboard `documentElement.scrollWidth=346`; üstteki “New Article” eyleminin sağ kenarı x=345.9 px. “New Page” x=118–221.6 px içinde kalıyor; böylece sağdaki eylem viewport dışına taşıyor ve yatay sayfa overflow'u yaratıyor. Sidebar mobilde daralıyor.
 
-**Öneri:** Dar ekran üst araç çubuğunda butonları sarmalayın veya tek “Yeni” menüsünde toplayın; 320 px'de tüm eylemlerin görünür/tıklanabilir olduğunu doğrulayın. Bu bulgu için mevcut turda taze ekran görüntüsü alınamadığı raporda açıkça tutulmalıdır.
+**Öneri:** Dar ekran üst araç çubuğunda butonları sarmalayın veya tek “Yeni” menüsünde toplayın; 320 px'de tüm eylemlerin görünür/tıklanabilir olduğunu ve page-level yatay overflow olmadığını doğrulayın.
 
 ### P1 — Makale tablosu mobilde kullanılabilir olsa da aşırı yatay kaydırma gerektiriyor
 
