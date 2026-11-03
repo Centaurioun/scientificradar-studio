@@ -5,6 +5,7 @@ import {
   ScientificSource,
   Tag,
 } from '../types';
+import { deriveMediaRightsVerified } from '../publishing/web-contract-v1';
 import {
   MAX_EDITORIAL_TAGS,
   sanitizeAndDemoteBodyH1,
@@ -55,6 +56,7 @@ export function computeArticleFingerprint(
         credit: m.credit,
         licence: m.licence,
         humanReviewedAlt: Boolean(m.humanReviewedAlt),
+        rightsApproval: m.rightsApproval ?? null,
       })),
     sources: [...articleSources]
       .sort((a, b) => a.id.localeCompare(b.id))
@@ -792,20 +794,22 @@ export function runArticleAudit(params: RunArticleAuditParams): AuditReport {
     const hasLicence =
       Boolean(featuredAsset.licence?.trim()) &&
       !/unverified|unknown|tbd|pending/i.test(featuredAsset.licence || '');
-    const rightsVerified = hasCredit && hasLicence;
+    const rightsVerified = deriveMediaRightsVerified(featuredAsset);
     findings.push({
       id: 'images.rights.verified',
       category: 'images',
-      status: rightsVerified ? 'pass' : 'warning',
-      title: 'Figure Attribution Credit & License (Web Contract v1.0.0)',
+      status: rightsVerified ? 'pass' : 'error',
+      title: 'Figure Rights — Explicit Evidence Required',
       description:
-        'ScientificRadar Web Contract v1.0.0 requires non-empty credit and license attribution on every published figure.',
+        'Populated credit/licence and reviewed alt text are NOT proof of usage rights. Require a separately approved actor, timestamp and evidence reference.',
       observed: rightsVerified
-        ? `Credit: "${featuredAsset.credit}" · License: "${featuredAsset.licence}"`
-        : `Missing or unverified credit/license (Credit: "${featuredAsset.credit || 'none'}", License: "${featuredAsset.licence || 'none'}")`,
+        ? 'Explicit rights approval recorded; server verification is still required for live publication'
+        : hasCredit && hasLicence
+        ? 'Attribution is populated, but explicit verified usage-rights evidence is missing'
+        : 'Attribution and/or explicit usage-rights approval missing',
       recommendation: rightsVerified
         ? undefined
-        : 'Specify both Credit and Licence in the Figure inspector before exporting a public Web snapshot.',
+        : 'Record a genuine licence evidence reference and authorized rights reviewer decision before publishing.',
       fieldPath: 'featuredMediaId',
       inspectorTab: 'media',
       focusElementId: 'inspector-featured-media',
@@ -813,7 +817,7 @@ export function runArticleAudit(params: RunArticleAuditParams): AuditReport {
       verifiedAt: executedAt,
       canQuickFix: false,
       canSuggestWithAI: false,
-      isPublicationBlocker: false,
+      isPublicationBlocker: !rightsVerified,
     });
   }
 

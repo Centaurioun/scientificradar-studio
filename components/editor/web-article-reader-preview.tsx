@@ -13,6 +13,7 @@ import {
   PublicAuthor,
   PublicMedia,
   PublicSource,
+  deriveMediaRightsVerified,
   renderScientificMath,
   resolveArticleHeadings,
   sanitizeCanonicalBodyHtml,
@@ -778,11 +779,11 @@ function WebCanonicalBodyWithKnowledgeLinks({
             'Scientific figure',
           caption:
             captionText || studioAsset?.caption || studioAsset?.title || '',
-          credit: studioAsset?.credit || 'ScientificRadar Observatory',
-          license: studioAsset?.licence || 'CC BY 4.0',
+          credit: studioAsset?.credit?.trim() || '',
+          license: studioAsset?.licence?.trim() || '',
           width: studioAsset?.width || 1200,
           height: studioAsset?.height || 675,
-          rightsVerified: Boolean(studioAsset?.humanReviewedAlt),
+          rightsVerified: studioAsset ? deriveMediaRightsVerified(studioAsset) : false,
         };
         elements.push(
           <WebScientificFigure

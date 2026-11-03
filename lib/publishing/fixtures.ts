@@ -31,21 +31,26 @@ export function buildDeterministicStudioExportFixtures(): {
       (a) => a.status === 'draft' || a.status === 'in_review'
     ) || SEED_ARTICLES[1];
 
-  // Ensure real non-demo DOIs and verified media rights for the authorized public release fixtures
-  const verifiedSources = SEED_SOURCES.map((src, index) => ({
+  // Synthetic consumer-only fixtures: no real publication permission.
+  const fixtureSources = SEED_SOURCES.map((src) => ({
     ...src,
-    doi: `10.1038/s41586-025-0${8100 + index}-${index}`,
-    url: `https://doi.org/10.1038/s41586-025-0${8100 + index}-${index}`,
+    doi: undefined,
+    url: '',
   }));
 
-  const verifiedMedia = SEED_MEDIA.map((m) => ({
+  const fixtureMedia = SEED_MEDIA.map((m) => ({
     ...m,
     src: m.src.startsWith('data:')
       ? `/images/figures/${m.filename.replace(/[^a-zA-Z0-9._-]/g, '-')}`
       : m.src,
-    credit: m.credit?.trim() || 'ScientificRadar Observatory Visual Lab',
-    licence: m.licence?.trim() || 'CC BY 4.0',
-    humanReviewedAlt: true,
+    credit: m.credit?.trim() || 'Synthetic fixture credit — no real licence claim',
+    licence: m.licence?.trim() || 'Synthetic test licence — not authorized for publication',
+    rightsApproval: {
+      approved: true,
+      approvedBy: 'synthetic-fixture-reviewer',
+      approvedAt: '2026-11-03T00:00:00.000Z',
+      evidenceRef: 'synthetic:contract-fixture-not-a-real-licence',
+    },
   }));
 
   const sanitizeInlineDataImgSrc = (html: string) =>
@@ -67,15 +72,8 @@ export function buildDeterministicStudioExportFixtures(): {
     categories: SEED_CATEGORIES,
     tags: SEED_TAGS,
     authors: SEED_AUTHORS,
-    sources: verifiedSources,
-    media: verifiedMedia,
-    authorizationReceipt: {
-      receiptId: 'rcpt-studio-m7-en-001',
-      authorizedByActor: 'Dr. Clara Vance',
-      authorizedByRole: 'owner',
-      issuedAt: '2026-11-03T12:00:00.000Z',
-      serverVerified: true,
-    },
+    sources: fixtureSources,
+    media: fixtureMedia,
   });
 
   const trSerialized = serializeStudioArticleToSnapshotV1({
@@ -91,15 +89,8 @@ export function buildDeterministicStudioExportFixtures(): {
     categories: SEED_CATEGORIES,
     tags: SEED_TAGS,
     authors: SEED_AUTHORS,
-    sources: verifiedSources,
-    media: verifiedMedia,
-    authorizationReceipt: {
-      receiptId: 'rcpt-studio-m7-tr-001',
-      authorizedByActor: 'Dr. Selin Kaya',
-      authorizedByRole: 'editor',
-      issuedAt: '2026-11-03T12:00:00.000Z',
-      serverVerified: true,
-    },
+    sources: fixtureSources,
+    media: fixtureMedia,
   });
 
   // Draft fixture without authorizationReceipt must remain non-public and noindex: true
@@ -112,17 +103,23 @@ export function buildDeterministicStudioExportFixtures(): {
     categories: SEED_CATEGORIES,
     tags: SEED_TAGS,
     authors: SEED_AUTHORS,
-    sources: verifiedSources,
-    media: verifiedMedia,
+    sources: fixtureSources,
+    media: fixtureMedia,
   });
 
   return {
+    // Public status here exercises the Web consumer only; the local Studio
+    // serializer above remains non-public. These remain noindex fixtures.
     publishedEnglishHtmlFixture: {
       ...enSerialized.snapshot,
+      status: 'published',
+      seo: { ...enSerialized.snapshot.seo, noindex: true },
       contractVersion: PUBLICATION_CONTRACT_VERSION,
     },
     publishedTurkishHtmlFixture: {
       ...trSerialized.snapshot,
+      status: 'published',
+      seo: { ...trSerialized.snapshot.seo, noindex: true },
       contractVersion: PUBLICATION_CONTRACT_VERSION,
     },
     nonPublicDraftFixture: {

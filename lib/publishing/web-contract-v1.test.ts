@@ -10,6 +10,7 @@ import {
   detectUnsupportedEditorConstructs,
   getDefaultGoogleServicesReadinessSnapshot,
   mapStudioStatusToWebStatus,
+  deriveMediaRightsVerified,
   prepareCanonicalBodyHtml,
   prepareLegacyArticlesImportDryRun,
   renderScientificMath,
@@ -121,7 +122,54 @@ describe('ScientificRadar Studio ↔ Web Contract v1.0.0 & M1–M7 Alignment', (
       issuedAt: '2026-11-03T12:00:00.000Z',
       serverVerified: true,
     });
-    assert.equal(withVerifiedReceipt, 'published');
+    assert.equal(withVerifiedReceipt, 'in_review');
+  });
+
+  it('requires evidence-backed media approval, not filled credit, licence, or alt review', () => {
+    const asset = {
+      ...SEED_MEDIA[0],
+      altText: 'Detailed figure description',
+      credit: 'Example credit',
+      licence: 'Example licence',
+      humanReviewedAlt: true,
+    };
+    assert.equal(deriveMediaRightsVerified(asset), false);
+    const approved = {
+      ...asset,
+      rightsApproval: {
+        approved: true,
+        approvedBy: 'reviewer-1',
+        approvedAt: '2026-11-03T00:00:00.000Z',
+        evidenceRef: 'evidence-123',
+      },
+    };
+    assert.equal(deriveMediaRightsVerified(approved), true);
+    assert.equal(deriveMediaRightsVerified({ ...approved, rightsApproval: { ...approved.rightsApproval, evidenceRef: '' } }), false);
+    assert.equal(deriveMediaRightsVerified({ ...approved, rightsApproval: { ...approved.rightsApproval, approved: false } }), false);
+    assert.equal(deriveMediaRightsVerified({ ...approved, rightsApproval: { ...approved.rightsApproval, approvedAt: 'bad-date' } }), false);
+    assert.equal(deriveMediaRightsVerified({ ...approved, licence: '' }), false);
+  });
+
+  it('rejects forged browser receipt and produces actual Web canonical route', () => {
+    const result = serializeStudioArticleToSnapshotV1({
+      article: { ...SEED_ARTICLES[0], status: 'published', seo: { ...SEED_ARTICLES[0].seo, noindex: false } },
+      categories: SEED_CATEGORIES,
+      tags: SEED_TAGS,
+      authors: SEED_AUTHORS,
+      sources: SEED_SOURCES,
+      media: SEED_MEDIA,
+      authorizationReceipt: {
+        receiptId: 'forged',
+        authorizedByActor: 'untrusted',
+        authorizedByRole: 'owner',
+        issuedAt: '2026-11-03T00:00:00.000Z',
+        serverVerified: true,
+      },
+    });
+    assert.equal(result.snapshot.status, 'in_review');
+    assert.equal(result.snapshot.seo?.noindex, true);
+    assert.equal(result.publicReleaseAuthorized, false);
+    assert.equal(result.snapshot.seo?.canonicalUrl, 'https://scientificradar.com/article/' + encodeURIComponent(SEED_ARTICLES[0].slug));
   });
 
   it('produces valid deterministic Studio export fixtures for M7 (EN HTML, TR HTML, and non-public draft)', () => {
@@ -133,7 +181,7 @@ describe('ScientificRadar Studio ↔ Web Contract v1.0.0 & M1–M7 Alignment', (
     );
     assert.equal(enVal.valid, true, JSON.stringify(enVal.issues));
     assert.equal(enVal.isPubliclyRenderable, true);
-    assert.equal(enVal.isIndexableCandidate, true);
+    assert.equal(enVal.isIndexableCandidate, false);
     assert.equal(
       fixtures.publishedEnglishHtmlFixture.contractVersion,
       PUBLICATION_CONTRACT_VERSION
