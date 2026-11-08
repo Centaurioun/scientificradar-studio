@@ -71,6 +71,37 @@ interface ArticleWorkspaceProps {
 
 type InspectorTab = 'taxonomy' | 'sources' | 'figures' | 'seo' | 'revisions';
 
+const FOCUS_FIELD_TABS: Record<string, InspectorTab> = {
+  'primary-category-select': 'taxonomy',
+  'tags-fieldset': 'taxonomy',
+  'new-tag-input': 'taxonomy',
+  'attached-sources-fieldset': 'sources',
+  'featured-media-select': 'figures',
+  'figure-alt-text-input': 'figures',
+  'seo-title-input': 'seo',
+  'seo-description-input': 'seo',
+};
+
+function resolveInspectorTab(value: string | null | undefined): InspectorTab | undefined {
+  switch (value) {
+    case 'taxonomy':
+    case 'metadata':
+      return 'taxonomy';
+    case 'sources':
+      return 'sources';
+    case 'figures':
+    case 'media':
+      return 'figures';
+    case 'seo':
+      return 'seo';
+    case 'revisions':
+    case 'versions':
+      return 'revisions';
+    default:
+      return undefined;
+  }
+}
+
 export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   const router = useRouter();
   const [fallbackArticleId] = useState(() => `art-${Date.now()}`);
@@ -168,6 +199,10 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   const [editorEngine, setEditorEngine] = useState<'tiptap' | 'ckeditor'>('tiptap');
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('taxonomy');
+  const [pendingFieldFocus, setPendingFieldFocus] = useState<{
+    fieldId: string;
+    tab?: InspectorTab;
+  } | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
 
   // Support ?editor=ckeditor or ?editor=tiptap URL query parameter without SSR hydration mismatch
@@ -290,31 +325,55 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   }, [isDirty]);
 
   // Handle deep-link query parameters (?tab=...&focus=...)
-  const focusFieldById = useCallback((fieldId: string, tab?: InspectorTab) => {
+  const focusFieldById = useCallback((fieldId: string, requestedTab?: string) => {
+    const tab = resolveInspectorTab(requestedTab) ?? FOCUS_FIELD_TABS[fieldId];
+
     if (tab) {
       setInspectorOpen(true);
       setInspectorTab(tab);
     }
     setActiveMode('write');
-    setTimeout(() => {
-      const el = document.getElementById(fieldId);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        el.focus();
-      }
-    }, 80);
+    setPendingFieldFocus({ fieldId, tab });
   }, []);
+
+  useEffect(() => {
+    if (!pendingFieldFocus || activeMode !== 'write') return;
+    if (
+      pendingFieldFocus.tab &&
+      (!inspectorOpen || inspectorTab !== pendingFieldFocus.tab)
+    ) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const target = document.getElementById(pendingFieldFocus.fieldId);
+      const isDisabled = target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement
+        ? target.disabled
+        : false;
+
+      if (target && !isDisabled) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.focus();
+      } else {
+        const inspector = document.getElementById('article-metadata-inspector');
+        inspector?.focus();
+        setWorkflowFeedback(
+          `Could not focus "${pendingFieldFocus.fieldId}"${isDisabled ? ' because the control is disabled' : ''}; focused the metadata inspector instead.`
+        );
+      }
+      setPendingFieldFocus(null);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeMode, inspectorOpen, inspectorTab, pendingFieldFocus]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const timer = window.setTimeout(() => {
       const params = new URLSearchParams(window.location.search);
-      const tabParam = params.get('tab') as InspectorTab | null;
+      const tabParam = resolveInspectorTab(params.get('tab'));
       const focusParam = params.get('focus');
-      if (
-        tabParam &&
-        ['taxonomy', 'sources', 'figures', 'seo', 'revisions'].includes(tabParam)
-      ) {
+      if (tabParam) {
         setInspectorOpen(true);
         setInspectorTab(tabParam);
       }
@@ -638,7 +697,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
 
   const handleGoToFieldFromFinding = useCallback(
     (finding: AuditFinding) => {
-      const tab = (finding.inspectorTab as InspectorTab) || 'seo';
+      const tab = resolveInspectorTab(finding.inspectorTab) || 'seo';
       if (finding.targetField) {
         focusFieldById(finding.targetField, tab);
       } else {
@@ -1107,7 +1166,9 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
           {/* Right Collapsible Metadata Inspector */}
           {inspectorOpen && (
             <aside
+              id="article-metadata-inspector"
               aria-label="Article Metadata Inspector"
+              tabIndex={-1}
               className="w-full shrink-0 border-t border-slate-200 bg-white lg:w-96 lg:border-t-0 lg:border-l dark:border-slate-800 dark:bg-slate-900"
             >
               {/* Inspector Tabs */}

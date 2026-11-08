@@ -403,6 +403,7 @@ export default function ArticleSeoAuditPage() {
                   finding={finding}
                   proposal={proposal}
                   goToHref={goToHref}
+                  goToLabel={finding.ruleId === 'images.rights.verified' ? 'Inspect Figure' : undefined}
                   onApplyQuickFix={async (prop) => {
                     try {
                       const res = await applyQuickFixProposal(prop);

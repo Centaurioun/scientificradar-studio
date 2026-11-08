@@ -582,7 +582,7 @@ export function runArticleAudit(params: RunArticleAuditParams): AuditReport {
         : undefined,
     fieldPath: 'tagIds',
     inspectorTab: 'taxonomy',
-    focusElementId: 'new-tag-input',
+    focusElementId: 'tags-fieldset',
     checkOrigin: 'local',
     verifiedAt: executedAt,
     canQuickFix: tagCount > MAX_EDITORIAL_TAGS || tagCount < 3,
