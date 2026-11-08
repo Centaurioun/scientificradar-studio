@@ -70,6 +70,7 @@ interface ArticleWorkspaceProps {
 }
 
 type InspectorTab = 'taxonomy' | 'sources' | 'figures' | 'seo' | 'revisions';
+const INSPECTOR_TABS: InspectorTab[] = ['taxonomy', 'sources', 'figures', 'seo', 'revisions'];
 
 const FOCUS_FIELD_TABS: Record<string, InspectorTab> = {
   'primary-category-select': 'taxonomy',
@@ -197,6 +198,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   // UI states
   const [activeMode, setActiveMode] = useState<'write' | 'preview'>('write');
   const [editorEngine, setEditorEngine] = useState<'tiptap' | 'ckeditor'>('tiptap');
+  const [focusedWriting, setFocusedWriting] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('taxonomy');
   const [pendingFieldFocus, setPendingFieldFocus] = useState<{
@@ -204,6 +206,30 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
     tab?: InspectorTab;
   } | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
+
+  const handleInspectorTabKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    currentTab: InspectorTab
+  ) => {
+    let nextIndex: number;
+    const currentIndex = INSPECTOR_TABS.indexOf(currentTab);
+    if (event.key === 'ArrowRight') {
+      nextIndex = (currentIndex + 1) % INSPECTOR_TABS.length;
+    } else if (event.key === 'ArrowLeft') {
+      nextIndex = (currentIndex - 1 + INSPECTOR_TABS.length) % INSPECTOR_TABS.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = INSPECTOR_TABS.length - 1;
+    } else {
+      return;
+    }
+
+    event.preventDefault();
+    const nextTab = INSPECTOR_TABS[nextIndex];
+    setInspectorTab(nextTab);
+    document.getElementById(`article-inspector-tab-${nextTab}`)?.focus();
+  };
 
   // Support ?editor=ckeditor or ?editor=tiptap URL query parameter without SSR hydration mismatch
   useEffect(() => {
@@ -331,6 +357,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
     if (tab) {
       setInspectorOpen(true);
       setInspectorTab(tab);
+      setFocusedWriting(false);
     }
     setActiveMode('write');
     setPendingFieldFocus({ fieldId, tab });
@@ -786,9 +813,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
         {/* Mode & Action Controls */}
         <div className="flex flex-wrap items-center gap-2">
           {/* Write / Preview Switch */}
-          <div className="flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 dark:border-slate-800 dark:bg-slate-800">
+          <div
+            role="group"
+            aria-label="Writing view controls"
+            className="flex flex-wrap rounded-lg border border-slate-200 bg-slate-100 p-0.5 dark:border-slate-800 dark:bg-slate-800"
+          >
             <button
               type="button"
+              aria-pressed={activeMode === 'write'}
               onClick={() => setActiveMode('write')}
               className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
                 activeMode === 'write'
@@ -800,6 +832,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
             </button>
             <button
               type="button"
+              aria-pressed={activeMode === 'preview'}
               onClick={() => setActiveMode('preview')}
               className={`inline-flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
                 activeMode === 'preview'
@@ -809,6 +842,21 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
             >
               <Eye className="h-3.5 w-3.5" />
               <span>Reader Preview</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={focusedWriting}
+              onClick={() => {
+                setActiveMode('write');
+                setFocusedWriting((value) => !value);
+              }}
+              className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                focusedWriting
+                  ? 'bg-white text-indigo-700 shadow-xs dark:bg-slate-900 dark:text-indigo-300'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400'
+              }`}
+            >
+              {focusedWriting ? 'Exit focus' : 'Focus writing'}
             </button>
           </div>
 
@@ -932,10 +980,10 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
           <ArticlePreviewView article={currentDraftArticle} />
         </div>
       ) : (
-        <div className="flex flex-1 flex-col lg:flex-row">
+        <div className={`flex flex-1 flex-col ${focusedWriting ? '' : 'lg:flex-row'}`}>
           {/* Center Writing Surface */}
-          <div className="flex-1 p-6 lg:p-8">
-            <div className="mx-auto max-w-4xl space-y-5">
+          <div className={`flex-1 p-4 sm:p-6 lg:p-8 ${focusedWriting ? 'lg:py-10' : ''}`}>
+            <div className={`mx-auto space-y-5 ${focusedWriting ? 'max-w-6xl' : 'max-w-4xl'}`}>
               {/* Language, Reading Stats & Primary Discipline Header */}
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
                 <div className="flex items-center gap-2">
@@ -1164,19 +1212,29 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
           </div>
 
           {/* Right Collapsible Metadata Inspector */}
-          {inspectorOpen && (
+          {inspectorOpen && !focusedWriting && (
             <aside
               id="article-metadata-inspector"
               aria-label="Article Metadata Inspector"
               tabIndex={-1}
-              className="w-full shrink-0 border-t border-slate-200 bg-white lg:w-96 lg:border-t-0 lg:border-l dark:border-slate-800 dark:bg-slate-900"
+              className="max-h-[70vh] w-full shrink-0 overflow-y-auto border-t border-slate-200 bg-white lg:max-h-none lg:w-96 lg:border-t-0 lg:border-l dark:border-slate-800 dark:bg-slate-900"
             >
               {/* Inspector Tabs */}
-              <div className="grid grid-cols-5 border-b border-slate-200 bg-slate-50/70 text-[11px] font-semibold dark:border-slate-800 dark:bg-slate-950/50">
+              <div
+                role="tablist"
+                aria-label="Article metadata sections"
+                className="sticky top-0 z-10 grid grid-cols-5 border-b border-slate-200 bg-slate-50/95 text-[11px] font-semibold backdrop-blur dark:border-slate-800 dark:bg-slate-950/95"
+              >
                 <button
                   type="button"
+                  id="article-inspector-tab-taxonomy"
+                  role="tab"
+                  aria-selected={inspectorTab === 'taxonomy'}
+                  aria-controls="article-inspector-panel"
+                  tabIndex={inspectorTab === 'taxonomy' ? 0 : -1}
+                  onKeyDown={(event) => handleInspectorTabKeyDown(event, 'taxonomy')}
                   onClick={() => setInspectorTab('taxonomy')}
-                  className={`flex flex-col items-center gap-1 py-2.5 border-b-2 transition-colors ${
+                  className={`flex min-w-0 flex-col items-center gap-1 px-1 py-2.5 border-b-2 text-center leading-tight transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-600 ${
                     inspectorTab === 'taxonomy'
                       ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400 bg-white dark:bg-slate-900'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -1187,8 +1245,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 </button>
                 <button
                   type="button"
+                  id="article-inspector-tab-sources"
+                  role="tab"
+                  aria-selected={inspectorTab === 'sources'}
+                  aria-controls="article-inspector-panel"
+                  tabIndex={inspectorTab === 'sources' ? 0 : -1}
+                  onKeyDown={(event) => handleInspectorTabKeyDown(event, 'sources')}
                   onClick={() => setInspectorTab('sources')}
-                  className={`flex flex-col items-center gap-1 py-2.5 border-b-2 transition-colors ${
+                  className={`flex min-w-0 flex-col items-center gap-1 px-1 py-2.5 border-b-2 text-center leading-tight transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-600 ${
                     inspectorTab === 'sources'
                       ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400 bg-white dark:bg-slate-900'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -1199,8 +1263,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 </button>
                 <button
                   type="button"
+                  id="article-inspector-tab-figures"
+                  role="tab"
+                  aria-selected={inspectorTab === 'figures'}
+                  aria-controls="article-inspector-panel"
+                  tabIndex={inspectorTab === 'figures' ? 0 : -1}
+                  onKeyDown={(event) => handleInspectorTabKeyDown(event, 'figures')}
                   onClick={() => setInspectorTab('figures')}
-                  className={`flex flex-col items-center gap-1 py-2.5 border-b-2 transition-colors ${
+                  className={`flex min-w-0 flex-col items-center gap-1 px-1 py-2.5 border-b-2 text-center leading-tight transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-600 ${
                     inspectorTab === 'figures'
                       ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400 bg-white dark:bg-slate-900'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -1211,8 +1281,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 </button>
                 <button
                   type="button"
+                  id="article-inspector-tab-seo"
+                  role="tab"
+                  aria-selected={inspectorTab === 'seo'}
+                  aria-controls="article-inspector-panel"
+                  tabIndex={inspectorTab === 'seo' ? 0 : -1}
+                  onKeyDown={(event) => handleInspectorTabKeyDown(event, 'seo')}
                   onClick={() => setInspectorTab('seo')}
-                  className={`flex flex-col items-center gap-1 py-2.5 border-b-2 transition-colors ${
+                  className={`flex min-w-0 flex-col items-center gap-1 px-1 py-2.5 border-b-2 text-center leading-tight transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-600 ${
                     inspectorTab === 'seo'
                       ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400 bg-white dark:bg-slate-900'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -1223,8 +1299,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 </button>
                 <button
                   type="button"
+                  id="article-inspector-tab-revisions"
+                  role="tab"
+                  aria-selected={inspectorTab === 'revisions'}
+                  aria-controls="article-inspector-panel"
+                  tabIndex={inspectorTab === 'revisions' ? 0 : -1}
+                  onKeyDown={(event) => handleInspectorTabKeyDown(event, 'revisions')}
                   onClick={() => setInspectorTab('revisions')}
-                  className={`flex flex-col items-center gap-1 py-2.5 border-b-2 transition-colors ${
+                  className={`flex min-w-0 flex-col items-center gap-1 px-1 py-2.5 border-b-2 text-center leading-tight transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-600 ${
                     inspectorTab === 'revisions'
                       ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400 bg-white dark:bg-slate-900'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -1235,7 +1317,13 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 </button>
               </div>
 
-              <div className="p-4 space-y-5 text-xs">
+              <div
+                id="article-inspector-panel"
+                role="tabpanel"
+                aria-labelledby={`article-inspector-tab-${inspectorTab}`}
+                tabIndex={0}
+                className="min-w-0 p-4 space-y-5 text-xs focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-600"
+              >
                 {/* TAB 1: TAXONOMY */}
                 {inspectorTab === 'taxonomy' && (
                   <div className="space-y-4">
