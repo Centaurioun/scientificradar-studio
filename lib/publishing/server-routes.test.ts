@@ -75,9 +75,14 @@ describe('Studio publication API routes', () => {
     assert.equal(evidence.status, 200);
 
     const candidate = snapshot(mediaUrl, mediaHash);
-    const save = await candidatePut(request('/api/studio/publications/article-api', 'PUT', { snapshot: { ...candidate, status: 'published', seo: { noindex: false } } }, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
+    const editorDraft = privateEditorDraft();
+    const save = await candidatePut(request('/api/studio/publications/article-api', 'PUT', { snapshot: { ...candidate, status: 'published', seo: { noindex: false } }, editorDraft }, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(save.status, 200);
     assert.equal((await save.json() as { state: string }).state, 'in_review');
+    const invalidDraft = await candidatePut(request('/api/studio/publications/article-api', 'PUT', { snapshot: candidate, editorDraft: { ...editorDraft, article: { ...editorDraft.article, id: 'another-article' } } }, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
+    assert.equal(invalidDraft.status, 400);
+    const oversizedDraft = await candidatePut(request('/api/studio/publications/article-api', 'PUT', { snapshot: candidate, editorDraft: { schemaVersion: 1, article: { ...editorDraft.article, bodyHtml: 'x'.repeat(3 * 1024 * 1024 + 1) } } }, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
+    assert.equal(oversizedDraft.status, 413);
     const beforeApproval = await candidateGet(request('/api/studio/publications/article-api', 'GET', undefined, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal((await beforeApproval.json() as { publication: unknown }).publication, null);
     const candidateUnauthenticated = await candidateGet(request('/api/studio/publications/article-api', 'GET'), { params: Promise.resolve({ articleId: 'article-api' }) });
@@ -86,7 +91,21 @@ describe('Studio publication API routes', () => {
     assert.equal(candidatePrivate.status, 404);
     const authorCandidate = await candidateGet(request('/api/studio/publications/article-api', 'GET', undefined, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(authorCandidate.status, 200);
-    assert.equal((await authorCandidate.json() as { snapshot: PublishedSnapshotRecordV1 }).snapshot.revisionId, 'revision-api');
+    const privateCandidate = await authorCandidate.json() as { snapshot: PublishedSnapshotRecordV1; editorDraft: { schemaVersion: number; article: { status: string; publishedAt?: string; scheduledAt?: string; reviewNotes?: unknown; title: string; bodyHtml: string; sourceIds: string[]; authorId?: string; seo: { noindex?: boolean } } } };
+    assert.equal(privateCandidate.snapshot.revisionId, 'revision-api');
+    assert.equal(privateCandidate.editorDraft.schemaVersion, 1);
+    assert.equal(privateCandidate.editorDraft.article.title, 'Private recovery draft');
+    assert.equal(privateCandidate.editorDraft.article.status, 'draft');
+    assert.equal(privateCandidate.editorDraft.article.publishedAt, undefined);
+    assert.equal(privateCandidate.editorDraft.article.scheduledAt, undefined);
+    assert.equal(privateCandidate.editorDraft.article.reviewNotes, undefined);
+    assert.deepEqual(privateCandidate.editorDraft.article.sourceIds, ['source-api']);
+    assert.equal(privateCandidate.editorDraft.article.authorId, 'credited-author');
+    assert.equal(privateCandidate.editorDraft.article.seo.noindex, true);
+    assert.doesNotMatch(privateCandidate.editorDraft.article.bodyHtml, /onclick|javascript:/i);
+    assert.match(privateCandidate.editorDraft.article.bodyHtml, /katex/);
+    assert.match(privateCandidate.editorDraft.article.bodyHtml, /data-citation-source-id="source-api"/);
+    assert.match(privateCandidate.editorDraft.article.bodyHtml, /\[1\]/);
     const reviewerCandidate = await candidateGet(request('/api/studio/publications/article-api', 'GET', undefined, reviewerCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(reviewerCandidate.status, 200);
     const selfReview = await reviewPost(request('/api/studio/publications/article-api/review', 'POST', { revisionId: 'revision-api', decision: 'approve' }, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
@@ -112,9 +131,12 @@ describe('Studio publication API routes', () => {
     const list = await publishedList.json() as Array<{ slug: string; status: string }>;
     assert.equal(list.length, 1);
     assert.equal(list[0].status, 'published');
+    assert.equal(Object.hasOwn(list[0], 'editorDraft'), false);
     const slugResponse = await publicSlugGet(new Request(`${origin}/api/publications/article-api`), { params: Promise.resolve({ slug: 'article-api' }) });
     assert.equal(slugResponse.status, 200);
-    assert.equal((await slugResponse.json() as { status: string }).status, 'published');
+    const publicArticle = await slugResponse.json() as { status: string } & Record<string, unknown>;
+    assert.equal(publicArticle.status, 'published');
+    assert.equal(Object.hasOwn(publicArticle, 'editorDraft'), false);
     const mediaResponse = await publicMediaGet(new Request(`${origin}/api/public/media/${mediaHash}`), { params: Promise.resolve({ assetRevisionId: mediaHash }) });
     assert.equal(mediaResponse.status, 200);
     assert.ok(Buffer.from(await mediaResponse.arrayBuffer()).equals(png));
@@ -153,6 +175,21 @@ function request(path: string, method: string, body?: unknown, cookie?: string, 
   if (cookie) headers.Cookie = cookie;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   return new Request(`${origin}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+}
+
+function privateEditorDraft() {
+  return {
+    schemaVersion: 1 as const,
+    article: {
+      id: 'article-api', locale: 'en' as const, title: 'Private recovery draft', slug: 'article-api', summary: 'Private draft body',
+      body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'A persisted draft with scientific content.' }] }] },
+      bodyHtml: '<p onclick="alert(1)">Private recovery draft</p><p><span class="katex">x²</span> <sup data-citation-source-id="source-api">[1]</sup></p>',
+      status: 'published', categoryIds: ['cat-science'], tagIds: ['tag-api'], sourceIds: ['source-api'], authorId: 'credited-author',
+      seo: { title: 'Private SEO', noindex: false }, publishedAt: '2026-11-01T00:00:00.000Z', scheduledAt: '2026-11-30T00:00:00.000Z',
+      createdAt: '2026-11-01T00:00:00.000Z', updatedAt: '2026-11-08T00:00:00.000Z', version: 5,
+      reviewNotes: [{ id: 'forged-review', articleId: 'article-api', authorName: 'fake reviewer', role: 'reviewer', note: 'approved', action: 'approve', createdAt: '2026-11-08T00:00:00.000Z' }],
+    },
+  };
 }
 
 function snapshot(mediaUrl: string, mediaHash: string): PublishedSnapshotRecordV1 {

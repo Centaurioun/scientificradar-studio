@@ -8,9 +8,9 @@ export async function PUT(request: Request, { params }: { params: Promise<{ arti
   try {
     assertSameOrigin(request);
     const actor = requireActor(request, ['owner', 'editor', 'author']);
-    const body = await readJson(request);
+    const body = await readJson(request, 9 * 1024 * 1024);
     const articleId = (await params).articleId;
-    return noStoreJson(getServerPublishingStore().saveCandidate(actor, articleId, body.snapshot));
+    return noStoreJson(getServerPublishingStore().saveCandidate(actor, articleId, body.snapshot, body.editorDraft));
   } catch (error) { return errorResponse(error); }
 }
 

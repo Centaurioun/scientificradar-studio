@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import type { Article } from '../types';
 import type { PublishedSnapshotRecordV1 } from './web-contract-v1';
 import { sanitizeCanonicalBodyHtml, validatePublicationSnapshotV1 } from './web-contract-v1';
 
@@ -21,8 +22,14 @@ export interface PublishingConfig {
   allowLoopbackHttpMediaOrigin?: boolean;
 }
 
+export interface PrivateEditorDraftV1 {
+  schemaVersion: 1;
+  article: Article;
+}
+
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
 const MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024;
+const MAX_EDITOR_DRAFT_BYTES = 3 * 1024 * 1024;
 const ROLE_VALUES: ServerRole[] = ['owner', 'editor', 'author', 'reviewer', 'rights_reviewer'];
 
 function sha256(value: Uint8Array | string): string {
@@ -51,6 +58,39 @@ function isSafeDataUrl(dataUrl: string): { mime: string; bytes: Buffer } | null 
       : mime === 'image/webp' ? bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP'
         : bytes.toString('ascii', 4, 8) === 'ftyp' && bytes.toString('ascii', 8, 12) === 'avif';
   return validMagic ? { mime, bytes } : null;
+}
+
+function normalizePrivateEditorDraft(value: unknown, articleId: string): PrivateEditorDraftV1 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_EDITOR_DRAFT');
+  let rawBytes: number;
+  try { rawBytes = Buffer.byteLength(JSON.stringify(value)); } catch { throw new Error('INVALID_EDITOR_DRAFT'); }
+  if (rawBytes > MAX_EDITOR_DRAFT_BYTES) throw new Error('EDITOR_DRAFT_TOO_LARGE');
+  const envelope = value as { schemaVersion?: unknown; article?: unknown };
+  if (envelope.schemaVersion !== 1 || !envelope.article || typeof envelope.article !== 'object' || Array.isArray(envelope.article)) throw new Error('INVALID_EDITOR_DRAFT');
+  const article = structuredClone(envelope.article) as Record<string, unknown>;
+  const allowedArticleFields = new Set(['id', 'locale', 'title', 'slug', 'dek', 'summary', 'editorialType', 'translationGroupId', 'legacyProvenance', 'body', 'bodyHtml', 'status', 'primaryCategoryId', 'categoryIds', 'tagIds', 'seriesId', 'authorId', 'sourceIds', 'featuredMediaId', 'seo', 'scheduledAt', 'publishedAt', 'createdAt', 'updatedAt', 'version', 'reviewNotes']);
+  if (Object.keys(article).some((key) => !allowedArticleFields.has(key))) throw new Error('INVALID_EDITOR_DRAFT');
+  if (article.id !== articleId || typeof article.title !== 'string' || typeof article.slug !== 'string' ||
+    typeof article.summary !== 'string' || typeof article.bodyHtml !== 'string' || !article.body || typeof article.body !== 'object' || Array.isArray(article.body) ||
+    !['en', 'tr'].includes(String(article.locale)) || !Array.isArray(article.categoryIds) || !Array.isArray(article.tagIds) || !Array.isArray(article.sourceIds) ||
+    typeof article.createdAt !== 'string' || typeof article.updatedAt !== 'string' || !Number.isInteger(article.version)) {
+    throw new Error('INVALID_EDITOR_DRAFT');
+  }
+  const arrays = [article.categoryIds, article.tagIds, article.sourceIds];
+  if (arrays.some((items) => (items as unknown[]).length > 500 || (items as unknown[]).some((item) => typeof item !== 'string' || item.length > 300))) throw new Error('INVALID_EDITOR_DRAFT');
+  if (typeof article.bodyHtml !== 'string') throw new Error('INVALID_EDITOR_DRAFT');
+  article.bodyHtml = sanitizeCanonicalBodyHtml(article.bodyHtml);
+  // Editorial status/review metadata cannot authorize server workflow transitions.
+  // authorId remains scholarly attribution data and is never used as authenticated identity.
+  article.status = 'draft';
+  if (article.seo && typeof article.seo === 'object' && !Array.isArray(article.seo)) article.seo = { ...(article.seo as Record<string, unknown>), noindex: true };
+  else article.seo = { noindex: true };
+  delete article.publishedAt;
+  delete article.scheduledAt;
+  delete article.reviewNotes;
+  const normalized = { schemaVersion: 1 as const, article: article as unknown as Article };
+  if (Buffer.byteLength(JSON.stringify(normalized)) > MAX_EDITOR_DRAFT_BYTES) throw new Error('EDITOR_DRAFT_TOO_LARGE');
+  return normalized;
 }
 
 /** Durable local/integration publication authority. It deliberately requires a persistent
@@ -138,6 +178,7 @@ export class ServerPublishingStore {
       CREATE TABLE IF NOT EXISTS candidates (
         article_id TEXT NOT NULL, revision_id TEXT NOT NULL, revision_number INTEGER NOT NULL,
         slug TEXT NOT NULL, snapshot_json TEXT NOT NULL, snapshot_hash TEXT NOT NULL,
+        editor_draft_json TEXT, editor_draft_hash TEXT,
         state TEXT NOT NULL CHECK(state IN ('in_review','approved','rejected')),
         saved_by TEXT NOT NULL, saved_at TEXT NOT NULL,
         PRIMARY KEY(article_id, revision_id)
@@ -166,6 +207,9 @@ export class ServerPublishingStore {
       CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
       CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
     `);
+    const candidateColumns = new Set((this.db.prepare('PRAGMA table_info(candidates)').all() as Array<{ name: string }>).map((column) => column.name));
+    if (!candidateColumns.has('editor_draft_json')) this.db.exec('ALTER TABLE candidates ADD COLUMN editor_draft_json TEXT');
+    if (!candidateColumns.has('editor_draft_hash')) this.db.exec('ALTER TABLE candidates ADD COLUMN editor_draft_hash TEXT');
   }
 
   private bootstrapOwner(email: string, password: string): void {
@@ -314,7 +358,7 @@ export class ServerPublishingStore {
     else delete (snapshot as PublishedSnapshotRecordV1 & { knowledgeLinks?: unknown }).knowledgeLinks;
   }
 
-  saveCandidate(actor: AuthenticatedActor, articleId: string, rawSnapshot: unknown): { articleId: string; revisionId: string; state: 'in_review' | 'approved' | 'rejected'; snapshotHash: string } {
+  saveCandidate(actor: AuthenticatedActor, articleId: string, rawSnapshot: unknown, rawEditorDraft?: unknown): { articleId: string; revisionId: string; state: 'in_review' | 'approved' | 'rejected'; snapshotHash: string } {
     if (!['owner', 'editor', 'author'].includes(actor.role)) throw new Error('FORBIDDEN');
     const bytes = Buffer.byteLength(JSON.stringify(rawSnapshot));
     if (bytes > MAX_SNAPSHOT_BYTES) throw new Error('SNAPSHOT_TOO_LARGE');
@@ -336,16 +380,21 @@ export class ServerPublishingStore {
     this.assertHtmlMedia(snapshot, false);
     const snapshotJson = JSON.stringify(snapshot);
     const snapshotHash = sha256(snapshotJson);
-    const previousCandidate = this.db.prepare('SELECT snapshot_hash,saved_by,state FROM candidates WHERE article_id=? AND revision_id=?').get(articleId, snapshot.revisionId) as { snapshot_hash: string; saved_by: string; state: 'in_review' | 'approved' | 'rejected' } | undefined;
+    const editorDraft = rawEditorDraft === undefined ? undefined : normalizePrivateEditorDraft(rawEditorDraft, articleId);
+    const editorDraftJson = editorDraft === undefined ? undefined : JSON.stringify(editorDraft);
+    if (editorDraftJson && Buffer.byteLength(editorDraftJson) > MAX_EDITOR_DRAFT_BYTES) throw new Error('EDITOR_DRAFT_TOO_LARGE');
+    const editorDraftHash = editorDraftJson === undefined ? undefined : sha256(editorDraftJson);
+    const previousCandidate = this.db.prepare('SELECT snapshot_hash,editor_draft_hash,saved_by,state FROM candidates WHERE article_id=? AND revision_id=?').get(articleId, snapshot.revisionId) as { snapshot_hash: string; editor_draft_hash: string | null; saved_by: string; state: 'in_review' | 'approved' | 'rejected' } | undefined;
     if (previousCandidate) {
       if (previousCandidate.snapshot_hash !== snapshotHash) throw new Error('REVISION_IMMUTABLE');
+      if (editorDraftHash !== undefined && previousCandidate.editor_draft_hash !== editorDraftHash) throw new Error('REVISION_IMMUTABLE');
       if (previousCandidate.saved_by !== actor.id) throw new Error('REVISION_SUBMITTER_IMMUTABLE');
       return { articleId, revisionId: snapshot.revisionId, state: previousCandidate.state, snapshotHash };
     }
     const now = new Date().toISOString();
-    this.db.prepare(`INSERT INTO candidates(article_id,revision_id,revision_number,slug,snapshot_json,snapshot_hash,state,saved_by,saved_at)
-      VALUES(?,?,?,?,?,?,'in_review',?,?)`)
-      .run(articleId, snapshot.revisionId, snapshot.revisionNumber, snapshot.slug, snapshotJson, snapshotHash, actor.id, now);
+    this.db.prepare(`INSERT INTO candidates(article_id,revision_id,revision_number,slug,snapshot_json,snapshot_hash,editor_draft_json,editor_draft_hash,state,saved_by,saved_at)
+      VALUES(?,?,?,?,?,?,?,?, 'in_review',?,?)`)
+      .run(articleId, snapshot.revisionId, snapshot.revisionNumber, snapshot.slug, snapshotJson, snapshotHash, editorDraftJson ?? null, editorDraftHash ?? null, actor.id, now);
     this.audit('candidate_saved', actor, articleId, snapshot.revisionId, { snapshotHash });
     return { articleId, revisionId: snapshot.revisionId, state: 'in_review', snapshotHash };
   }
@@ -353,15 +402,16 @@ export class ServerPublishingStore {
   loadCandidate(actor: AuthenticatedActor, articleId: string): {
     articleId: string; revisionId: string; revisionNumber: number; state: 'in_review' | 'approved' | 'rejected';
     savedAt: string; snapshot: PublishedSnapshotRecordV1;
+    editorDraft: PrivateEditorDraftV1 | null;
     publication: { revisionId: string; status: 'published'; publishedAt: string } | { revisionId: string; status: 'withdrawn'; publishedAt: string; withdrawnAt: string } | null;
   } {
     if (!['owner', 'editor', 'author', 'reviewer'].includes(actor.role)) throw new Error('FORBIDDEN');
     const row = actor.role === 'author'
-      ? this.db.prepare(`SELECT article_id,revision_id,revision_number,state,saved_at,snapshot_json FROM candidates
+      ? this.db.prepare(`SELECT article_id,revision_id,revision_number,state,saved_at,snapshot_json,editor_draft_json FROM candidates
         WHERE article_id=? AND saved_by=? ORDER BY revision_number DESC,saved_at DESC LIMIT 1`).get(articleId, actor.id)
-      : this.db.prepare(`SELECT article_id,revision_id,revision_number,state,saved_at,snapshot_json FROM candidates
+      : this.db.prepare(`SELECT article_id,revision_id,revision_number,state,saved_at,snapshot_json,editor_draft_json FROM candidates
         WHERE article_id=? ORDER BY revision_number DESC,saved_at DESC LIMIT 1`).get(articleId);
-    const candidate = row as { article_id: string; revision_id: string; revision_number: number; state: 'in_review' | 'approved' | 'rejected'; saved_at: string; snapshot_json: string } | undefined;
+    const candidate = row as { article_id: string; revision_id: string; revision_number: number; state: 'in_review' | 'approved' | 'rejected'; saved_at: string; snapshot_json: string; editor_draft_json: string | null } | undefined;
     if (!candidate) throw new Error('NOT_FOUND');
     const activePublication = this.db.prepare(`SELECT p.revision_id,p.published_at FROM publications p
       JOIN active_publications a ON a.article_id=p.article_id AND a.revision_id=p.revision_id
@@ -375,6 +425,7 @@ export class ServerPublishingStore {
       state: candidate.state,
       savedAt: candidate.saved_at,
       snapshot: JSON.parse(candidate.snapshot_json) as PublishedSnapshotRecordV1,
+      editorDraft: candidate.editor_draft_json ? JSON.parse(candidate.editor_draft_json) as PrivateEditorDraftV1 : null,
       publication: activePublication
         ? { revisionId: activePublication.revision_id, status: 'published', publishedAt: activePublication.published_at }
         : latestWithdrawal

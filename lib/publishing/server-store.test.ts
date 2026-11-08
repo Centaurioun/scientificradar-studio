@@ -65,12 +65,14 @@ describe('durable server publishing workflow', () => {
     store.createKnowledgeLink(author, { id: forgedLink.id, term: forgedLink.term, targetType: forgedLink.targetType, targetUrl: forgedLink.targetUrl, locale: forgedLink.locale, previewTitle: forgedLink.previewTitle, previewExcerpt: forgedLink.previewExcerpt, sourceAttribution: forgedLink.sourceAttribution });
     first.knowledgeLinks = [reviewedLink, forgedLink];
     first.bodyHtml = '<p onclick="alert(1)">Safe paragraph</p><a href="javascript:alert(1)">Unsafe link</a><figure data-media-id="media-figure-1"><img src="' + publicSrc + '" alt="fixture"></figure><table><tbody><tr><td>value</td></tr></tbody></table><span class="citation">[1]</span><span class="katex">x</span>';
+    const editorDraft = privateEditorDraft(first.articleId);
+    assert.equal(store.saveCandidate(author, first.articleId, first, editorDraft).state, 'in_review');
     assert.equal(store.saveCandidate(author, first.articleId, first).state, 'in_review');
-    assert.equal(store.saveCandidate(author, first.articleId, first).state, 'in_review');
+    assert.throws(() => store.saveCandidate(author, first.articleId, first, { ...editorDraft, article: { ...editorDraft.article, title: 'Altered immutable draft' } }), /REVISION_IMMUTABLE/);
     assert.throws(() => store.saveCandidate(editor, first.articleId, first), /REVISION_SUBMITTER_IMMUTABLE/);
     assert.throws(() => store.reviewCandidate(author, first.articleId, first.revisionId, 'approve'), /FORBIDDEN/);
     const editorCandidate = { ...first, revisionId: 'editor-submitted-revision', revisionNumber: 3, title: 'Editor submitted candidate' };
-    store.saveCandidate(editor, editorCandidate.articleId, editorCandidate);
+    store.saveCandidate(editor, editorCandidate.articleId, editorCandidate, privateEditorDraft(editorCandidate.articleId));
     assert.throws(() => store.saveCandidate(owner, editorCandidate.articleId, editorCandidate), /REVISION_SUBMITTER_IMMUTABLE/);
     assert.throws(() => store.reviewCandidate(editor, editorCandidate.articleId, editorCandidate.revisionId, 'approve'), /SELF_REVIEW_FORBIDDEN/);
     store.reviewCandidate(reviewer, first.articleId, first.revisionId, 'approve', 'Test fixture review');
@@ -81,6 +83,7 @@ describe('durable server publishing workflow', () => {
     assert.equal(store.listPublications().length, 1);
     const publicSnapshot = store.getPublicationBySlug(first.slug);
     assert.equal(publicSnapshot?.status, 'published');
+    assert.equal(Object.hasOwn(publicSnapshot ?? {}, 'editorDraft'), false);
     assert.deepEqual(publicSnapshot?.knowledgeLinks?.map((link) => link.id), ['knowledge-reviewed']);
     assert.equal(publicSnapshot?.blocks[0]?.type, 'figure');
     assert.doesNotMatch(publicSnapshot?.bodyHtml ?? '', /onclick|javascript:/i);
@@ -97,6 +100,7 @@ describe('durable server publishing workflow', () => {
     store.reviewCandidate(reviewer, second.articleId, second.revisionId, 'approve', 'Test correction review');
     store.publish(owner, second.articleId, second.revisionId, 'publish-2');
     assert.equal(store.getPublicationBySlug(first.slug)?.revisionId, second.revisionId);
+    assert.equal(Object.hasOwn(store.listPublications()[0] ?? {}, 'editorDraft'), false);
     assert.equal(store.readPublicMedia(assetRevisionId)?.bytes.byteLength, png.length);
 
     const withdrawn = store.withdraw(owner, second.articleId, second.revisionId, 'Test-only takedown', 'withdraw-2');
@@ -174,6 +178,16 @@ describe('durable server publishing workflow', () => {
     const ownerSession = store.login('owner@example.test', 'correct horse battery staple test');
     assert.ok(ownerSession);
     assert.equal(store.loadCandidate(ownerSession.actor, 'article-test').revisionId, 'editor-submitted-revision');
+    const recovered = store.loadCandidate(ownerSession.actor, 'article-test');
+    assert.equal(recovered.editorDraft?.schemaVersion, 1);
+    assert.equal(recovered.editorDraft?.article.status, 'draft');
+    assert.equal(recovered.editorDraft?.article.title, 'Test article');
+    assert.equal(recovered.editorDraft?.article.authorId, 'credited-author-1');
+    assert.deepEqual(recovered.editorDraft?.article.sourceIds, ['source-1']);
+    assert.equal((recovered.editorDraft?.article.body.content as Array<{ content: Array<{ text: string }> }>)[0].content[0].text, 'Private recovery payload with equation x² and citation [1].');
+    assert.equal(recovered.editorDraft?.article.bodyHtml.includes('onclick'), false);
+    assert.equal(recovered.editorDraft?.article.publishedAt, undefined);
+    assert.equal(recovered.editorDraft?.article.reviewNotes, undefined);
     assert.deepEqual(store.loadCandidate(ownerSession.actor, 'article-test').publication, {
       revisionId: 'rev-article-2', status: 'published', publishedAt: store.getPublicationBySlug('test-article')?.publishedAt,
     });
@@ -195,6 +209,22 @@ function snapshot(revisionId: string, publishedAt: string, mediaSrc: string, med
     blocks: [{ type: 'figure', id: 'figure-1', media, layout: 'column', figureNumber: '1' }],
     bodyHtml: `<figure data-media-id="media-figure-1"><img src="${mediaSrc}" alt="Synthetic one-pixel fixture"><figcaption>Synthetic fixture</figcaption></figure>`,
     sources: [], relatedIds: [], seo: { title: 'Test article', description: 'Test', noindex: false },
+  };
+}
+
+function privateEditorDraft(articleId: string) {
+  return {
+    schemaVersion: 1 as const,
+    article: {
+      id: articleId, locale: 'en' as const, title: 'Test article', slug: 'test-article', summary: 'Full private editor draft',
+      body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Private recovery payload with equation x² and citation [1].' }] }] },
+      bodyHtml: '<p onclick="alert(1)">Private recovery payload</p><p><span class="katex">x²</span> <sup data-citation-source-id="source-1">[1]</sup></p>',
+      status: 'published', primaryCategoryId: 'cat-science', categoryIds: ['cat-science'], tagIds: ['tag-recovery'], seriesId: 'series-test',
+      authorId: 'credited-author-1', sourceIds: ['source-1'], featuredMediaId: 'media-1', seo: { title: 'Private SEO', noindex: false },
+      scheduledAt: '2026-12-01T00:00:00.000Z', publishedAt: '2026-11-01T00:00:00.000Z', createdAt: '2026-11-01T00:00:00.000Z',
+      updatedAt: '2026-11-08T00:00:00.000Z', version: 5,
+      reviewNotes: [{ id: 'review-note', articleId, authorName: 'forged reviewer', role: 'reviewer', note: 'untrusted approval', action: 'approve', createdAt: '2026-11-08T00:00:00.000Z' }],
+    },
   };
 }
 
