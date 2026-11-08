@@ -22,6 +22,12 @@ test('audit findings navigate to the matching SEO, taxonomy, figure, and source 
   await followFinding(page, 'metadata.description.present', 'seo-description-input');
   await followFinding(page, 'images.alt.present', 'figure-alt-text-input');
   await followFinding(page, 'images.rights.verified', 'featured-media-select', 'Inspect Figure');
+
+  await page.getByLabel('Figure alt text & axes human-verified').check();
+  await page.goto(`/articles/${articleId}/seo`);
+  const rightsFinding = page.getByTestId('audit-finding-images.rights.verified');
+  await expect(rightsFinding.getByText('Blocks Publish')).toBeVisible();
+
   await followFinding(page, 'integrity.sources.present', 'attached-sources-fieldset');
 
   await expectNoFatalBrowserFailures(diagnostics);
@@ -36,7 +42,7 @@ test('direct links accept legacy inspector tab aliases and give a visible fallba
 
   await page.goto(`/articles/${articleId}/edit?tab=versions&focus=article-title-input`);
   await expect(page.locator('#article-title-input')).toBeFocused();
-  await expect(page.getByRole('button', { name: /History \(/ })).toHaveClass(/border-indigo-600/);
+  await expect(page.getByText('Restoring an earlier snapshot creates a new version so history is never lost.')).toBeVisible();
 
   await page.goto(`/articles/${articleId}/edit?tab=seo&focus=missing-audit-control`);
   await expect(page.locator('#article-metadata-inspector')).toBeFocused();
