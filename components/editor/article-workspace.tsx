@@ -1308,6 +1308,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
 
                       <div className="mt-2 flex gap-1.5">
                         <input
+                          id="new-tag-input"
                           type="text"
                           value={newTagName}
                           disabled={selectedTagIds.length >= MAX_EDITORIAL_TAGS}
@@ -1492,7 +1493,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                       confirmed by a human editor.
                     </div>
 
-                    <div className="space-y-2">
+                    <div id="attached-sources-fieldset" tabIndex={-1} className="space-y-2">
                       <span className="block font-bold uppercase tracking-wider text-slate-500">
                         Attached Citations ({selectedSourceIds.length})
                       </span>
