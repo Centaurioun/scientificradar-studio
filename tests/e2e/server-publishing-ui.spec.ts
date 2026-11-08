@@ -14,10 +14,16 @@ async function expectPublicWebVisibility(page: import('@playwright/test').Page, 
   }
   const articleResponse = await page.request.get(new URL(`/article/${encodeURIComponent(slug)}`, base).toString(), { timeout: 15_000 });
   const relatedResponse = relatedSlug ? await page.request.get(new URL(`/article/${encodeURIComponent(relatedSlug)}`, base).toString(), { timeout: 15_000 }) : null;
+  const homepageResponse = await page.request.get(new URL('/', base).toString(), { timeout: 15_000 });
+  const topicsResponse = await page.request.get(new URL('/topics', base).toString(), { timeout: 15_000 });
+  const topicResponse = await page.request.get(new URL('/topics/physics', base).toString(), { timeout: 15_000 });
   const searchQuery = title || slug;
   const searchResponse = await page.request.get(new URL(`/search?q=${encodeURIComponent(searchQuery)}`, base).toString(), { timeout: 15_000 });
   const sitemapResponse = await page.request.get(new URL('/sitemap.xml', base).toString(), { timeout: 15_000 });
   expect(searchResponse.status()).toBe(200);
+  expect(homepageResponse.status()).toBe(200);
+  expect(topicsResponse.status()).toBe(200);
+  expect(topicResponse.status()).toBe(200);
   expect(sitemapResponse.status()).toBe(200);
   const searchHtml = await searchResponse.text();
   const searchResultIndex = searchHtml.indexOf(`/article/${slug}`);
@@ -27,6 +33,9 @@ async function expectPublicWebVisibility(page: import('@playwright/test').Page, 
     : '';
   const sitemap = await sitemapResponse.text();
   const routeIsListed = sitemap.includes(`/article/${slug}`);
+  const homepageHtml = await homepageResponse.text();
+  const topicsHtml = await topicsResponse.text();
+  const topicHtml = await topicResponse.text();
   if (visible) {
     expect(articleResponse.status()).toBe(200);
     const articleHtml = await articleResponse.text();
@@ -42,6 +51,9 @@ async function expectPublicWebVisibility(page: import('@playwright/test').Page, 
   } else {
     expect(articleResponse.status()).toBe(404);
     expect(searchHasArticleLink, `Expected public search to exclude withdrawn ${slug}.`).toBe(false);
+    expect(homepageHtml).not.toContain(title || slug);
+    expect(topicsHtml).not.toContain(title || slug);
+    expect(topicHtml).not.toContain(title || slug);
   }
   expect(routeIsListed, `Local unverified test publications must remain noindex and absent from sitemap: ${slug}; received: ${sitemap.slice(0, 800)}`).toBe(false);
   return searchResultExcerpt || null;
