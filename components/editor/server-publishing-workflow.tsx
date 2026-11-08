@@ -3,6 +3,7 @@
 import React, { useRef, useState } from 'react';
 import {
   isServerPublishingConfigured,
+  loadCandidate,
   login,
   logout,
   publish,
@@ -23,7 +24,7 @@ import type {
   Tag,
 } from '@/lib/types';
 
-type ServerCandidateState = 'in_review' | 'approved' | 'changes_requested' | 'published';
+type ServerCandidateState = 'in_review' | 'approved' | 'rejected';
 type ServerPublicationState = 'published' | 'withdrawn';
 
 type ServerCandidate = {
@@ -32,7 +33,7 @@ type ServerCandidate = {
   revisionNumber: number;
   state: ServerCandidateState;
   snapshotHash?: string;
-  savedBy: string;
+  savedBy?: string;
   decisionBy?: string;
 };
 
@@ -139,7 +140,44 @@ export function ServerPublishingWorkflow({
       }
       setActor(nextActor);
       setPassword('');
-      setFeedback(`Signed in to server publishing as ${nextActor.role}.`);
+      try {
+        const loaded = await loadCandidate(article.id);
+        if (
+          loaded.articleId !== article.id ||
+          !loaded.revisionId ||
+          !Number.isInteger(loaded.revisionNumber) ||
+          !['in_review', 'approved', 'rejected'].includes(loaded.state) ||
+          loaded.snapshot?.articleId !== article.id ||
+          loaded.snapshot?.revisionId !== loaded.revisionId ||
+          loaded.snapshot?.revisionNumber !== loaded.revisionNumber ||
+          (loaded.publication !== null &&
+            (!loaded.publication.revisionId ||
+              !['published', 'withdrawn'].includes(loaded.publication.status) ||
+              typeof loaded.publication.publishedAt !== 'string' ||
+              (loaded.publication.status === 'withdrawn' && typeof loaded.publication.withdrawnAt !== 'string')))
+        ) {
+          throw new Error('PUBLISHING_INVALID_CANDIDATE_RESPONSE');
+        }
+        setCandidate({
+          articleId: loaded.articleId,
+          revisionId: loaded.revisionId,
+          revisionNumber: loaded.revisionNumber,
+          state: loaded.state,
+        });
+        setPublication(loaded.publication ? {
+          articleId: loaded.articleId,
+          revisionId: loaded.publication.revisionId,
+          status: loaded.publication.status,
+          publishedAt: loaded.publication.publishedAt,
+          ...(loaded.publication.status === 'withdrawn' ? { withdrawnAt: loaded.publication.withdrawnAt } : {}),
+        } : null);
+        setFeedback(`Signed in as ${nextActor.role}. Loaded server revision ${loaded.revisionId} (${loaded.state}).`);
+      } catch (loadError) {
+        if (messageFor(loadError) !== 'NOT_FOUND') throw loadError;
+        setCandidate(null);
+        setPublication(null);
+        setFeedback(`Signed in to server publishing as ${nextActor.role}. No server revision exists for this article yet.`);
+      }
     });
   };
 
@@ -219,7 +257,7 @@ export function ServerPublishingWorkflow({
         current && current.revisionId === response.revisionId
           ? {
               ...current,
-              state: decision === 'approve' ? 'approved' : 'changes_requested',
+              state: decision === 'approve' ? 'approved' : 'rejected',
               decisionBy: response.reviewedBy as string,
             }
           : current
@@ -246,11 +284,6 @@ export function ServerPublishingWorkflow({
       ) {
         throw new Error('PUBLISHING_INVALID_PUBLISH_RESPONSE');
       }
-      setCandidate((current) =>
-        current && current.revisionId === response.revisionId
-          ? { ...current, state: 'published' }
-          : current
-      );
       setPublication({
         articleId: candidate.articleId,
         revisionId: candidate.revisionId,
@@ -319,11 +352,6 @@ export function ServerPublishingWorkflow({
         publishedAt: response.publishedAt,
         withdrawnAt: undefined,
       });
-      setCandidate((current) =>
-        current && current.revisionId === response.revisionId
-          ? { ...current, state: 'published' }
-          : current
-      );
       clearIdempotencyKey(idempotency.scope);
       setFeedback(`Server restored exact revision ${response.revisionId}.`);
     });
@@ -343,7 +371,7 @@ export function ServerPublishingWorkflow({
           </h2>
           {candidate && (
             <p className="mt-1 break-all font-mono text-[11px] text-slate-600 dark:text-slate-400">
-              Candidate revision {candidate.revisionId} · v{candidate.revisionNumber}
+              Candidate article {candidate.articleId} · revision {candidate.revisionId} · v{candidate.revisionNumber}
               {candidate.decisionBy ? ` · decision recorded by ${candidate.decisionBy}` : ''}
             </p>
           )}
@@ -452,7 +480,8 @@ export function ServerPublishingWorkflow({
           </>
         )}
 
-        {actor && candidate?.state === 'approved' && canPublish(actor.role) && (
+        {actor && candidate?.state === 'approved' && canPublish(actor.role) &&
+          !(publication?.revisionId === candidate.revisionId && (publication.status === 'published' || publication.status === 'withdrawn')) && (
           <button
             type="button"
             disabled={busy || isDirty}
