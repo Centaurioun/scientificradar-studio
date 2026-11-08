@@ -83,25 +83,38 @@ export default function ArticlesListPage() {
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const author = authors.find((a) => a.id === art.authorId);
+        const category = categories.find((item) => item.id === art.primaryCategoryId);
         const artTags = tags.filter((t) => art.tagIds.includes(t.id));
         const artSources = sources.filter((s) => art.sourceIds.includes(s.id));
 
         const matchesTitle = art.title.toLowerCase().includes(q);
         const matchesSlug = art.slug.toLowerCase().includes(q);
         const matchesAuthor = author?.displayName.toLowerCase().includes(q);
+        const matchesCategory = category?.name.toLowerCase().includes(q);
         const matchesTag = artTags.some((t) => t.name.toLowerCase().includes(q));
         const matchesDoi = artSources.some((s) => s.doi?.toLowerCase().includes(q));
 
-        if (!matchesTitle && !matchesSlug && !matchesAuthor && !matchesTag && !matchesDoi) {
+        if (
+          !matchesTitle &&
+          !matchesSlug &&
+          !matchesAuthor &&
+          !matchesCategory &&
+          !matchesTag &&
+          !matchesDoi
+        ) {
           return false;
         }
       }
 
       return true;
     });
-  }, [articles, savedFilter, categoryFilter, localeFilter, searchQuery, authors, tags, sources]);
+  }, [articles, savedFilter, categoryFilter, localeFilter, searchQuery, authors, tags, sources, categories]);
 
-  const selectedList = Object.keys(selectedIds).filter((id) => selectedIds[id]);
+  // Bulk actions only apply to selected articles that are currently visible.
+  // A prior selection must not silently affect records hidden by a new filter.
+  const selectedList = filteredArticles
+    .filter((article) => selectedIds[article.id])
+    .map((article) => article.id);
 
   const handleBulkStatusChange = async (nextStatus: ArticleStatus) => {
     let updatedCount = 0;
@@ -143,12 +156,16 @@ export default function ArticlesListPage() {
               Scientific Articles ({filteredArticles.length})
             </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Search by title, slug, author, category, tag, language, or source DOI.
+              Search by title, slug, author, category, tag, or source DOI; use filters for language and status.
             </p>
           </div>
 
           {/* Saved Filter Tabs (Spec §6) */}
-          <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-800 rounded-lg text-xs">
+          <div
+            role="group"
+            aria-label="Filter articles by workflow status"
+            className="flex flex-wrap items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-800 rounded-lg text-xs"
+          >
             {(
               [
                 { id: 'all', label: 'All' },
@@ -162,6 +179,7 @@ export default function ArticlesListPage() {
               <button
                 key={tab.id}
                 type="button"
+                aria-pressed={savedFilter === tab.id}
                 onClick={() => setSavedFilter(tab.id)}
                 className={`px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap ${
                   savedFilter === tab.id
@@ -323,7 +341,7 @@ export default function ArticlesListPage() {
                       <td className="py-3 px-3 align-top max-w-md">
                         <Link
                           href={`/articles/${art.id}/edit`}
-                          className="font-semibold text-sm text-slate-900 dark:text-slate-100 hover:text-[#087f83] dark:hover:text-teal-400 block leading-snug"
+                          className="font-semibold text-sm text-slate-900 dark:text-slate-100 hover:text-[#087f83] dark:hover:text-teal-400 block leading-snug break-words"
                         >
                           {art.title}
                         </Link>

@@ -1,4 +1,4 @@
-import type { Article, MediaAsset } from '../types';
+import type { Article, MediaAsset, ScientificSourceSnapshot } from '../types';
 import type { PublishedSnapshotRecordV1, PublicMedia } from './web-contract-v1';
 
 export interface ServerPublishingActor { id: string; email: string; role: 'owner' | 'editor' | 'author' | 'reviewer' | 'rights_reviewer'; }
@@ -95,7 +95,7 @@ async function prepareMedia(snapshot: PublicationSnapshotInput, sourceAssets: Me
   }
 }
 
-export async function saveCandidate(input: { snapshot: PublishedSnapshotRecordV1; editorDraft?: { schemaVersion: 1; article: Article }; mediaAssets?: MediaAsset[] }): Promise<unknown> {
+export async function saveCandidate(input: { snapshot: PublishedSnapshotRecordV1; editorDraft?: { schemaVersion: 1; article: Article; sourceSnapshots?: ScientificSourceSnapshot[] }; mediaAssets?: MediaAsset[] }): Promise<unknown> {
   const snapshot = structuredClone(input.snapshot) as PublicationSnapshotInput;
   await prepareMedia(snapshot, input.mediaAssets);
   return request(`/api/studio/publications/${encodeURIComponent(snapshot.articleId)}`, { method: 'PUT', body: JSON.stringify({ snapshot, ...(input.editorDraft ? { editorDraft: input.editorDraft } : {}) }) });
@@ -108,7 +108,7 @@ export interface ServerCandidate {
   state: 'in_review' | 'approved' | 'rejected';
   savedAt: string;
   snapshot: PublishedSnapshotRecordV1;
-  editorDraft: { schemaVersion: 1; article: Article } | null;
+  editorDraft: { schemaVersion: 1; article: Article; sourceSnapshots?: ScientificSourceSnapshot[] } | null;
   publication: { revisionId: string; status: 'published'; publishedAt: string } | { revisionId: string; status: 'withdrawn'; publishedAt: string; withdrawnAt: string } | null;
 }
 

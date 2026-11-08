@@ -2,9 +2,9 @@ import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Article } from '../types';
+import type { Article, ScientificSourceSnapshot } from '../types';
 import type { PublishedSnapshotRecordV1 } from './web-contract-v1';
-import { sanitizeCanonicalBodyHtml, validatePublicationSnapshotV1 } from './web-contract-v1';
+import { prepareCanonicalBodyHtml, sanitizeCanonicalBodyHtml, validatePublicationSnapshotV1 } from './web-contract-v1';
 
 export type ServerRole = 'owner' | 'editor' | 'author' | 'reviewer' | 'rights_reviewer';
 export interface AuthenticatedActor { id: string; email: string; role: ServerRole; }
@@ -25,6 +25,7 @@ export interface PublishingConfig {
 export interface PrivateEditorDraftV1 {
   schemaVersion: 1;
   article: Article;
+  sourceSnapshots?: ScientificSourceSnapshot[];
 }
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
@@ -65,19 +66,61 @@ function normalizePrivateEditorDraft(value: unknown, articleId: string): Private
   let rawBytes: number;
   try { rawBytes = Buffer.byteLength(JSON.stringify(value)); } catch { throw new Error('INVALID_EDITOR_DRAFT'); }
   if (rawBytes > MAX_EDITOR_DRAFT_BYTES) throw new Error('EDITOR_DRAFT_TOO_LARGE');
-  const envelope = value as { schemaVersion?: unknown; article?: unknown };
+  const envelope = value as { schemaVersion?: unknown; article?: unknown; sourceSnapshots?: unknown };
   if (envelope.schemaVersion !== 1 || !envelope.article || typeof envelope.article !== 'object' || Array.isArray(envelope.article)) throw new Error('INVALID_EDITOR_DRAFT');
   const article = structuredClone(envelope.article) as Record<string, unknown>;
-  const allowedArticleFields = new Set(['id', 'locale', 'title', 'slug', 'dek', 'summary', 'editorialType', 'translationGroupId', 'legacyProvenance', 'body', 'bodyHtml', 'status', 'primaryCategoryId', 'categoryIds', 'tagIds', 'seriesId', 'authorId', 'sourceIds', 'featuredMediaId', 'seo', 'scheduledAt', 'publishedAt', 'createdAt', 'updatedAt', 'version', 'reviewNotes']);
+  const allowedArticleFields = new Set(['id', 'locale', 'title', 'slug', 'dek', 'summary', 'editorialType', 'translationGroupId', 'legacyProvenance', 'body', 'bodyHtml', 'status', 'primaryCategoryId', 'categoryIds', 'tagIds', 'seriesId', 'authorId', 'sourceIds', 'relatedIds', 'keyConcepts', 'editorialNotices', 'featuredMediaId', 'seo', 'scheduledAt', 'publishedAt', 'createdAt', 'updatedAt', 'version', 'reviewNotes']);
   if (Object.keys(article).some((key) => !allowedArticleFields.has(key))) throw new Error('INVALID_EDITOR_DRAFT');
   if (article.id !== articleId || typeof article.title !== 'string' || typeof article.slug !== 'string' ||
     typeof article.summary !== 'string' || typeof article.bodyHtml !== 'string' || !article.body || typeof article.body !== 'object' || Array.isArray(article.body) ||
-    !['en', 'tr'].includes(String(article.locale)) || !Array.isArray(article.categoryIds) || !Array.isArray(article.tagIds) || !Array.isArray(article.sourceIds) ||
+    !['en', 'tr'].includes(String(article.locale)) || !Array.isArray(article.categoryIds) || !Array.isArray(article.tagIds) || !Array.isArray(article.sourceIds) || (article.relatedIds !== undefined && !Array.isArray(article.relatedIds)) ||
     typeof article.createdAt !== 'string' || typeof article.updatedAt !== 'string' || !Number.isInteger(article.version)) {
     throw new Error('INVALID_EDITOR_DRAFT');
   }
-  const arrays = [article.categoryIds, article.tagIds, article.sourceIds];
+  const arrays = [article.categoryIds, article.tagIds, article.sourceIds, article.relatedIds ?? []];
   if (arrays.some((items) => (items as unknown[]).length > 500 || (items as unknown[]).some((item) => typeof item !== 'string' || item.length > 300))) throw new Error('INVALID_EDITOR_DRAFT');
+  const relatedIds = (article.relatedIds ?? []) as unknown[];
+  if (relatedIds.some((id) => id === articleId) || new Set(relatedIds).size !== relatedIds.length) throw new Error('INVALID_EDITOR_DRAFT_RELATED_IDS');
+  if (article.keyConcepts !== undefined) {
+    if (!Array.isArray(article.keyConcepts) || article.keyConcepts.length > 3) throw new Error('INVALID_EDITOR_DRAFT_KEY_CONCEPTS');
+    const concepts = article.keyConcepts as unknown[];
+    const html = sanitizeCanonicalBodyHtml(article.bodyHtml);
+    const h2Ids = new Set(prepareCanonicalBodyHtml(html).headings.filter((heading) => heading.level === 2).map((heading) => heading.id));
+    const headingIds = new Set<string>();
+    for (const value of concepts) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_EDITOR_DRAFT_KEY_CONCEPTS');
+      const concept = value as Record<string, unknown>;
+      if (typeof concept.title !== 'string' || !concept.title.trim() || concept.title.length > 100 || typeof concept.definition !== 'string' || !concept.definition.trim() || concept.definition.length > 300 || typeof concept.headingId !== 'string' || !h2Ids.has(concept.headingId) || headingIds.has(concept.headingId)) throw new Error('INVALID_EDITOR_DRAFT_KEY_CONCEPTS');
+      headingIds.add(concept.headingId);
+    }
+  }
+  if (article.editorialNotices !== undefined) {
+    if (!Array.isArray(article.editorialNotices) || article.editorialNotices.length > 50) throw new Error('INVALID_EDITOR_DRAFT_EDITORIAL_NOTICES');
+    const noticeIds = new Set<string>();
+    for (const value of article.editorialNotices as unknown[]) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_EDITOR_DRAFT_EDITORIAL_NOTICES');
+      const notice = value as Record<string, unknown>;
+      const validUrl = notice.sourceUrl === undefined || (typeof notice.sourceUrl === 'string' && (() => { try { return new URL(notice.sourceUrl).protocol === 'https:'; } catch { return false; } })());
+      if (typeof notice.id !== 'string' || !notice.id.trim() || noticeIds.has(notice.id) || !['correction', 'retraction', 'updated-information'].includes(String(notice.type)) || typeof notice.title !== 'string' || !notice.title.trim() || notice.title.length > 160 || typeof notice.body !== 'string' || !notice.body.trim() || notice.body.length > 2000 || typeof notice.recordedAt !== 'string' || !Number.isFinite(Date.parse(notice.recordedAt)) || !validUrl || (notice.relatedArticleId !== undefined && (typeof notice.relatedArticleId !== 'string' || notice.relatedArticleId === articleId))) throw new Error('INVALID_EDITOR_DRAFT_EDITORIAL_NOTICES');
+      noticeIds.add(notice.id);
+    }
+  }
+  let sourceSnapshots: ScientificSourceSnapshot[] | undefined;
+  if (envelope.sourceSnapshots !== undefined) {
+    if (!Array.isArray(envelope.sourceSnapshots) || envelope.sourceSnapshots.length > 200) throw new Error('INVALID_EDITOR_DRAFT_SOURCE_SNAPSHOTS');
+    const sourceIds = new Set<string>();
+    const textFieldIsValid = (value: unknown, required = false, max = 500) => value === undefined ? !required : typeof value === 'string' && (!required || Boolean(value.trim())) && value.length <= max && !/[<>\u0000-\u001f]/.test(value);
+    const doiPattern = /^10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+$/;
+    const sourceTypes = ['peer_reviewed', 'preprint', 'dataset', 'institutional', 'institutional_report', 'book'];
+    sourceSnapshots = envelope.sourceSnapshots.map((raw) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('INVALID_EDITOR_DRAFT_SOURCE_SNAPSHOTS');
+      const source = raw as Record<string, unknown>;
+      const allowed = ['id', 'articleId', 'title', 'authors', 'journal', 'year', 'doi', 'url', 'sourceType', 'accessDate', 'volume', 'issue', 'pages', 'articleNumber', 'notes', 'linkedClaim'];
+      if (Object.keys(source).some((key) => !allowed.includes(key)) || typeof source.id !== 'string' || !source.id.trim() || sourceIds.has(source.id) || !((article.sourceIds as string[]).includes(source.id)) || (source.articleId !== undefined && source.articleId !== articleId) || !textFieldIsValid(source.title, true) || !textFieldIsValid(source.authors, true) || !textFieldIsValid(source.journal, true) || !Number.isInteger(source.year) || (source.year as number) < 1500 || (source.year as number) > 2100 || !textFieldIsValid(source.url, true, 2048) || (() => { try { return !['http:', 'https:'].includes(new URL(source.url as string).protocol); } catch { return true; } })() || !sourceTypes.includes(String(source.sourceType)) || typeof source.accessDate !== 'string' || !Number.isFinite(Date.parse(source.accessDate)) || !textFieldIsValid(source.doi, false, 150) || (typeof source.doi === 'string' && source.doi !== '' && !doiPattern.test(source.doi)) || !textFieldIsValid(source.volume, false, 80) || !textFieldIsValid(source.issue, false, 80) || !textFieldIsValid(source.pages, false, 80) || !textFieldIsValid(source.articleNumber, false, 80) || !textFieldIsValid(source.notes, false, 2000) || !textFieldIsValid(source.linkedClaim, false, 1000)) throw new Error('INVALID_EDITOR_DRAFT_SOURCE_SNAPSHOTS');
+      sourceIds.add(source.id);
+      return Object.fromEntries(allowed.filter((key) => source[key] !== undefined).map((key) => [key, source[key]])) as unknown as ScientificSourceSnapshot;
+    });
+  }
   if (typeof article.bodyHtml !== 'string') throw new Error('INVALID_EDITOR_DRAFT');
   article.bodyHtml = sanitizeCanonicalBodyHtml(article.bodyHtml);
   // Editorial status/review metadata cannot authorize server workflow transitions.
@@ -88,7 +131,7 @@ function normalizePrivateEditorDraft(value: unknown, articleId: string): Private
   delete article.publishedAt;
   delete article.scheduledAt;
   delete article.reviewNotes;
-  const normalized = { schemaVersion: 1 as const, article: article as unknown as Article };
+  const normalized = { schemaVersion: 1 as const, article: article as unknown as Article, ...(sourceSnapshots !== undefined ? { sourceSnapshots } : {}) };
   if (Buffer.byteLength(JSON.stringify(normalized)) > MAX_EDITOR_DRAFT_BYTES) throw new Error('EDITOR_DRAFT_TOO_LARGE');
   return normalized;
 }
@@ -135,12 +178,12 @@ function canonicalizePublicSnapshot(value: unknown): PublishedSnapshotRecordV1 {
   const snapshot = pickKnownFields(source, [
     'contractVersion', 'articleId', 'revisionId', 'revisionNumber', 'slug', 'locale', 'translationGroupId', 'editorialType', 'status',
     'title', 'dek', 'summary', 'categorySlug', 'subcategorySlugs', 'tagSlugs', 'authorIds', 'seriesId', 'publishedAt', 'updatedAt',
-    'withdrawnAt', 'withdrawalReason', 'readingTimeMinutes', 'featuredRank', 'mostReadDemoRank', 'bodyHtml', 'headings', 'relatedIds',
+    'withdrawnAt', 'withdrawalReason', 'readingTimeMinutes', 'featuredRank', 'mostReadDemoRank', 'bodyHtml', 'headings', 'relatedIds', 'keyConcepts', 'editorialNotices',
   ]);
   if (source.hero !== undefined) snapshot.hero = canonicalizePublicMedia(source.hero);
   if (Array.isArray(source.blocks)) snapshot.blocks = source.blocks.map(canonicalizePublicBlock);
   else if (source.blocks !== undefined) snapshot.blocks = source.blocks;
-  if (Array.isArray(source.sources)) snapshot.sources = source.sources.map((item) => pickKnownFields(item, ['id', 'label', 'title', 'authors', 'publication', 'year', 'href', 'doi', 'isIllustrativeDemo', 'note']));
+  if (Array.isArray(source.sources)) snapshot.sources = source.sources.map((item) => pickKnownFields(item, ['id', 'label', 'title', 'authors', 'publication', 'volume', 'issue', 'pages', 'articleNumber', 'year', 'href', 'doi', 'isIllustrativeDemo', 'note']));
   else if (source.sources !== undefined) snapshot.sources = source.sources;
   if (Array.isArray(source.authors)) snapshot.authors = source.authors.map((item) => pickKnownFields(item, ['id', 'name', 'role', 'credentialsNote', 'bio', 'isDemoPersona']));
   if (Array.isArray(source.knowledgeLinks)) snapshot.knowledgeLinks = source.knowledgeLinks.map((item) => pickKnownFields(item, ['id', 'term', 'targetType', 'targetUrl', 'targetArticleId', 'locale', 'previewTitle', 'previewExcerpt', 'sourceAttribution', 'reviewStatus', 'isSampleDemoData']));

@@ -21,6 +21,7 @@ import type {
   KnowledgeLink,
   MediaAsset,
   ScientificSource,
+  ScientificSourceSnapshot,
   Tag,
 } from '@/lib/types';
 
@@ -210,7 +211,15 @@ export function ServerPublishingWorkflow({
       const response = record(
         await saveCandidate({
           snapshot: serialized.snapshot,
-          editorDraft: { schemaVersion: 1, article: localArticle },
+          editorDraft: {
+            schemaVersion: 1,
+            article: localArticle,
+            sourceSnapshots: sources.filter((source) => localArticle.sourceIds.includes(source.id)).map((source): ScientificSourceSnapshot => ({
+              id: source.id, articleId: source.articleId, title: source.title, authors: source.authors, journal: source.journal, year: source.year,
+              doi: source.doi, url: source.url, sourceType: source.sourceType, accessDate: source.accessDate,
+              volume: source.volume, issue: source.issue, pages: source.pages, articleNumber: source.articleNumber, notes: source.notes, linkedClaim: source.linkedClaim,
+            })),
+          },
           mediaAssets: media,
         })
       );

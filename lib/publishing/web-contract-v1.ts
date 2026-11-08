@@ -40,6 +40,10 @@ export interface PublicSource {
   title: string;
   authors?: string;
   publication?: string;
+  volume?: string;
+  issue?: string;
+  pages?: string;
+  articleNumber?: string;
   year?: string;
   href?: string;
   /**
@@ -173,6 +177,8 @@ export interface PublicArticle {
   bodyHtml?: string;
   sources: PublicSource[];
   relatedIds: string[];
+  keyConcepts?: { title: string; definition: string; headingId: string }[];
+  editorialNotices?: { id: string; type: 'correction' | 'retraction' | 'updated-information'; title: string; body: string; relatedArticleId?: string; sourceUrl?: string; recordedAt: string }[];
   seo?: {
     title?: string;
     description?: string;
@@ -223,6 +229,8 @@ export interface PublishedSnapshotRecordV1 {
   headings?: ArticleHeadingOutlineItem[];
   sources: PublicSource[];
   relatedIds: string[];
+  keyConcepts?: { title: string; definition: string; headingId: string }[];
+  editorialNotices?: { id: string; type: 'correction' | 'retraction' | 'updated-information'; title: string; body: string; relatedArticleId?: string; sourceUrl?: string; recordedAt: string }[];
   seo?: {
     title?: string;
     description?: string;
@@ -246,7 +254,8 @@ export interface SnapshotValidationIssue {
     | 'INVALID_DOI_FORMAT'
     | 'BROKEN_CITATION_REFERENCE'
     | 'UNSUPPORTED_STUDIO_NODE'
-    | 'EMPTY_ARTICLE_BODY';
+    | 'EMPTY_ARTICLE_BODY'
+    | 'INVALID_EDITORIAL_METADATA';
   field: string;
   message: string;
 }
@@ -1223,6 +1232,34 @@ export function validatePublicationSnapshotV1(
         });
       }
     }
+    for (const field of ['volume', 'issue', 'pages', 'articleNumber'] as const) {
+      const value = source[field];
+      if (value !== undefined && (typeof value !== 'string' || value.trim().length === 0 || value.length > 80 || /[<>\u0000-\u001f]/.test(value))) {
+        issues.push({ code: 'INVALID_EDITORIAL_METADATA', field: `sources[${idx}].${field}`, message: `Source bibliographic field "${field}" must be plain text of 1–80 characters.` });
+      }
+    }
+  }
+
+  const headingsForConcepts = resolveArticleHeadings({ blocks: snapshot.blocks ?? [], bodyHtml: snapshot.bodyHtml, sources: snapshot.sources ?? [] });
+  const seenRelated = new Set<string>();
+  for (const [idx, id] of (snapshot.relatedIds ?? []).entries()) {
+    if (typeof id !== 'string' || !id.trim() || id === snapshot.articleId || seenRelated.has(id)) issues.push({ code: 'INVALID_EDITORIAL_METADATA', field: `relatedIds[${idx}]`, message: 'Related article IDs must be unique, non-empty, and cannot point to this article.' });
+    if (typeof id === 'string') seenRelated.add(id);
+  }
+  const seenConceptHeadings = new Set<string>();
+  const concepts = snapshot.keyConcepts ?? [];
+  if (concepts.length > 3) issues.push({ code: 'INVALID_EDITORIAL_METADATA', field: 'keyConcepts', message: 'At most three Key Concepts are allowed.' });
+  for (const [idx, concept] of concepts.entries()) {
+    if (!concept || typeof concept.title !== 'string' || !concept.title.trim() || concept.title.length > 100 || typeof concept.definition !== 'string' || !concept.definition.trim() || concept.definition.length > 300 || typeof concept.headingId !== 'string' || !concept.headingId.trim() || !headingsForConcepts.some(h => h.id === concept.headingId && h.level === 2) || seenConceptHeadings.has(concept.headingId)) {
+      issues.push({ code: 'INVALID_EDITORIAL_METADATA', field: `keyConcepts[${idx}]`, message: 'Each Key Concept needs a concise title and definition plus a unique ID referencing an existing H2 heading.' });
+    }
+    if (typeof concept?.headingId === 'string') seenConceptHeadings.add(concept.headingId);
+  }
+  for (const [idx, notice] of (snapshot.editorialNotices ?? []).entries()) {
+    const validUrl = notice?.sourceUrl === undefined || (typeof notice.sourceUrl === 'string' && (() => { try { return new URL(notice.sourceUrl).protocol === 'https:'; } catch { return false; } })());
+    if (!notice || typeof notice.id !== 'string' || !notice.id.trim() || !['correction', 'retraction', 'updated-information'].includes(notice.type) || typeof notice.title !== 'string' || !notice.title.trim() || notice.title.length > 160 || typeof notice.body !== 'string' || !notice.body.trim() || notice.body.length > 2000 || typeof notice.recordedAt !== 'string' || !Number.isFinite(Date.parse(notice.recordedAt)) || !validUrl) {
+      issues.push({ code: 'INVALID_EDITORIAL_METADATA', field: `editorialNotices[${idx}]`, message: 'Editorial notice metadata is incomplete or malformed.' });
+    }
   }
 
   for (const [idx, block] of (snapshot.blocks ?? []).entries()) {
@@ -1339,6 +1376,8 @@ export function adaptSnapshotV1ToPublicArticle(
     bodyHtml: snapshot.bodyHtml,
     sources: snapshot.sources ?? [],
     relatedIds: snapshot.relatedIds ?? [],
+    keyConcepts: snapshot.keyConcepts,
+    editorialNotices: snapshot.editorialNotices,
     seo: snapshot.seo,
     revisionId: snapshot.revisionId,
     revisionNumber: snapshot.revisionNumber,
@@ -1384,6 +1423,8 @@ export function adaptPublicArticleToSnapshotV1(
     headings,
     sources: article.sources,
     relatedIds: [...article.relatedIds],
+    keyConcepts: article.keyConcepts,
+    editorialNotices: article.editorialNotices,
     seo: article.seo,
   };
 }
@@ -1623,6 +1664,10 @@ export function serializeStudioArticleToSnapshotV1(
       title: stripHtmlTags(src.title),
       authors: stripHtmlTags(src.authors),
       publication: stripHtmlTags(src.journal),
+      ...(src.volume ? { volume: stripHtmlTags(src.volume) } : {}),
+      ...(src.issue ? { issue: stripHtmlTags(src.issue) } : {}),
+      ...(src.pages ? { pages: stripHtmlTags(src.pages) } : {}),
+      ...(src.articleNumber ? { articleNumber: stripHtmlTags(src.articleNumber) } : {}),
       year: String(src.year),
       href: src.url?.trim() || undefined,
       // Per Web contract v1.0.0: illustrative demo sources must NOT carry a synthetic DOI
@@ -1697,7 +1742,9 @@ export function serializeStudioArticleToSnapshotV1(
     ...(sanitizedBodyHtml ? { bodyHtml: sanitizedBodyHtml } : {}),
     headings: preparedBody.headings,
     sources: publicSources,
-    relatedIds: [],
+    relatedIds: [...(article.relatedIds || [])],
+    ...(article.keyConcepts?.length ? { keyConcepts: article.keyConcepts } : {}),
+    ...(article.editorialNotices?.length ? { editorialNotices: article.editorialNotices } : {}),
     seo: {
       title: stripHtmlTags(article.seo?.title || cleanTitle),
       description: stripHtmlTags(article.seo?.description || cleanSummary),

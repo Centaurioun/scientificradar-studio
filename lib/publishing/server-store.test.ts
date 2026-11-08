@@ -64,8 +64,21 @@ describe('durable server publishing workflow', () => {
     store.reviewKnowledgeLink(reviewer, reviewedLink.id, 'approve');
     store.createKnowledgeLink(author, { id: forgedLink.id, term: forgedLink.term, targetType: forgedLink.targetType, targetUrl: forgedLink.targetUrl, locale: forgedLink.locale, previewTitle: forgedLink.previewTitle, previewExcerpt: forgedLink.previewExcerpt, sourceAttribution: forgedLink.sourceAttribution });
     first.knowledgeLinks = [reviewedLink, forgedLink];
-    first.bodyHtml = '<p onclick="alert(1)">Safe paragraph</p><a href="javascript:alert(1)">Unsafe link</a><figure data-media-id="media-figure-1"><img src="' + publicSrc + '" alt="fixture"></figure><table><tbody><tr><td>value</td></tr></tbody></table><span class="citation">[1]</span><span class="katex">x</span>';
+    first.bodyHtml = '<h2 id="topic">Topic</h2><p onclick="alert(1)">Safe paragraph</p><a href="javascript:alert(1)">Unsafe link</a><figure data-media-id="media-figure-1"><img src="' + publicSrc + '" alt="fixture"></figure><table><tbody><tr><td>value</td></tr></tbody></table><span class="citation">[1]</span><span class="katex">x</span>';
+    first.sources = [{ id: 'source-bib', label: '1', title: 'Bibliographic fixture', publication: 'Test Journal', volume: '12', issue: '3', pages: '100-108', articleNumber: 'e1234', isIllustrativeDemo: true }];
+    first.keyConcepts = [{ title: 'Topic', definition: 'A reviewed scientific concept.', headingId: 'topic' }];
+    first.editorialNotices = [{ id: 'notice-correction-public', type: 'correction', title: 'Correction', body: 'A publisher correction is recorded.', sourceUrl: 'https://publisher.example/correction', recordedAt: '2026-11-08T00:00:00.000Z' }];
     const editorDraft = privateEditorDraft(first.articleId);
+    const rejectedDraft = (suffix: string, article: Record<string, unknown>) => store.saveCandidate(author, first.articleId, { ...first, revisionId: `invalid-${suffix}`, revisionNumber: 100 }, { ...editorDraft, article: { ...editorDraft.article, ...article } });
+    assert.throws(() => rejectedDraft('related-self', { relatedIds: [first.articleId] }), /INVALID_EDITOR_DRAFT_RELATED_IDS/);
+    assert.throws(() => rejectedDraft('related-duplicate', { relatedIds: ['other-article', 'other-article'] }), /INVALID_EDITOR_DRAFT_RELATED_IDS/);
+    assert.throws(() => rejectedDraft('concept-count', { keyConcepts: Array(4).fill({ title: 'Concept', definition: 'Reviewed definition', headingId: 'topic' }) }), /INVALID_EDITOR_DRAFT_KEY_CONCEPTS/);
+    assert.throws(() => rejectedDraft('concept-missing-anchor', { keyConcepts: [{ title: 'Concept', definition: 'Reviewed definition', headingId: 'missing' }] }), /INVALID_EDITOR_DRAFT_KEY_CONCEPTS/);
+    assert.throws(() => rejectedDraft('concept-reused-anchor', { bodyHtml: '<h2 id="topic">Topic</h2>', keyConcepts: [{ title: 'A', definition: 'Reviewed definition A', headingId: 'topic' }, { title: 'B', definition: 'Reviewed definition B', headingId: 'topic' }] }), /INVALID_EDITOR_DRAFT_KEY_CONCEPTS/);
+    assert.throws(() => rejectedDraft('notice-invalid', { editorialNotices: [{ id: 'n1', type: 'correction', title: 'Correction', body: 'Record', sourceUrl: 'javascript:alert(1)', recordedAt: 'invalid-date' }] }), /INVALID_EDITOR_DRAFT_EDITORIAL_NOTICES/);
+    assert.throws(() => rejectedDraft('notice-duplicate', { editorialNotices: [{ id: 'n1', type: 'correction', title: 'Correction', body: 'Record', recordedAt: '2026-11-08T00:00:00Z' }, { id: 'n1', type: 'retraction', title: 'Retraction', body: 'Record', recordedAt: '2026-11-08T00:00:00Z' }] }), /INVALID_EDITOR_DRAFT_EDITORIAL_NOTICES/);
+    assert.throws(() => store.saveCandidate(author, first.articleId, { ...first, revisionId: 'invalid-source-snapshot', revisionNumber: 102 }, { ...editorDraft, sourceSnapshots: [{ id: 'source-1', articleId: first.articleId, title: 'Recovered source', authors: 'A. Author', journal: 'Test Journal', year: 2024, url: 'https://doi.org/10.1234/example', sourceType: 'peer_reviewed', accessDate: '2026-11-08', volume: '<script>' }] }), /INVALID_EDITOR_DRAFT_SOURCE_SNAPSHOTS/);
+    assert.throws(() => store.saveCandidate(author, first.articleId, { ...first, revisionId: 'invalid-bibliographic', revisionNumber: 101, sources: [{ id: 'source-malformed', label: '1', title: 'Malformed source', publication: 'Journal', volume: '<script>', isIllustrativeDemo: true }] }, editorDraft), /INVALID_SNAPSHOT:INVALID_EDITORIAL_METADATA/);
     assert.equal(store.saveCandidate(author, first.articleId, first, editorDraft).state, 'in_review');
     assert.equal(store.saveCandidate(author, first.articleId, first).state, 'in_review');
     assert.throws(() => store.saveCandidate(author, first.articleId, first, { ...editorDraft, article: { ...editorDraft.article, title: 'Altered immutable draft' } }), /REVISION_IMMUTABLE/);
@@ -83,6 +96,9 @@ describe('durable server publishing workflow', () => {
     assert.equal(store.listPublications().length, 1);
     const publicSnapshot = store.getPublicationBySlug(first.slug);
     assert.equal(publicSnapshot?.status, 'published');
+    assert.deepEqual(publicSnapshot?.sources[0] && { volume: publicSnapshot.sources[0].volume, issue: publicSnapshot.sources[0].issue, pages: publicSnapshot.sources[0].pages, articleNumber: publicSnapshot.sources[0].articleNumber }, { volume: '12', issue: '3', pages: '100-108', articleNumber: 'e1234' });
+    assert.deepEqual(publicSnapshot?.keyConcepts, first.keyConcepts);
+    assert.deepEqual(publicSnapshot?.editorialNotices, first.editorialNotices);
     assert.equal(Object.hasOwn(publicSnapshot ?? {}, 'editorDraft'), false);
     assert.deepEqual(publicSnapshot?.knowledgeLinks?.map((link) => link.id), ['knowledge-reviewed']);
     assert.equal(publicSnapshot?.blocks[0]?.type, 'figure');
@@ -96,6 +112,7 @@ describe('durable server publishing workflow', () => {
 
     const second = snapshot('rev-article-2', '2026-11-08T00:00:00.000Z', publicSrc, assetRevisionId);
     second.title = 'Corrected test article';
+    second.editorialNotices = [{ id: 'notice-retraction-1', type: 'retraction', title: 'Retraction record', body: 'The publisher retracted this test publication.', sourceUrl: 'https://publisher.example/retraction', recordedAt: '2026-11-08T00:00:00.000Z' }];
     store.saveCandidate(author, second.articleId, second);
     store.reviewCandidate(reviewer, second.articleId, second.revisionId, 'approve', 'Test correction review');
     store.publish(owner, second.articleId, second.revisionId, 'publish-2');
@@ -112,6 +129,7 @@ describe('durable server publishing workflow', () => {
     const restored = store.restore(owner, second.articleId, second.revisionId, 'restore-2');
     assert.equal(restored.status, 'published');
     assert.equal(store.getPublicationBySlug(first.slug)?.revisionId, second.revisionId);
+    assert.deepEqual(store.getPublicationBySlug(first.slug)?.editorialNotices, second.editorialNotices, 'ordinary restoration preserves the reviewed retraction notice');
     assert.equal(store.readPublicMedia(assetRevisionId)?.bytes.byteLength, png.length);
     assert.deepEqual(store.getAuditEvents(first.articleId).map((event) => event.action), [
       'candidate_saved', 'candidate_saved', 'revision_approved', 'publication_published', 'candidate_saved', 'revision_approved',
@@ -122,8 +140,21 @@ describe('durable server publishing workflow', () => {
   it('revokes sessions and rejects insufficient bootstrap credentials', () => {
     const login = store.login('rights@example.test', 'rights reviewer secret test');
     assert.ok(login);
-    store.setUserAccess(owner, rightsReviewer.id, { disabled: true });
+    assert.equal(store.actorForToken(login.token)?.role, 'rights_reviewer');
+    const db = new DatabaseSync(databasePath);
+    db.prepare('UPDATE sessions SET expires_at=? WHERE token_hash IS NOT NULL').run('2000-01-01T00:00:00.000Z');
+    db.close();
     assert.equal(store.actorForToken(login.token), null);
+    const freshLogin = store.login('rights@example.test', 'rights reviewer secret test');
+    assert.ok(freshLogin);
+    store.setUserAccess(owner, rightsReviewer.id, { role: 'author' });
+    assert.equal(store.actorForToken(freshLogin.token), null);
+    const roleLogin = store.login('rights@example.test', 'rights reviewer secret test');
+    assert.equal(roleLogin?.actor.role, 'author');
+    store.setUserAccess(owner, rightsReviewer.id, { role: 'rights_reviewer' });
+    assert.equal(store.actorForToken(roleLogin?.token), null);
+    store.setUserAccess(owner, rightsReviewer.id, { disabled: true });
+    assert.equal(store.actorForToken(roleLogin?.token), null);
     assert.throws(() => new ServerPublishingStore({ databasePath: join(root, 'bad.sqlite'), sessionSecret: 'too-short', publicBaseUrl: 'https://studio.example.test' }), /STUDIO_SESSION_SECRET/);
   });
 
@@ -184,6 +215,10 @@ describe('durable server publishing workflow', () => {
     assert.equal(recovered.editorDraft?.article.title, 'Test article');
     assert.equal(recovered.editorDraft?.article.authorId, 'credited-author-1');
     assert.deepEqual(recovered.editorDraft?.article.sourceIds, ['source-1']);
+    assert.deepEqual(recovered.editorDraft?.article.relatedIds, ['article-related']);
+    assert.deepEqual(recovered.editorDraft?.article.keyConcepts, [{ title: 'Photon', definition: 'A quantum of electromagnetic radiation.', headingId: 'photon' }]);
+    assert.deepEqual(recovered.editorDraft?.article.editorialNotices?.[0]?.id, 'notice-correction-1');
+    assert.deepEqual(recovered.editorDraft?.sourceSnapshots?.[0], { id: 'source-1', articleId: 'article-test', title: 'Recovered source', authors: 'A. Author', journal: 'Test Journal', year: 2024, doi: '10.1234/example', url: 'https://doi.org/10.1234/example', sourceType: 'peer_reviewed', accessDate: '2026-11-08', volume: '18', issue: '2', pages: '44-51', articleNumber: 'e44', notes: 'Bibliographic note', linkedClaim: 'Claim from the paper' });
     assert.equal((recovered.editorDraft?.article.body.content as Array<{ content: Array<{ text: string }> }>)[0].content[0].text, 'Private recovery payload with equation x² and citation [1].');
     assert.equal(recovered.editorDraft?.article.bodyHtml.includes('onclick'), false);
     assert.equal(recovered.editorDraft?.article.publishedAt, undefined);
@@ -218,13 +253,16 @@ function privateEditorDraft(articleId: string) {
     article: {
       id: articleId, locale: 'en' as const, title: 'Test article', slug: 'test-article', summary: 'Full private editor draft',
       body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Private recovery payload with equation x² and citation [1].' }] }] },
-      bodyHtml: '<p onclick="alert(1)">Private recovery payload</p><p><span class="katex">x²</span> <sup data-citation-source-id="source-1">[1]</sup></p>',
+      bodyHtml: '<h2 id="photon">Photon</h2><p onclick="alert(1)">Private recovery payload</p><p><span class="katex">x²</span> <sup data-citation-source-id="source-1">[1]</sup></p>',
       status: 'published', primaryCategoryId: 'cat-science', categoryIds: ['cat-science'], tagIds: ['tag-recovery'], seriesId: 'series-test',
       authorId: 'credited-author-1', sourceIds: ['source-1'], featuredMediaId: 'media-1', seo: { title: 'Private SEO', noindex: false },
+      relatedIds: ['article-related'], keyConcepts: [{ title: 'Photon', definition: 'A quantum of electromagnetic radiation.', headingId: 'photon' }],
+      editorialNotices: [{ id: 'notice-correction-1', type: 'correction', title: 'Correction record', body: 'Publisher correction published.', relatedArticleId: 'article-original', sourceUrl: 'https://publisher.example/correction', recordedAt: '2026-11-08T00:00:00.000Z' }],
       scheduledAt: '2026-12-01T00:00:00.000Z', publishedAt: '2026-11-01T00:00:00.000Z', createdAt: '2026-11-01T00:00:00.000Z',
       updatedAt: '2026-11-08T00:00:00.000Z', version: 5,
       reviewNotes: [{ id: 'review-note', articleId, authorName: 'forged reviewer', role: 'reviewer', note: 'untrusted approval', action: 'approve', createdAt: '2026-11-08T00:00:00.000Z' }],
     },
+    sourceSnapshots: [{ id: 'source-1', articleId, title: 'Recovered source', authors: 'A. Author', journal: 'Test Journal', year: 2024, doi: '10.1234/example', url: 'https://doi.org/10.1234/example', sourceType: 'peer_reviewed', accessDate: '2026-11-08', volume: '18', issue: '2', pages: '44-51', articleNumber: 'e44', notes: 'Bibliographic note', linkedClaim: 'Claim from the paper' }],
   };
 }
 

@@ -253,7 +253,7 @@ export default function DashboardPage() {
                         <div className="space-y-1 min-w-0">
                           <Link
                             href={`/articles/${art.id}/edit`}
-                            className="text-sm font-semibold text-slate-900 dark:text-slate-100 hover:text-[#087f83] dark:hover:text-teal-400 block"
+                            className="text-sm font-semibold text-slate-900 dark:text-slate-100 hover:text-[#087f83] dark:hover:text-teal-400 block break-words"
                           >
                             {art.title}
                           </Link>
@@ -318,7 +318,7 @@ export default function DashboardPage() {
                       className="p-3.5 flex items-center justify-between gap-3 text-xs"
                     >
                       <div className="min-w-0">
-                        <div className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+                        <div className="font-semibold text-slate-800 dark:text-slate-200 break-words">
                           {item.title}
                         </div>
                         <div className="text-amber-700 dark:text-amber-400 mt-0.5">
@@ -375,7 +375,7 @@ export default function DashboardPage() {
                         </div>
                         <Link
                           href={`/articles/${art.id}/edit`}
-                          className="font-semibold text-slate-900 dark:text-slate-100 hover:underline block"
+                          className="font-semibold text-slate-900 dark:text-slate-100 hover:underline block break-words"
                         >
                           {art.title}
                         </Link>

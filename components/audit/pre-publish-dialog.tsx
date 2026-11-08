@@ -16,6 +16,10 @@ import { AuditFinding, AuditReport } from '@/lib/audit/types';
 import { evaluatePublishGate } from '@/lib/audit/publish-policy';
 import { LocalizedDate } from '@/components/datetime/localized-date';
 
+function getGoToFieldLabel(finding: AuditFinding) {
+  return finding.ruleId === 'images.rights.verified' ? 'Inspect Figure' : 'Go to Field';
+}
+
 interface PrePublishDialogProps {
   open: boolean;
   onClose: () => void;
@@ -161,7 +165,7 @@ export function PrePublishDialog({
                         }}
                         className="inline-flex items-center gap-1 rounded border border-red-300 bg-white px-2.5 py-1 text-xs font-semibold text-red-800 hover:bg-red-50 dark:border-red-800 dark:bg-slate-900 dark:text-red-200"
                       >
-                        <span>Go to Field</span>
+                        <span>{getGoToFieldLabel(b)}</span>
                         <ArrowUpRight className="h-3.5 w-3.5" />
                       </button>
                     )}
@@ -200,7 +204,7 @@ export function PrePublishDialog({
                         }}
                         className="inline-flex items-center gap-1 rounded border border-amber-300 bg-white px-2.5 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-50 dark:border-amber-800 dark:bg-slate-900 dark:text-amber-200"
                       >
-                        <span>Go to Field</span>
+                        <span>{getGoToFieldLabel(w)}</span>
                         <ArrowUpRight className="h-3.5 w-3.5" />
                       </button>
                     )}

@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test lib",
     "test:unit": "bun test lib",
+    "test:sqlite-operations": "node --test tests/sqlite-operations.test.mjs",
     "test:e2e": "node scripts/prepare-playwright-server.mjs && playwright test",
     "test:e2e:publishing": "node scripts/run-server-publishing-e2e.mjs",
     "test:e2e:install": "playwright install chromium",

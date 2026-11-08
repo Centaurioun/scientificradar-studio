@@ -6,7 +6,7 @@ import { loadCandidate, login, isServerPublishingConfigured } from '@/lib/publis
 import { validateAndSanitizeSnapshot } from '@/lib/backup-validation';
 import { trustedMediaSourceSet } from '@/lib/html-security';
 import { useStudio, type StudioDatabaseSnapshot } from '@/lib/studio-context';
-import type { Article } from '@/lib/types';
+import type { Article, ScientificSourceSnapshot } from '@/lib/types';
 
 function getTrustedServerImageSources(bodyHtml: string): string[] {
   const configuredOrigin = process.env.NEXT_PUBLIC_SCIENTIFICRADAR_STUDIO_PUBLISHING_URL;
@@ -38,11 +38,11 @@ function validateEditorDraft(
   value: unknown,
   articleId: string,
   studio: ReturnType<typeof useStudio>
-): Article {
+): { article: Article; sourceSnapshots?: ScientificSourceSnapshot[] } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('SERVER_EDITOR_DRAFT_MISSING');
   }
-  const envelope = value as { schemaVersion?: unknown; article?: unknown };
+  const envelope = value as { schemaVersion?: unknown; article?: unknown; sourceSnapshots?: unknown };
   if (envelope.schemaVersion !== 1 || !envelope.article || typeof envelope.article !== 'object' || Array.isArray(envelope.article)) {
     throw new Error('SERVER_EDITOR_DRAFT_INVALID');
   }
@@ -94,7 +94,20 @@ function validateEditorDraft(
   if (!validation.snapshot) throw new Error(`SERVER_EDITOR_DRAFT_INVALID:${validation.error || 'SCHEMA_VALIDATION_FAILED'}`);
   const restored = validation.snapshot.articles.find((candidate) => candidate.id === articleId);
   if (!restored) throw new Error('SERVER_EDITOR_DRAFT_INVALID');
-  return restored as Article;
+  let sourceSnapshots: ScientificSourceSnapshot[] | undefined;
+  if (envelope.sourceSnapshots !== undefined) {
+    if (!Array.isArray(envelope.sourceSnapshots) || envelope.sourceSnapshots.length > 200) throw new Error('SERVER_EDITOR_DRAFT_INVALID_SOURCES');
+    const sourceIds = new Set<string>();
+    sourceSnapshots = envelope.sourceSnapshots.map((raw) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('SERVER_EDITOR_DRAFT_INVALID_SOURCES');
+      const source = raw as Record<string, unknown>;
+      const allowed = ['id', 'articleId', 'title', 'authors', 'journal', 'year', 'doi', 'url', 'sourceType', 'accessDate', 'volume', 'issue', 'pages', 'articleNumber', 'notes', 'linkedClaim'];
+      if (Object.keys(source).some((key) => !allowed.includes(key)) || typeof source.id !== 'string' || !source.id.trim() || sourceIds.has(source.id) || !restored.sourceIds.includes(source.id) || (source.articleId !== undefined && source.articleId !== articleId) || typeof source.title !== 'string' || typeof source.authors !== 'string' || typeof source.journal !== 'string' || typeof source.year !== 'number' || typeof source.url !== 'string' || typeof source.sourceType !== 'string' || typeof source.accessDate !== 'string') throw new Error('SERVER_EDITOR_DRAFT_INVALID_SOURCES');
+      sourceIds.add(source.id);
+      return source as unknown as ScientificSourceSnapshot;
+    });
+  }
+  return { article: restored as Article, sourceSnapshots };
 }
 
 export function ArticleWorkspaceRecoveryGate({ articleId }: { articleId: string }) {
@@ -136,8 +149,12 @@ export function ArticleWorkspaceRecoveryGate({ articleId }: { articleId: string 
       if (candidate.articleId !== articleId || candidate.editorDraft?.schemaVersion !== 1) {
         throw new Error('SERVER_EDITOR_DRAFT_MISSING');
       }
-      const restored = validateEditorDraft(candidate.editorDraft, articleId, studio);
+      const { article: restored, sourceSnapshots } = validateEditorDraft(candidate.editorDraft, articleId, studio);
       setPersistingRecovery(true);
+      for (const source of sourceSnapshots ?? []) {
+        const receipt = await studio.saveSource(source).committed;
+        if (!receipt.ok) throw new Error(receipt.error || 'LOCAL_SOURCE_RECOVERY_FAILED');
+      }
       const receipt = await studio.persistArticleDraft(restored, {
         createRevision: false,
         revisionSource: 'restore',

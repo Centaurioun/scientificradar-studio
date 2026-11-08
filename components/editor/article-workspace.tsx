@@ -72,6 +72,38 @@ interface ArticleWorkspaceProps {
 }
 
 type InspectorTab = 'taxonomy' | 'sources' | 'figures' | 'seo' | 'revisions';
+const INSPECTOR_TABS: InspectorTab[] = ['taxonomy', 'sources', 'figures', 'seo', 'revisions'];
+
+const FOCUS_FIELD_TABS: Record<string, InspectorTab> = {
+  'primary-category-select': 'taxonomy',
+  'tags-fieldset': 'taxonomy',
+  'new-tag-input': 'taxonomy',
+  'attached-sources-fieldset': 'sources',
+  'featured-media-select': 'figures',
+  'figure-alt-text-input': 'figures',
+  'seo-title-input': 'seo',
+  'seo-description-input': 'seo',
+};
+
+function resolveInspectorTab(value: string | null | undefined): InspectorTab | undefined {
+  switch (value) {
+    case 'taxonomy':
+    case 'metadata':
+      return 'taxonomy';
+    case 'sources':
+      return 'sources';
+    case 'figures':
+    case 'media':
+      return 'figures';
+    case 'seo':
+      return 'seo';
+    case 'revisions':
+    case 'versions':
+      return 'revisions';
+    default:
+      return undefined;
+  }
+}
 
 export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   const router = useRouter();
@@ -133,6 +165,9 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>(
     existingArticle?.sourceIds || []
   );
+  const [relatedIds, setRelatedIds] = useState<string[]>(existingArticle?.relatedIds || []);
+  const [keyConcepts, setKeyConcepts] = useState(existingArticle?.keyConcepts || []);
+  const [editorialNotices, setEditorialNotices] = useState(existingArticle?.editorialNotices || []);
   // Keep editor dependency identities stable across unrelated React state updates.
   // Otherwise CKEditor's external-content sync effect sees a fresh Set/array on
   // every parent render, calls onSyncJson again, and can enter an update loop.
@@ -169,9 +204,38 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   // UI states
   const [activeMode, setActiveMode] = useState<'write' | 'preview'>('write');
   const [editorEngine, setEditorEngine] = useState<'tiptap' | 'ckeditor'>('tiptap');
+  const [focusedWriting, setFocusedWriting] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('taxonomy');
+  const [pendingFieldFocus, setPendingFieldFocus] = useState<{
+    fieldId: string;
+    tab?: InspectorTab;
+  } | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
+
+  const handleInspectorTabKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    currentTab: InspectorTab
+  ) => {
+    let nextIndex: number;
+    const currentIndex = INSPECTOR_TABS.indexOf(currentTab);
+    if (event.key === 'ArrowRight') {
+      nextIndex = (currentIndex + 1) % INSPECTOR_TABS.length;
+    } else if (event.key === 'ArrowLeft') {
+      nextIndex = (currentIndex - 1 + INSPECTOR_TABS.length) % INSPECTOR_TABS.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = INSPECTOR_TABS.length - 1;
+    } else {
+      return;
+    }
+
+    event.preventDefault();
+    const nextTab = INSPECTOR_TABS[nextIndex];
+    setInspectorTab(nextTab);
+    document.getElementById(`article-inspector-tab-${nextTab}`)?.focus();
+  };
 
   // Support ?editor=ckeditor or ?editor=tiptap URL query parameter without SSR hydration mismatch
   useEffect(() => {
@@ -251,6 +315,9 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
       setSeriesId(existingArticle.seriesId || '');
       setAuthorId(existingArticle.authorId || 'auth-elena');
       setSelectedSourceIds(existingArticle.sourceIds);
+      setRelatedIds(existingArticle.relatedIds || []);
+      setKeyConcepts(existingArticle.keyConcepts || []);
+      setEditorialNotices(existingArticle.editorialNotices || []);
       setFeaturedMediaId(existingArticle.featuredMediaId || '');
       setSeoTitle(existingArticle.seo.title || '');
       setSeoDescription(existingArticle.seo.description || '');
@@ -293,31 +360,56 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   }, [isDirty]);
 
   // Handle deep-link query parameters (?tab=...&focus=...)
-  const focusFieldById = useCallback((fieldId: string, tab?: InspectorTab) => {
+  const focusFieldById = useCallback((fieldId: string, requestedTab?: string) => {
+    const tab = resolveInspectorTab(requestedTab) ?? FOCUS_FIELD_TABS[fieldId];
+
     if (tab) {
       setInspectorOpen(true);
       setInspectorTab(tab);
+      setFocusedWriting(false);
     }
     setActiveMode('write');
-    setTimeout(() => {
-      const el = document.getElementById(fieldId);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        el.focus();
-      }
-    }, 80);
+    setPendingFieldFocus({ fieldId, tab });
   }, []);
+
+  useEffect(() => {
+    if (!pendingFieldFocus || activeMode !== 'write') return;
+    if (
+      pendingFieldFocus.tab &&
+      (!inspectorOpen || inspectorTab !== pendingFieldFocus.tab)
+    ) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const target = document.getElementById(pendingFieldFocus.fieldId);
+      const isDisabled = target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement
+        ? target.disabled
+        : false;
+
+      if (target && !isDisabled) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.focus();
+      } else {
+        const inspector = document.getElementById('article-metadata-inspector');
+        inspector?.focus();
+        setWorkflowFeedback(
+          `Could not focus "${pendingFieldFocus.fieldId}"${isDisabled ? ' because the control is disabled' : ''}; focused the metadata inspector instead.`
+        );
+      }
+      setPendingFieldFocus(null);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeMode, inspectorOpen, inspectorTab, pendingFieldFocus]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const timer = window.setTimeout(() => {
       const params = new URLSearchParams(window.location.search);
-      const tabParam = params.get('tab') as InspectorTab | null;
+      const tabParam = resolveInspectorTab(params.get('tab'));
       const focusParam = params.get('focus');
-      if (
-        tabParam &&
-        ['taxonomy', 'sources', 'figures', 'seo', 'revisions'].includes(tabParam)
-      ) {
+      if (tabParam) {
         setInspectorOpen(true);
         setInspectorTab(tabParam);
       }
@@ -350,6 +442,9 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
       seriesId: seriesId || undefined,
       authorId,
       sourceIds: selectedSourceIds,
+      relatedIds,
+      keyConcepts,
+      editorialNotices,
       featuredMediaId: featuredMediaId || undefined,
       seo: {
         title: seoTitle,
@@ -379,6 +474,9 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
       seriesId,
       authorId,
       selectedSourceIds,
+      relatedIds,
+      keyConcepts,
+      editorialNotices,
       featuredMediaId,
       seoTitle,
       seoDescription,
@@ -645,7 +743,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
 
   const handleGoToFieldFromFinding = useCallback(
     (finding: AuditFinding) => {
-      const tab = (finding.inspectorTab as InspectorTab) || 'seo';
+      const tab = resolveInspectorTab(finding.inspectorTab) || 'seo';
       if (finding.targetField) {
         focusFieldById(finding.targetField, tab);
       } else {
@@ -736,9 +834,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
         {/* Mode & Action Controls */}
         <div className="flex flex-wrap items-center gap-2">
           {/* Write / Preview Switch */}
-          <div className="flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 dark:border-slate-800 dark:bg-slate-800">
+          <div
+            role="group"
+            aria-label="Writing view controls"
+            className="flex flex-wrap rounded-lg border border-slate-200 bg-slate-100 p-0.5 dark:border-slate-800 dark:bg-slate-800"
+          >
             <button
               type="button"
+              aria-pressed={activeMode === 'write'}
               onClick={() => setActiveMode('write')}
               className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
                 activeMode === 'write'
@@ -750,6 +853,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
             </button>
             <button
               type="button"
+              aria-pressed={activeMode === 'preview'}
               onClick={() => setActiveMode('preview')}
               className={`inline-flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
                 activeMode === 'preview'
@@ -759,6 +863,21 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
             >
               <Eye className="h-3.5 w-3.5" />
               <span>Reader Preview</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={focusedWriting}
+              onClick={() => {
+                setActiveMode('write');
+                setFocusedWriting((value) => !value);
+              }}
+              className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                focusedWriting
+                  ? 'bg-white text-indigo-700 shadow-xs dark:bg-slate-900 dark:text-indigo-300'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400'
+              }`}
+            >
+              {focusedWriting ? 'Exit focus' : 'Focus writing'}
             </button>
           </div>
 
@@ -909,10 +1028,10 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
           <ArticlePreviewView article={currentDraftArticle} />
         </div>
       ) : (
-        <div className="flex flex-1 flex-col lg:flex-row">
+        <div className={`flex flex-1 flex-col ${focusedWriting ? '' : 'lg:flex-row'}`}>
           {/* Center Writing Surface */}
-          <div className="flex-1 p-6 lg:p-8">
-            <div className="mx-auto max-w-4xl space-y-5">
+          <div className={`flex-1 p-4 sm:p-6 lg:p-8 ${focusedWriting ? 'lg:py-10' : ''}`}>
+            <div className={`mx-auto space-y-5 ${focusedWriting ? 'max-w-6xl' : 'max-w-4xl'}`}>
               {/* Language, Reading Stats & Primary Discipline Header */}
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
                 <div className="flex items-center gap-2">
@@ -1141,17 +1260,29 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
           </div>
 
           {/* Right Collapsible Metadata Inspector */}
-          {inspectorOpen && (
+          {inspectorOpen && !focusedWriting && (
             <aside
+              id="article-metadata-inspector"
               aria-label="Article Metadata Inspector"
-              className="w-full shrink-0 border-t border-slate-200 bg-white lg:w-96 lg:border-t-0 lg:border-l dark:border-slate-800 dark:bg-slate-900"
+              tabIndex={-1}
+              className="max-h-[70vh] w-full shrink-0 overflow-y-auto border-t border-slate-200 bg-white lg:max-h-none lg:w-96 lg:border-t-0 lg:border-l dark:border-slate-800 dark:bg-slate-900"
             >
               {/* Inspector Tabs */}
-              <div className="grid grid-cols-5 border-b border-slate-200 bg-slate-50/70 text-[11px] font-semibold dark:border-slate-800 dark:bg-slate-950/50">
+              <div
+                role="tablist"
+                aria-label="Article metadata sections"
+                className="sticky top-0 z-10 grid grid-cols-5 border-b border-slate-200 bg-slate-50/95 text-[11px] font-semibold backdrop-blur dark:border-slate-800 dark:bg-slate-950/95"
+              >
                 <button
                   type="button"
+                  id="article-inspector-tab-taxonomy"
+                  role="tab"
+                  aria-selected={inspectorTab === 'taxonomy'}
+                  aria-controls="article-inspector-panel"
+                  tabIndex={inspectorTab === 'taxonomy' ? 0 : -1}
+                  onKeyDown={(event) => handleInspectorTabKeyDown(event, 'taxonomy')}
                   onClick={() => setInspectorTab('taxonomy')}
-                  className={`flex flex-col items-center gap-1 py-2.5 border-b-2 transition-colors ${
+                  className={`flex min-w-0 flex-col items-center gap-1 px-1 py-2.5 border-b-2 text-center leading-tight transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-600 ${
                     inspectorTab === 'taxonomy'
                       ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400 bg-white dark:bg-slate-900'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -1162,8 +1293,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 </button>
                 <button
                   type="button"
+                  id="article-inspector-tab-sources"
+                  role="tab"
+                  aria-selected={inspectorTab === 'sources'}
+                  aria-controls="article-inspector-panel"
+                  tabIndex={inspectorTab === 'sources' ? 0 : -1}
+                  onKeyDown={(event) => handleInspectorTabKeyDown(event, 'sources')}
                   onClick={() => setInspectorTab('sources')}
-                  className={`flex flex-col items-center gap-1 py-2.5 border-b-2 transition-colors ${
+                  className={`flex min-w-0 flex-col items-center gap-1 px-1 py-2.5 border-b-2 text-center leading-tight transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-600 ${
                     inspectorTab === 'sources'
                       ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400 bg-white dark:bg-slate-900'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -1174,8 +1311,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 </button>
                 <button
                   type="button"
+                  id="article-inspector-tab-figures"
+                  role="tab"
+                  aria-selected={inspectorTab === 'figures'}
+                  aria-controls="article-inspector-panel"
+                  tabIndex={inspectorTab === 'figures' ? 0 : -1}
+                  onKeyDown={(event) => handleInspectorTabKeyDown(event, 'figures')}
                   onClick={() => setInspectorTab('figures')}
-                  className={`flex flex-col items-center gap-1 py-2.5 border-b-2 transition-colors ${
+                  className={`flex min-w-0 flex-col items-center gap-1 px-1 py-2.5 border-b-2 text-center leading-tight transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-600 ${
                     inspectorTab === 'figures'
                       ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400 bg-white dark:bg-slate-900'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -1186,8 +1329,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 </button>
                 <button
                   type="button"
+                  id="article-inspector-tab-seo"
+                  role="tab"
+                  aria-selected={inspectorTab === 'seo'}
+                  aria-controls="article-inspector-panel"
+                  tabIndex={inspectorTab === 'seo' ? 0 : -1}
+                  onKeyDown={(event) => handleInspectorTabKeyDown(event, 'seo')}
                   onClick={() => setInspectorTab('seo')}
-                  className={`flex flex-col items-center gap-1 py-2.5 border-b-2 transition-colors ${
+                  className={`flex min-w-0 flex-col items-center gap-1 px-1 py-2.5 border-b-2 text-center leading-tight transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-600 ${
                     inspectorTab === 'seo'
                       ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400 bg-white dark:bg-slate-900'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -1198,8 +1347,14 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 </button>
                 <button
                   type="button"
+                  id="article-inspector-tab-revisions"
+                  role="tab"
+                  aria-selected={inspectorTab === 'revisions'}
+                  aria-controls="article-inspector-panel"
+                  tabIndex={inspectorTab === 'revisions' ? 0 : -1}
+                  onKeyDown={(event) => handleInspectorTabKeyDown(event, 'revisions')}
                   onClick={() => setInspectorTab('revisions')}
-                  className={`flex flex-col items-center gap-1 py-2.5 border-b-2 transition-colors ${
+                  className={`flex min-w-0 flex-col items-center gap-1 px-1 py-2.5 border-b-2 text-center leading-tight transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-600 ${
                     inspectorTab === 'revisions'
                       ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400 bg-white dark:bg-slate-900'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -1210,7 +1365,13 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 </button>
               </div>
 
-              <div className="p-4 space-y-5 text-xs">
+              <div
+                id="article-inspector-panel"
+                role="tabpanel"
+                aria-labelledby={`article-inspector-tab-${inspectorTab}`}
+                tabIndex={0}
+                className="min-w-0 p-4 space-y-5 text-xs focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-600"
+              >
                 {/* TAB 1: TAXONOMY */}
                 {inspectorTab === 'taxonomy' && (
                   <div className="space-y-4">
@@ -1344,6 +1505,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
 
                       <div className="mt-2 flex gap-1.5">
                         <input
+                          id="new-tag-input"
                           type="text"
                           value={newTagName}
                           disabled={selectedTagIds.length >= MAX_EDITORIAL_TAGS}
@@ -1522,13 +1684,43 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                 {/* TAB 2: SOURCES */}
                 {inspectorTab === 'sources' && (
                   <div className="space-y-4">
+                    <section aria-labelledby="scientific-editorial-fields" className="space-y-3 rounded-lg border border-indigo-200 p-3 dark:border-indigo-900">
+                      <h3 id="scientific-editorial-fields" className="font-bold">Scientific editorial fields</h3>
+                      <label className="block">Related articles (same language, published)
+                        <select multiple aria-label="Approved related articles" value={relatedIds} onChange={(e) => { setRelatedIds(Array.from(e.currentTarget.selectedOptions, o => o.value)); markDirty(); }} className="mt-1 w-full rounded border p-2">
+                          {articles.filter(a => a.id !== effectiveArticleId && a.locale === locale && a.status === 'published').map(a => <option key={a.id} value={a.id}>{a.title}</option>)}
+                        </select>
+                      </label>
+                      <div className="space-y-2">
+                        <div className="font-semibold">Key Concepts (up to 3)</div>
+                        {keyConcepts.map((concept, index) => <div key={index} className="grid gap-1 rounded border p-2">
+                          <input aria-label={`Concept ${index + 1} title`} maxLength={100} value={concept.title} placeholder="Concept title" onChange={e => { const next = [...keyConcepts]; next[index] = {...concept, title:e.target.value}; setKeyConcepts(next); markDirty(); }} className="rounded border p-1" />
+                          <textarea aria-label={`Concept ${index + 1} definition`} maxLength={300} value={concept.definition} placeholder="Reviewed concise definition" onChange={e => { const next = [...keyConcepts]; next[index] = {...concept, definition:e.target.value}; setKeyConcepts(next); markDirty(); }} className="rounded border p-1" />
+                          <input aria-label={`Concept ${index + 1} heading anchor`} value={concept.headingId} placeholder="Stable H2 id" onChange={e => { const next = [...keyConcepts]; next[index] = {...concept, headingId:e.target.value}; setKeyConcepts(next); markDirty(); }} className="rounded border p-1 font-mono" />
+                          <button type="button" onClick={() => { setKeyConcepts(keyConcepts.filter((_, i) => i !== index)); markDirty(); }}>Remove concept</button>
+                        </div>)}
+                        {keyConcepts.length < 3 && <button type="button" onClick={() => { setKeyConcepts([...keyConcepts, {title:'', definition:'', headingId:''}]); markDirty(); }}>Add concept</button>}
+                      </div>
+                      <div className="space-y-2 border-t pt-2">
+                        <div className="font-semibold">Editorial notices</div>
+                        {editorialNotices.map((notice, index) => <div key={notice.id} className="space-y-1 rounded border p-2">
+                          <select aria-label="Notice type" value={notice.type} onChange={e => {const next=[...editorialNotices];next[index]={...notice,type:e.target.value as typeof notice.type};setEditorialNotices(next);markDirty();}} className="rounded border p-1"><option value="correction">Correction</option><option value="retraction">Retraction</option><option value="updated-information">Updated information</option></select>
+                          <input aria-label="Notice title" value={notice.title} placeholder="Notice title" onChange={e => {const next=[...editorialNotices];next[index]={...notice,title:e.target.value};setEditorialNotices(next);markDirty();}} className="w-full rounded border p-1" />
+                          <textarea aria-label="Notice text" value={notice.body} placeholder="Reviewed notice text" onChange={e => {const next=[...editorialNotices];next[index]={...notice,body:e.target.value};setEditorialNotices(next);markDirty();}} className="w-full rounded border p-1" />
+                          <input aria-label="Notice source URL" type="url" value={notice.sourceUrl || ''} placeholder="Publisher record URL" onChange={e => {const next=[...editorialNotices];next[index]={...notice,sourceUrl:e.target.value};setEditorialNotices(next);markDirty();}} className="w-full rounded border p-1" />
+                          <select aria-label="Related original or notice article" value={notice.relatedArticleId || ''} onChange={e => {const next=[...editorialNotices];next[index]={...notice,relatedArticleId:e.target.value || undefined};setEditorialNotices(next);markDirty();}} className="w-full rounded border p-1"><option value="">No related ScientificRadar article</option>{articles.filter(a => a.id !== effectiveArticleId && a.locale === locale && a.status === 'published').map(a=><option key={a.id} value={a.id}>{a.title}</option>)}</select>
+                          <button type="button" onClick={() => {setEditorialNotices(editorialNotices.filter((_,i)=>i!==index));markDirty();}}>Remove notice</button>
+                        </div>)}
+                        <button type="button" onClick={() => {setEditorialNotices([...editorialNotices,{id:`notice-${Date.now()}`,type:'updated-information',title:'',body:'',recordedAt:new Date().toISOString()}]);markDirty();}}>Add editorial notice</button>
+                      </div>
+                    </section>
                     <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-300">
                       Citations are never fabricated. External DOI lookup is labeled{' '}
                       <span className="font-semibold">Unverified (Offline P0 Demo)</span> unless
                       confirmed by a human editor.
                     </div>
 
-                    <div className="space-y-2">
+                    <div id="attached-sources-fieldset" tabIndex={-1} className="space-y-2">
                       <span className="block font-bold uppercase tracking-wider text-slate-500">
                         Attached Citations ({selectedSourceIds.length})
                       </span>
@@ -1595,7 +1787,11 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                             </label>
 
                             {checked && (
-                              <label className="mt-2 flex items-center gap-2 border-t border-slate-200/80 pt-2 text-[11px] text-slate-700 dark:border-slate-800 dark:text-slate-300 cursor-pointer">
+                              <div className="mt-2 space-y-2 border-t border-slate-200/80 pt-2 text-[11px] text-slate-700 dark:border-slate-800 dark:text-slate-300">
+                              <div className="grid grid-cols-2 gap-1">
+                                {(['volume','issue','pages','articleNumber'] as const).map(field => <input key={field} aria-label={`${field} for ${src.title}`} value={src[field] || ''} placeholder={field === 'pages' ? 'Page range' : field} onChange={e => updateSource(src.id, {[field]:e.target.value})} className="min-w-0 rounded border p-1" />)}
+                              </div>
+                              <label className="flex items-center gap-2 cursor-pointer">
                                 <input
                                   type="checkbox"
                                   checked={Boolean(src.humanClaimVerified)}
@@ -1613,6 +1809,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
                                   Claim-to-source alignment verified by human editor
                                 </span>
                               </label>
+                              </div>
                             )}
                           </div>
                         );

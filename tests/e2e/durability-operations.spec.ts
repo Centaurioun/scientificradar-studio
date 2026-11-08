@@ -141,7 +141,7 @@ test('aborted revision restoration leaves the stored article and editor draft un
   const title = page.getByRole('textbox', { name: 'Article Title (H1)' });
   await title.fill(draftTitle);
   await expect(page.getByTestId('editor-save-indicator')).toContainText('Unsaved changes');
-  await page.getByRole('button', { name: /History/ }).click();
+  await page.getByRole('tab', { name: /History/ }).click();
   await gate(page, { hold: true });
   await page.getByRole('button', { name: 'Restore as New Version' }).first().click();
   await expect(page.getByRole('button', { name: 'Restoring…' })).toBeVisible();
