@@ -2,7 +2,9 @@
 
 ## Local commands
 
-Use Bun 1.4.0 and Node.js 26.13.0 as pinned by CI, along with the committed lockfile:
+The production runtime and CI use Node.js 24.22.2. Bun 1.4.0 is retained for deterministic unit tests and lockfile installation; it does not replace the Node.js application runtime.
+
+Use Bun 1.4.0 and Node.js 24.22.2 as pinned by CI (`.nvmrc`), along with the committed lockfile:
 
 ```sh
 bun install --frozen-lockfile

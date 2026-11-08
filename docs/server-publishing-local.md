@@ -1,6 +1,6 @@
 # Studio server publishing (local integration)
 
-The server publishing routes use Node.js 24 or newer, a durable SQLite database, server-managed users and roles, and HttpOnly sessions. They do not use IndexedDB as publication authority. In development, the default database path is `./data/scientificradar-publications.sqlite`; it is ignored by Git. Set `PUBLICATION_DATABASE_PATH` to a durable mounted path when running the application outside a disposable local checkout.
+The server publishing routes use Node.js 24.22.2 or a later patched 24.x release, a durable SQLite database, server-managed users and roles, and HttpOnly sessions. They do not use IndexedDB as publication authority. In development, the default database path is `./data/scientificradar-publications.sqlite`; it is ignored by Git. Set `PUBLICATION_DATABASE_PATH` to a durable mounted path when running the application outside a disposable local checkout.
 
 Set these values in `.env.local` before starting the Studio server:
 
