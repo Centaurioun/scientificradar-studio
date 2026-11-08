@@ -1,101 +1,71 @@
-# ScientificRadar Studio — Article Reader CMS Integration Handoff (docs-only)
+# ScientificRadar Studio — Article Reader CMS Integration Handoff
 
-**Date:** 2026-11-08  
-**State:** DRAFT specification for owner/Codex review; **no Studio or Web application code modifications**.  
-**Companion public Web PR:** https://github.com/Centaurioun/ScientificRadar-web/pull/54  
-**Canonical cross-repo audit:** https://github.com/Centaurioun/ScientificRadar-web/blob/docs/article-reading-experience-three-phase-roadmap-20261107/docs/public-website/ARTICLE_READER_CODEX_READY_AUDIT_2026-11-08.md  
-**Design standard:** https://github.com/Centaurioun/ScientificRadar-web/blob/docs/article-reading-experience-three-phase-roadmap-20261107/docs/public-website/ARTICLE_READER_DESIGN_SYSTEM.md  
-**CMS/UI proposal:** https://github.com/Centaurioun/ScientificRadar-web/blob/docs/article-reading-experience-three-phase-roadmap-20261107/docs/public-website/ARTICLE_READER_CMS_EDITORIAL_CONTRACT.md
+**Updated:** 2026-11-08
 
-## 1. Two repos; one publication contract, not a repo merge
+**Repository model:** two independent applications and repositories, connected by the versioned Studio → Web publication snapshot contract. No monorepo or repository move is planned.
 
-- **ScientificRadar Studio** (this repo): create/review/publish science editorial content and evidence metadata.
-- **ScientificRadar Web** (`Centaurioun/ScientificRadar-web`): render a safely validated immutable publication snapshot.
-- **Framer**: unpublished visual design laboratory. It is not the production CMS, does not save Studio records, and is not a replacement for existing article editing.
+**Studio implementation PR:** [#31](https://github.com/Centaurioun/scientificradar-studio/pull/31)
 
-The owner requested standardization so editing another scientific article **never requires hand-coding a new page or asking AI to format it**. Studio editors choose and review content; the Web reader handles reusable fonts, A−/A/A+, alignment, TOC, figure modal, DOI references, related carousel, scroll/focus behaviors.
+**Web implementation PR:** [#58](https://github.com/Centaurioun/ScientificRadar-web/pull/58)
+**Related Web reader documentation:** [PR #54](https://github.com/Centaurioun/ScientificRadar-web/pull/54)
 
-## 2. Read-only inventory verified on current main
+## 1. Operational shape
 
-- `lib/types.ts`: `Article` already has `title`, `dek`, `summary`, `editorialType`, `primaryCategoryId`, `categoryIds`, `tagIds`, `seriesId`, `authorId`, `sourceIds`, `featuredMediaId`, `bodyHtml`, status and SEO.
-- `ScientificSource`: authors, journal, year, DOI, URL, type and verificationStatus, but **not full volume/issue/pages/articleNumber** as independent fields.
-- `KnowledgeLink`: term, `targetType:'internal'|'wikipedia'`, targetUrl/targetArticleId, locale, title/excerpt/attribution, reviewStatus and demo flag. Reuse rather than making another dictionary.
-- Media Library and Article editor already manage figures and rich content; investigate actual figure/table round-trip and rights gates rather than replacing them.
-- `lib/publishing/web-contract-v1.ts` current serializer emits `relatedIds: []` even when Studio Series exists. Current version `1.0.0`; do **not** silently append fields to published snapshots.
-- Web has `PublicArticle.relatedIds`, `PublicSource.doi`, `ArticleHeader`, `ArticleReader`, `RelatedStories`, `CitationList`, `CitationInteractions`. Adapt the existing consumer.
-- Existing `bodyHtml` sanitization, figure/table/math source integrity, publish guards and URL validators must be preserved.
+- **ScientificRadar Studio** is the editorial CMS. It stores private editor drafts and revisions in a durable SQLite database when server publishing is configured, and manages authenticated users, roles, review, approval, publication, withdrawal and restoration.
+- **ScientificRadar Web** consumes validated, immutable publication snapshots and renders the public article reader. It does not read Studio's private editor-draft records.
+- **Framer** remains an unpublished visual design workspace. Its dated design and QA materials are research references, not runtime or publication evidence; those files and snapshots remain unchanged by this handoff update.
 
-## 3. Proposed Studio editorial UI
+The normal workflow is reusable: editors create and save an article in Studio, reload/recover the candidate, submit it for review, an authorized reviewer approves it, and an owner/editor publishes the approved revision. Web then renders the approved public snapshot. Withdrawal removes that revision from public surfaces; restoration makes the approved publication visible again.
 
-Editor interface proposal (interactive demonstration, NOT connected):
-https://framer.com/projects/Scientific-Radar--boKLyC3EXgf7Nhs9yoC7-3fySI?node=Kr4RQUn1q&view=preview
+## 2. Current shared contract and editorial metadata
 
-| Inspector group | Reuse current | New or clarified behavior |
-| --- | --- | --- |
-| **Article** | Headline, dek, author, category/subcategory, editorialType, Series, reviewed summary | One At a Glance from reviewed summary/takeaways; no second duplicate summary |
-| **Contextual Key Concepts** | Reviewed knowledge entry records where helpful | Optional ordered 0–3 `{id,title,definition,afterHeadingId}`. Add, edit, remove. H2 anchor must exist and be **unique per concept**; preserve text editor heading IDs. No image, Why it matters or Key points fields. Desktop scroll states and mobile inline formatting are automatic reader behaviors. |
-| **Knowledge Links** | Existing Wikipedia/internal KnowledgeLink records | Editor attaches a reviewed term to an explicit occurrence in article body. Internal target must be published; Wikipedia exact HTTPS URL and attribution validated. No network request on hover, and never confuse concept preview with scholarly citation. |
-| **Evidence / Scientific Media** | Existing source IDs, MediaAsset fields and Tiptap content | Editor can insert multiple figures/tables with semantic captions, units, uncertainty, credit, license, rights status and source DOI. Validate actual editor ↔ bodyHtml ↔ published snapshot round-trip. |
-| **Sources** | Existing ScientificSource | Optional verified volume, issue, pages, articleNumber and correction-of link for complete DOI bibliography. Publisher DOI belongs to research paper, NOT ScientificRadar editorial. |
-| **What underpins this story?** | editorialType, verificationStatus, linked ScientificSource, reviewer notes | Generated source-transparency disclosure plus optional reviewed caveat. Never arbitrary peer-reviewed flag or fabricated trust score. |
-| **Related Reading** | Series membership, category/tag and existing public relatedIds | Editor-approved ordered article IDs; use public-only Series fallback and reviewed category/tag matches. Exclude self, duplicate, draft, withdrawn, wrong-locale. Empty recommendations → hide section. |
+The current contract remains **v1.0.0**. A VNext schema transition is not needed for the capabilities verified in PRs #31 and #58. `PublishedSnapshotRecordV1` carries article identity and revision, locale, taxonomy, author/source metadata, body HTML and typed content blocks, media, SEO, and the following editorial fields:
 
-**The Framer mock allows duplicate-H2 prevention in its local state, but that is NOT actual Studio validation.** Implement validators in the versioned editor/save/publish pipeline if owner later approves.
+- `relatedIds`: selected related article IDs.
+- `keyConcepts`: up to three title/definition pairs, each attached to a unique existing H2 heading ID.
+- `editorialNotices`: correction, retraction, and updated-information notices, with validated optional source URL and related-article link.
+- Source bibliography fields include volume, issue, pages and article number as well as DOI and year.
 
-## 4. Publication contract transition — proposal, not code
+Studio's article model and editor persist these fields. The serializer writes the article's actual `relatedIds` (it no longer emits an unconditional empty array). Before publication, the server filters related IDs to active public revisions and excludes self-links and withdrawn content. Web validates and consumes the v1.0.0 fields for the article reader and related-article surfaces. This supersedes the earlier `relatedIds: []` gap statement in this document's prior revision.
 
-Plan one backward-compatible, versioned producer/consumer migration. Do not change Web reader and Studio producer independently without compatibility tests.
+The client-side `authorizationReceipt` is not an authorization mechanism: a browser can forge it. The server publication service is the authority. It authenticates server-managed actors, enforces role checks, accepts publication only for an approved candidate revision, validates registered media-rights evidence, stores immutable publication revisions in SQLite, and applies withdrawal/restoration state. Never treat a Studio UI status or a client-supplied receipt as permission to make a revision public.
 
-Possible `VNext` optional published shapes (illustrative only, must reconcile existing schemas):
-```ts
-interface ContextualKeyConcept {
-  id: string;
-  title: string;
-  definition: string;
-  afterHeadingId: string; // existing unique canonical H2 ID
-}
-interface SourceCitationExtras {
-  volume?: string;
-  issue?: string;
-  pages?: string;
-  articleNumber?: string;
-  correctionOfSourceId?: string;
-}
-interface ArticleReaderSnapshotExtras {
-  contextualConcepts?: ContextualKeyConcept[];
-  knowledgePreviews?: Array<{ occurrenceId:string; targetType:'wikipedia'|'internal'; href:string; title:string; excerpt:string; sourceAttribution:string }>;
-  series?: { id:string; title:string; slug:string };
-  evidenceNote?: string;
-  relatedIds: string[]; // already in PublicArticle; producer fills only approved public destinations
-}
-```
+## 3. CMS and reader behavior
 
-Constraints: allow older snapshots to render, use explicit schema version and parse/validation at both ends, sanitize user-provided text, validate URLs and DOI normalization, resolve public IDs to valid canonical slugs, check demo flags/publication status and image rights; prevent draft data leakage.
+The existing Studio editor is the authoring interface; ordinary article creation does not require hand-coded Web pages or AI formatting. The editor supports the established Tiptap/CKEditor writing flows, scientific content and references, figures/tables, taxonomy, sources, related articles, key concepts and editorial notices. Server-side draft recovery and revision history are separate from public publication records.
 
-## 5. Prioritized Codex tasks when user's allowance resets
+The Web reader reuses the contract-backed article route and existing components for citations, related reading, key concepts, notices, figure presentation and article navigation. Search, topic/category and home surfaces use public repository methods. The public API and page adapters filter for publicly visible content; withdrawn or private revisions are not treated as published content.
 
-**Read-only investigation first, not auto-implementation.**
+The Framer proposal remains useful for visual review of concepts and interactions, but it is not evidence that a live interface behavior works. Runtime acceptance comes from source-level validation and browser/HTTP tests described below.
 
-1. Inspect Studio current main, this doc, companion Web PR #54, and source snapshots under Web `docs/public-website/framer-reference/`. Report drift and duplicate implementation risk.
-2. Verify existing Studio UI's exact capability to add/edit figures and tables, review MediaAsset rights, attach bibliography, and use Knowledge Links; do not infer end-to-end behavior merely from TypeScript types.
-3. Define and testable-design an Article Insights / Contextual Key Concepts editor: stable H2 IDs, no duplicate anchors, handling deleted headings/reordering, editorial approval and locale.
-4. Address `relatedIds: []` serializer gap in an owner-approved future implementation plan, including visibility filtering and Series mapping; don't show made-up draft recommendations.
-5. Plan full DOI bibliography metadata and correction support across Studio source types and Web citation component with validation.
-6. Propose a split Studio/Web PR sequence with migration, unit/contract/security/E2E tests; prioritize existing components and incremental compatibility.
+## 4. Verification record
 
-### Explicit acceptance gates for eventual implementation
+### Local cross-repository lifecycle
 
-- **No AI dependency for ordinary editorial authoring**.
-- Draft/publish/withdrawal visibility respected in all public previews and related links.
-- No fabricated bibliographic identifiers or hidden third-party rights problems.
-- Table units, sample-specific denominators, scientific figure captions, DOI attribution persist through save/reload and publish-to-Web.
-- Both desktop and mobile reader show 0/1/2/3 concepts correctly without forcing a sticky panel to remain visible after the relevant science section.
-- Real browser keyboard, touch, hover, reduced motion, hash/history and performance checks occur **after** real implementation; Framer static screenshots are not proof.
+The full local HTTP integration passed **1/1 lifecycle scenario** on the exact combined candidates:
 
-## 6. Current work boundary
+- Studio: `b8ecce006f8cbb75f130f8bd5c6aa781741bd4ce` (PR #31 implementation plus Node 24 modernization).
+- Web application code: `8583ede2648d47be963dbf7c863cf716343b9d28` (PR #58 implementation plus the empty-catalog fix used by the local integration).
 
-- Only this documentation file is part of the Studio branch/PR.
-- No app components, schema, tests, backend, editor data, production site, deployment, Framer publish or GitHub merge were changed.
-- Pending owner authorization: Studio and Web application implementation in separately reviewed future PRs.
+The run used Node.js 24 and a temporary SQLite database over real local HTTP. It exercised save, reload/recovery, role-separated review and approval, publish, Web server-rendered article/search/topic/home/sitemap surfaces, withdrawal exclusion, and restoration. It also verified that the public response did not expose the private `editorDraft` record. Web ran in `stage-a-demo` with the Next.js development server for this HTTP integration because production mode disables the loopback HTTP test path. The production build and empty-catalog regression were checked separately; the development-server integration is not a production deployment test.
 
-**Do not merge this docs PR or treat it as authorization to implement.**
+### Application checks
+
+- Studio at `b8ecce0`: Node 24.22.2 clean frozen Bun install; RE2 native module loaded and executed; SQLite test 1/1; unit tests 88/88; TypeScript, ESLint and production build passed; browser suite 40/40 with the publishing UI flow separately passing 1/1; CKEditor development mount regression passed with zero console errors.
+- Web at `8583ede2648d47be963dbf7c863cf716343b9d28`: Node 24 production build and empty-catalog regression passed as separate checks; see the integration record above for combined HTTP rendering and visibility behavior. Its child commit `9d6f0d79dfffc8cdb62330eebe02d0adf2d4c508` changes only test harness and CI isolation: a dedicated empty-catalog Playwright config/spec and its workflow step, with no application source changes.
+- Hosted GitHub checks now pass on the updated PR heads: Studio #31 `b8ecce006f8cbb75f130f8bd5c6aa781741bd4ce` (CKEditor regression, test foundation, GitGuardian) and Web #58 `9d6f0d79dfffc8cdb62330eebe02d0adf2d4c508` (two responsive Playwright runs, quality, GitGuardian). The earlier implementation heads, Studio `5f0dae2c790ff9d8236ba36ee7d124e9fb75122a` and Web `7d011aef08c2456048af916cfd34101a009b2986`, also had passing checks, but they are superseded by the currently hosted heads above. The cross-repository lifecycle remains an application-code test of Studio `b8ecce0` plus Web `8583ede`; because Web `9d6f0d7` only adds test harness/CI isolation, the local lifecycle was not rerun for that test-only commit.
+
+These are local and hosted checks for the stated revisions. They do not establish readiness on the owner's live server, real production credentials, DNS, HTTPS configuration, deployment, or live content indexing.
+
+## 5. Design and implementation references
+
+- [Studio Framer UX polish V2 research](../research/SCIENTIFICRADAR_STUDIO_FRAMER_UX_POLISH_V2_2026-11-08.md)
+- [Studio Framer workbench six-cycle research](../research/SCIENTIFICRADAR_STUDIO_FRAMER_WORKBENCH_MVP_SIX_CYCLE_2026-11-08.md)
+- [Web article reader design system](https://github.com/Centaurioun/ScientificRadar-web/blob/docs/article-reading-experience-three-phase-roadmap-20261107/docs/public-website/ARTICLE_READER_DESIGN_SYSTEM.md)
+- [Web article reader CMS editorial contract](https://github.com/Centaurioun/ScientificRadar-web/blob/docs/article-reading-experience-three-phase-roadmap-20261107/docs/public-website/ARTICLE_READER_CMS_EDITORIAL_CONTRACT.md)
+
+Keep Studio and Web changes independently reviewable and tested against the same contract. Preserve public visibility rules, scientific metadata and evidence, and backward-compatible v1.0.0 snapshot validation when evolving either application.
+
+## 6. Scope and deployment boundary
+
+This PR changes this handoff document only. It does not modify the Studio or Web applications, the dated Framer research/snapshots, either live site, deployment settings, DNS, HTTPS, or Cloudflare. The owner has authorized the separate application implementation PRs and the requested PR consolidation; this document is an operational record, not the source of that authorization.
