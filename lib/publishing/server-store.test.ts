@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -148,6 +148,10 @@ describe('durable server publishing workflow', () => {
     const secure = new ServerPublishingStore({ databasePath: join(isolated, 'store.sqlite'), sessionSecret, publicBaseUrl: 'https://studio.example.test' });
     assert.equal(statSync(isolated).mode & 0o777, 0o700);
     assert.equal(statSync(join(isolated, 'store.sqlite')).mode & 0o777, 0o600);
+    for (const suffix of ['-wal', '-shm']) {
+      const sidecar = `${join(isolated, 'store.sqlite')}${suffix}`;
+      if (existsSync(sidecar)) assert.equal(statSync(sidecar).mode & 0o777, 0o600);
+    }
     secure.close();
     const insecure = join(root, 'insecure-db');
     mkdirSync(insecure, { mode: 0o755 });

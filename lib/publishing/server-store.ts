@@ -91,6 +91,7 @@ export class ServerPublishingStore {
     if (config.bootstrapEmail && config.bootstrapPassword) {
       this.bootstrapOwner(config.bootstrapEmail, config.bootstrapPassword);
     }
+    this.secureDatabaseFiles(databasePath);
   }
 
   close(): void { this.db.close(); }
