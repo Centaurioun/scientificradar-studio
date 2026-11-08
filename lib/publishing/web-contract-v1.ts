@@ -61,6 +61,13 @@ export interface PublicMedia {
   credit: string;
   rightsVerified: boolean;
   license: string;
+  /** Server-resolved, content-addressed rights evidence. Client values are not authoritative. */
+  rightsEvidence?: {
+    evidenceId: string;
+    mediaId: string;
+    assetRevisionId: string;
+    license: string;
+  };
 }
 
 export interface PublicAuthor {
@@ -70,6 +77,20 @@ export interface PublicAuthor {
   credentialsNote: string;
   bio: string;
   isDemoPersona: boolean;
+}
+
+export interface PublicKnowledgeLink {
+  id: string;
+  term: string;
+  targetType: 'internal' | 'wikipedia';
+  targetUrl: string;
+  targetArticleId?: string;
+  locale: SupportedLocale;
+  previewTitle: string;
+  previewExcerpt: string;
+  sourceAttribution: string;
+  reviewStatus: 'approved';
+  isSampleDemoData: false;
 }
 
 export interface ScientificTableData {
@@ -140,6 +161,8 @@ export interface PublicArticle {
   subcategorySlugs: string[];
   tagSlugs: string[];
   authorIds: string[];
+  seriesId?: string;
+  knowledgeLinks?: PublicKnowledgeLink[];
   publishedAt: string;
   updatedAt?: string;
   readingTimeMinutes: number;
@@ -184,6 +207,8 @@ export interface PublishedSnapshotRecordV1 {
   subcategorySlugs: string[];
   tagSlugs: string[];
   authorIds: string[];
+  seriesId?: string;
+  knowledgeLinks?: PublicKnowledgeLink[];
   authors?: PublicAuthor[];
   publishedAt: string;
   updatedAt?: string;
@@ -1300,6 +1325,8 @@ export function adaptSnapshotV1ToPublicArticle(
     subcategorySlugs: [...(snapshot.subcategorySlugs ?? [])],
     tagSlugs: [...(snapshot.tagSlugs ?? [])],
     authorIds,
+    seriesId: snapshot.seriesId,
+    knowledgeLinks: snapshot.knowledgeLinks,
     publishedAt: snapshot.publishedAt,
     updatedAt: snapshot.updatedAt,
     withdrawnAt: snapshot.withdrawnAt,
@@ -1341,6 +1368,8 @@ export function adaptPublicArticleToSnapshotV1(
     subcategorySlugs: [...article.subcategorySlugs],
     tagSlugs: [...article.tagSlugs],
     authorIds: [...article.authorIds],
+    seriesId: article.seriesId,
+    knowledgeLinks: article.knowledgeLinks,
     authors,
     publishedAt: article.publishedAt,
     updatedAt: article.updatedAt,
@@ -1429,6 +1458,59 @@ function estimateReadingTimeMinutes(htmlOrText: string): number {
   return Math.max(1, Math.ceil(words / 220));
 }
 
+function serializeKnowledgeLinks(links: StudioKnowledgeLink[] = []): PublicKnowledgeLink[] {
+  return links.filter((link) => {
+    if (link.reviewStatus !== 'approved' || link.isSampleDemoData) return false;
+    try {
+      const url = new URL(link.targetUrl, 'https://scientificradar.com');
+      if (url.protocol !== 'https:' || url.username || url.password) return false;
+      if (link.targetType === 'wikipedia') return /(^|\.)wikipedia\.org$/i.test(url.hostname);
+      return Boolean(link.targetArticleId) && (url.hostname === 'scientificradar.com' || url.hostname.endsWith('.scientificradar.com')) && url.pathname.startsWith('/article/');
+    } catch { return false; }
+  }).map((link) => ({
+    id: link.id,
+    term: stripHtmlTags(link.term),
+    targetType: link.targetType,
+    targetUrl: link.targetUrl,
+    ...(link.targetArticleId ? { targetArticleId: link.targetArticleId } : {}),
+    locale: link.locale,
+    previewTitle: stripHtmlTags(link.previewTitle),
+    previewExcerpt: stripHtmlTags(link.previewExcerpt),
+    sourceAttribution: stripHtmlTags(link.sourceAttribution),
+    reviewStatus: 'approved',
+    isSampleDemoData: false,
+  }));
+}
+
+function serializeFigureBlocks(html: string, assets: StudioMediaAsset[]): ArticleBlock[] {
+  const figures: ArticleBlock[] = [];
+  const figureRegex = /<figure\b([^>]*)>([\s\S]*?)<\/figure>/gi;
+  let match: RegExpExecArray | null;
+  let index = 0;
+  while ((match = figureRegex.exec(html)) !== null) {
+    const mediaId = /\bdata-media-id\s*=\s*['"]([^'"]+)['"]/i.exec(match[1])?.[1];
+    if (!mediaId) continue;
+    const asset = assets.find((item) => item.id === mediaId);
+    if (!asset) continue;
+    const captionHtml = /<figcaption\b[^>]*>([\s\S]*?)<\/figcaption>/i.exec(match[2])?.[1] ?? '';
+    const media: PublicMedia = {
+      id: asset.id,
+      src: asset.src,
+      alt: stripHtmlTags(asset.altText || asset.title),
+      width: asset.width > 0 ? asset.width : 1200,
+      height: asset.height > 0 ? asset.height : 675,
+      caption: stripHtmlTags(captionHtml || asset.caption || asset.title),
+      credit: stripHtmlTags(asset.credit || ''),
+      rightsVerified: deriveMediaRightsVerified(asset),
+      license: stripHtmlTags(asset.licence || ''),
+    };
+    const layoutValue = /\bdata-(?:figure-)?layout\s*=\s*['"](wide|column)['"]/i.exec(match[1])?.[1]?.toLowerCase();
+    figures.push({ type: 'figure', id: `figure-${index + 1}-${asset.id}`, media, layout: layoutValue === 'wide' ? 'wide' : 'column', figureNumber: String(index + 1) });
+    index += 1;
+  }
+  return figures;
+}
+
 const SYNTHETIC_DEMO_DOIS = new Set([
   '10.1038/s41567-026-09912-x',
   '10.1103/physrevx.16.021044',
@@ -1446,8 +1528,9 @@ export function serializeStudioArticleToSnapshotV1(
     authors,
     sources,
     media,
+    knowledgeLinks,
     authorizationReceipt,
-    blocks = [],
+    blocks,
   } = params;
 
   const primaryCat =
@@ -1583,6 +1666,7 @@ export function serializeStudioArticleToSnapshotV1(
   // Verified Web route is /article/[slug], not /{locale}/{category}/{slug}.
   const canonicalUrl = `https://scientificradar.com/article/${encodeURIComponent(article.slug)}`;
 
+  const serializedBlocks = blocks ?? serializeFigureBlocks(sanitizedBodyHtml, media);
   const snapshot: PublishedSnapshotRecordV1 = {
     contractVersion: PUBLICATION_CONTRACT_VERSION,
     articleId: article.id,
@@ -1600,6 +1684,8 @@ export function serializeStudioArticleToSnapshotV1(
     subcategorySlugs,
     tagSlugs: tagSlugs.length > 0 ? tagSlugs : [primaryCat.slug],
     authorIds: publicAuthors.map((a) => a.id),
+    ...(article.seriesId ? { seriesId: article.seriesId } : {}),
+    ...(knowledgeLinks?.length ? { knowledgeLinks: serializeKnowledgeLinks(knowledgeLinks) } : {}),
     authors: publicAuthors,
     publishedAt: article.publishedAt || article.updatedAt || article.createdAt,
     updatedAt: article.updatedAt || article.createdAt,
@@ -1607,7 +1693,7 @@ export function serializeStudioArticleToSnapshotV1(
       article.bodyHtml || cleanSummary
     ),
     ...(heroMedia ? { hero: heroMedia } : {}),
-    blocks,
+    blocks: serializedBlocks,
     ...(sanitizedBodyHtml ? { bodyHtml: sanitizedBodyHtml } : {}),
     headings: preparedBody.headings,
     sources: publicSources,
