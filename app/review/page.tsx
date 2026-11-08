@@ -89,7 +89,7 @@ export default function ReviewQueuePage() {
                     </div>
                     <Link
                       href={`/articles/${art.id}/edit`}
-                      className="text-base font-bold text-slate-900 dark:text-slate-100 hover:text-[#087f83] block"
+                      className="text-base font-bold text-slate-900 dark:text-slate-100 hover:text-[#087f83] block break-words"
                     >
                       {art.title}
                     </Link>

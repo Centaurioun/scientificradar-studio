@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { openDB, IDBPDatabase } from 'idb';
+import { mergeArticleEditorialMetadata } from './article-editorial-metadata';
 import {
   Article,
   ArticleRevision,
@@ -653,6 +654,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         seriesId: articleInput.seriesId !== undefined ? articleInput.seriesId : existing?.seriesId,
         authorId: articleInput.authorId ?? existing?.authorId ?? 'auth-elena',
         sourceIds: articleInput.sourceIds ?? existing?.sourceIds ?? [],
+        ...mergeArticleEditorialMetadata(articleInput, existing),
         featuredMediaId:
           articleInput.featuredMediaId !== undefined
             ? articleInput.featuredMediaId
@@ -1905,6 +1907,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         title: sourceInput.title.trim(),
         authors: sourceInput.authors ?? existingInitial?.authors ?? 'Unknown Authors',
         journal: sourceInput.journal ?? existingInitial?.journal ?? 'Preprint / Journal',
+        volume: sourceInput.volume ?? existingInitial?.volume,
+        issue: sourceInput.issue ?? existingInitial?.issue,
+        pages: sourceInput.pages ?? existingInitial?.pages,
+        articleNumber: sourceInput.articleNumber ?? existingInitial?.articleNumber,
         year: sourceInput.year ?? existingInitial?.year ?? 2026,
         doi: sourceInput.doi ?? existingInitial?.doi ?? '',
         url: sourceInput.url.trim(),
@@ -1923,6 +1929,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           title: sourceInput.title.trim(),
           authors: sourceInput.authors ?? existing?.authors ?? 'Unknown Authors',
           journal: sourceInput.journal ?? existing?.journal ?? 'Preprint / Journal',
+          volume: sourceInput.volume ?? existing?.volume,
+          issue: sourceInput.issue ?? existing?.issue,
+          pages: sourceInput.pages ?? existing?.pages,
+          articleNumber: sourceInput.articleNumber ?? existing?.articleNumber,
           year: sourceInput.year ?? existing?.year ?? 2026,
           doi: sourceInput.doi ?? existing?.doi ?? '',
           url: sourceInput.url.trim(),

@@ -60,6 +60,9 @@ export interface Article {
   seriesId?: string;
   authorId?: string;
   sourceIds: string[];
+  relatedIds?: string[];
+  keyConcepts?: { title: string; definition: string; headingId: string }[];
+  editorialNotices?: { id: string; type: 'correction' | 'retraction' | 'updated-information'; title: string; body: string; relatedArticleId?: string; sourceUrl?: string; recordedAt: string }[];
   featuredMediaId?: string;
   seo: {
     title?: string;
@@ -150,6 +153,10 @@ export interface ScientificSource {
   title: string;
   authors: string;
   journal: string;
+  volume?: string;
+  issue?: string;
+  pages?: string;
+  articleNumber?: string;
   year: number;
   doi?: string;
   url: string;
@@ -157,6 +164,26 @@ export interface ScientificSource {
   accessDate: string;
   verificationStatus: SourceVerificationStatus;
   humanClaimVerified?: boolean;
+  notes?: string;
+  linkedClaim?: string;
+}
+
+/** Private recovery snapshot of bibliographic source fields; contains no review authorization. */
+export interface ScientificSourceSnapshot {
+  id: string;
+  articleId?: string;
+  title: string;
+  authors: string;
+  journal: string;
+  year: number;
+  doi?: string;
+  url: string;
+  sourceType: ScientificSource['sourceType'];
+  accessDate: string;
+  volume?: string;
+  issue?: string;
+  pages?: string;
+  articleNumber?: string;
   notes?: string;
   linkedClaim?: string;
 }

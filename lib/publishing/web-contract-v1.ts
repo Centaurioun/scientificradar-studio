@@ -40,6 +40,10 @@ export interface PublicSource {
   title: string;
   authors?: string;
   publication?: string;
+  volume?: string;
+  issue?: string;
+  pages?: string;
+  articleNumber?: string;
   year?: string;
   href?: string;
   /**
@@ -61,6 +65,13 @@ export interface PublicMedia {
   credit: string;
   rightsVerified: boolean;
   license: string;
+  /** Server-resolved, content-addressed rights evidence. Client values are not authoritative. */
+  rightsEvidence?: {
+    evidenceId: string;
+    mediaId: string;
+    assetRevisionId: string;
+    license: string;
+  };
 }
 
 export interface PublicAuthor {
@@ -70,6 +81,20 @@ export interface PublicAuthor {
   credentialsNote: string;
   bio: string;
   isDemoPersona: boolean;
+}
+
+export interface PublicKnowledgeLink {
+  id: string;
+  term: string;
+  targetType: 'internal' | 'wikipedia';
+  targetUrl: string;
+  targetArticleId?: string;
+  locale: SupportedLocale;
+  previewTitle: string;
+  previewExcerpt: string;
+  sourceAttribution: string;
+  reviewStatus: 'approved';
+  isSampleDemoData: false;
 }
 
 export interface ScientificTableData {
@@ -140,6 +165,8 @@ export interface PublicArticle {
   subcategorySlugs: string[];
   tagSlugs: string[];
   authorIds: string[];
+  seriesId?: string;
+  knowledgeLinks?: PublicKnowledgeLink[];
   publishedAt: string;
   updatedAt?: string;
   readingTimeMinutes: number;
@@ -150,6 +177,8 @@ export interface PublicArticle {
   bodyHtml?: string;
   sources: PublicSource[];
   relatedIds: string[];
+  keyConcepts?: { title: string; definition: string; headingId: string }[];
+  editorialNotices?: { id: string; type: 'correction' | 'retraction' | 'updated-information'; title: string; body: string; relatedArticleId?: string; sourceUrl?: string; recordedAt: string }[];
   seo?: {
     title?: string;
     description?: string;
@@ -184,6 +213,8 @@ export interface PublishedSnapshotRecordV1 {
   subcategorySlugs: string[];
   tagSlugs: string[];
   authorIds: string[];
+  seriesId?: string;
+  knowledgeLinks?: PublicKnowledgeLink[];
   authors?: PublicAuthor[];
   publishedAt: string;
   updatedAt?: string;
@@ -198,6 +229,8 @@ export interface PublishedSnapshotRecordV1 {
   headings?: ArticleHeadingOutlineItem[];
   sources: PublicSource[];
   relatedIds: string[];
+  keyConcepts?: { title: string; definition: string; headingId: string }[];
+  editorialNotices?: { id: string; type: 'correction' | 'retraction' | 'updated-information'; title: string; body: string; relatedArticleId?: string; sourceUrl?: string; recordedAt: string }[];
   seo?: {
     title?: string;
     description?: string;
@@ -221,7 +254,8 @@ export interface SnapshotValidationIssue {
     | 'INVALID_DOI_FORMAT'
     | 'BROKEN_CITATION_REFERENCE'
     | 'UNSUPPORTED_STUDIO_NODE'
-    | 'EMPTY_ARTICLE_BODY';
+    | 'EMPTY_ARTICLE_BODY'
+    | 'INVALID_EDITORIAL_METADATA';
   field: string;
   message: string;
 }
@@ -238,6 +272,7 @@ export interface SnapshotValidationResult {
 
 export interface ValidateSnapshotOptions {
   trustedMediaOrigins?: string[];
+  allowLoopbackHttpMediaOrigin?: boolean;
   /**
    * When true, Studio enforces strict pre-publish producer guarantees beyond Web's
    * baseline runtime check at SHA 3b096e84023ca1ba358b7d7dd4f25f17185fc8d7, such as
@@ -978,7 +1013,8 @@ const UNSUPPORTED_RAW_HTML_PATTERNS: Array<{
 
 export function isSafePublishedMediaUrl(
   urlValue: string,
-  trustedMediaOrigins: ReadonlySet<string> = new Set()
+  trustedMediaOrigins: ReadonlySet<string> = new Set(),
+  allowLoopbackHttpMediaOrigin = false
 ): boolean {
   if (typeof urlValue !== 'string') return false;
   const trimmed = urlValue.trim();
@@ -998,10 +1034,8 @@ export function isSafePublishedMediaUrl(
 
   try {
     const parsed = new URL(trimmed);
-    if (parsed.protocol !== 'https:') {
-      return false;
-    }
-    return trustedMediaOrigins.has(parsed.origin);
+    if (parsed.protocol === 'https:') return trustedMediaOrigins.has(parsed.origin);
+    return allowLoopbackHttpMediaOrigin && parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname) && trustedMediaOrigins.has(parsed.origin);
   } catch {
     return false;
   }
@@ -1014,7 +1048,7 @@ function validateMediaRecord(
   issues: SnapshotValidationIssue[],
   options?: ValidateSnapshotOptions
 ): void {
-  if (!isSafePublishedMediaUrl(media.src, trustedMediaOrigins)) {
+  if (!isSafePublishedMediaUrl(media.src, trustedMediaOrigins, options?.allowLoopbackHttpMediaOrigin)) {
     const previewSrc =
       typeof media.src === 'string' && media.src.length > 64
         ? `${media.src.slice(0, 64)}…`
@@ -1198,6 +1232,34 @@ export function validatePublicationSnapshotV1(
         });
       }
     }
+    for (const field of ['volume', 'issue', 'pages', 'articleNumber'] as const) {
+      const value = source[field];
+      if (value !== undefined && (typeof value !== 'string' || value.trim().length === 0 || value.length > 80 || /[<>\u0000-\u001f]/.test(value))) {
+        issues.push({ code: 'INVALID_EDITORIAL_METADATA', field: `sources[${idx}].${field}`, message: `Source bibliographic field "${field}" must be plain text of 1–80 characters.` });
+      }
+    }
+  }
+
+  const headingsForConcepts = resolveArticleHeadings({ blocks: snapshot.blocks ?? [], bodyHtml: snapshot.bodyHtml, sources: snapshot.sources ?? [] });
+  const seenRelated = new Set<string>();
+  for (const [idx, id] of (snapshot.relatedIds ?? []).entries()) {
+    if (typeof id !== 'string' || !id.trim() || id === snapshot.articleId || seenRelated.has(id)) issues.push({ code: 'INVALID_EDITORIAL_METADATA', field: `relatedIds[${idx}]`, message: 'Related article IDs must be unique, non-empty, and cannot point to this article.' });
+    if (typeof id === 'string') seenRelated.add(id);
+  }
+  const seenConceptHeadings = new Set<string>();
+  const concepts = snapshot.keyConcepts ?? [];
+  if (concepts.length > 3) issues.push({ code: 'INVALID_EDITORIAL_METADATA', field: 'keyConcepts', message: 'At most three Key Concepts are allowed.' });
+  for (const [idx, concept] of concepts.entries()) {
+    if (!concept || typeof concept.title !== 'string' || !concept.title.trim() || concept.title.length > 100 || typeof concept.definition !== 'string' || !concept.definition.trim() || concept.definition.length > 300 || typeof concept.headingId !== 'string' || !concept.headingId.trim() || !headingsForConcepts.some(h => h.id === concept.headingId && h.level === 2) || seenConceptHeadings.has(concept.headingId)) {
+      issues.push({ code: 'INVALID_EDITORIAL_METADATA', field: `keyConcepts[${idx}]`, message: 'Each Key Concept needs a concise title and definition plus a unique ID referencing an existing H2 heading.' });
+    }
+    if (typeof concept?.headingId === 'string') seenConceptHeadings.add(concept.headingId);
+  }
+  for (const [idx, notice] of (snapshot.editorialNotices ?? []).entries()) {
+    const validUrl = notice?.sourceUrl === undefined || (typeof notice.sourceUrl === 'string' && (() => { try { return new URL(notice.sourceUrl).protocol === 'https:'; } catch { return false; } })());
+    if (!notice || typeof notice.id !== 'string' || !notice.id.trim() || !['correction', 'retraction', 'updated-information'].includes(notice.type) || typeof notice.title !== 'string' || !notice.title.trim() || notice.title.length > 160 || typeof notice.body !== 'string' || !notice.body.trim() || notice.body.length > 2000 || typeof notice.recordedAt !== 'string' || !Number.isFinite(Date.parse(notice.recordedAt)) || !validUrl) {
+      issues.push({ code: 'INVALID_EDITORIAL_METADATA', field: `editorialNotices[${idx}]`, message: 'Editorial notice metadata is incomplete or malformed.' });
+    }
   }
 
   for (const [idx, block] of (snapshot.blocks ?? []).entries()) {
@@ -1300,6 +1362,8 @@ export function adaptSnapshotV1ToPublicArticle(
     subcategorySlugs: [...(snapshot.subcategorySlugs ?? [])],
     tagSlugs: [...(snapshot.tagSlugs ?? [])],
     authorIds,
+    seriesId: snapshot.seriesId,
+    knowledgeLinks: snapshot.knowledgeLinks,
     publishedAt: snapshot.publishedAt,
     updatedAt: snapshot.updatedAt,
     withdrawnAt: snapshot.withdrawnAt,
@@ -1312,6 +1376,8 @@ export function adaptSnapshotV1ToPublicArticle(
     bodyHtml: snapshot.bodyHtml,
     sources: snapshot.sources ?? [],
     relatedIds: snapshot.relatedIds ?? [],
+    keyConcepts: snapshot.keyConcepts,
+    editorialNotices: snapshot.editorialNotices,
     seo: snapshot.seo,
     revisionId: snapshot.revisionId,
     revisionNumber: snapshot.revisionNumber,
@@ -1341,6 +1407,8 @@ export function adaptPublicArticleToSnapshotV1(
     subcategorySlugs: [...article.subcategorySlugs],
     tagSlugs: [...article.tagSlugs],
     authorIds: [...article.authorIds],
+    seriesId: article.seriesId,
+    knowledgeLinks: article.knowledgeLinks,
     authors,
     publishedAt: article.publishedAt,
     updatedAt: article.updatedAt,
@@ -1355,6 +1423,8 @@ export function adaptPublicArticleToSnapshotV1(
     headings,
     sources: article.sources,
     relatedIds: [...article.relatedIds],
+    keyConcepts: article.keyConcepts,
+    editorialNotices: article.editorialNotices,
     seo: article.seo,
   };
 }
@@ -1429,6 +1499,59 @@ function estimateReadingTimeMinutes(htmlOrText: string): number {
   return Math.max(1, Math.ceil(words / 220));
 }
 
+function serializeKnowledgeLinks(links: StudioKnowledgeLink[] = []): PublicKnowledgeLink[] {
+  return links.filter((link) => {
+    if (link.reviewStatus !== 'approved' || link.isSampleDemoData) return false;
+    try {
+      const url = new URL(link.targetUrl, 'https://scientificradar.com');
+      if (url.protocol !== 'https:' || url.username || url.password) return false;
+      if (link.targetType === 'wikipedia') return /(^|\.)wikipedia\.org$/i.test(url.hostname);
+      return Boolean(link.targetArticleId) && (url.hostname === 'scientificradar.com' || url.hostname.endsWith('.scientificradar.com')) && url.pathname.startsWith('/article/');
+    } catch { return false; }
+  }).map((link) => ({
+    id: link.id,
+    term: stripHtmlTags(link.term),
+    targetType: link.targetType,
+    targetUrl: link.targetUrl,
+    ...(link.targetArticleId ? { targetArticleId: link.targetArticleId } : {}),
+    locale: link.locale,
+    previewTitle: stripHtmlTags(link.previewTitle),
+    previewExcerpt: stripHtmlTags(link.previewExcerpt),
+    sourceAttribution: stripHtmlTags(link.sourceAttribution),
+    reviewStatus: 'approved',
+    isSampleDemoData: false,
+  }));
+}
+
+function serializeFigureBlocks(html: string, assets: StudioMediaAsset[]): ArticleBlock[] {
+  const figures: ArticleBlock[] = [];
+  const figureRegex = /<figure\b([^>]*)>([\s\S]*?)<\/figure>/gi;
+  let match: RegExpExecArray | null;
+  let index = 0;
+  while ((match = figureRegex.exec(html)) !== null) {
+    const mediaId = /\bdata-media-id\s*=\s*['"]([^'"]+)['"]/i.exec(match[1])?.[1];
+    if (!mediaId) continue;
+    const asset = assets.find((item) => item.id === mediaId);
+    if (!asset) continue;
+    const captionHtml = /<figcaption\b[^>]*>([\s\S]*?)<\/figcaption>/i.exec(match[2])?.[1] ?? '';
+    const media: PublicMedia = {
+      id: asset.id,
+      src: asset.src,
+      alt: stripHtmlTags(asset.altText || asset.title),
+      width: asset.width > 0 ? asset.width : 1200,
+      height: asset.height > 0 ? asset.height : 675,
+      caption: stripHtmlTags(captionHtml || asset.caption || asset.title),
+      credit: stripHtmlTags(asset.credit || ''),
+      rightsVerified: deriveMediaRightsVerified(asset),
+      license: stripHtmlTags(asset.licence || ''),
+    };
+    const layoutValue = /\bdata-(?:figure-)?layout\s*=\s*['"](wide|column)['"]/i.exec(match[1])?.[1]?.toLowerCase();
+    figures.push({ type: 'figure', id: `figure-${index + 1}-${asset.id}`, media, layout: layoutValue === 'wide' ? 'wide' : 'column', figureNumber: String(index + 1) });
+    index += 1;
+  }
+  return figures;
+}
+
 const SYNTHETIC_DEMO_DOIS = new Set([
   '10.1038/s41567-026-09912-x',
   '10.1103/physrevx.16.021044',
@@ -1446,8 +1569,9 @@ export function serializeStudioArticleToSnapshotV1(
     authors,
     sources,
     media,
+    knowledgeLinks,
     authorizationReceipt,
-    blocks = [],
+    blocks,
   } = params;
 
   const primaryCat =
@@ -1540,6 +1664,10 @@ export function serializeStudioArticleToSnapshotV1(
       title: stripHtmlTags(src.title),
       authors: stripHtmlTags(src.authors),
       publication: stripHtmlTags(src.journal),
+      ...(src.volume ? { volume: stripHtmlTags(src.volume) } : {}),
+      ...(src.issue ? { issue: stripHtmlTags(src.issue) } : {}),
+      ...(src.pages ? { pages: stripHtmlTags(src.pages) } : {}),
+      ...(src.articleNumber ? { articleNumber: stripHtmlTags(src.articleNumber) } : {}),
       year: String(src.year),
       href: src.url?.trim() || undefined,
       // Per Web contract v1.0.0: illustrative demo sources must NOT carry a synthetic DOI
@@ -1583,6 +1711,7 @@ export function serializeStudioArticleToSnapshotV1(
   // Verified Web route is /article/[slug], not /{locale}/{category}/{slug}.
   const canonicalUrl = `https://scientificradar.com/article/${encodeURIComponent(article.slug)}`;
 
+  const serializedBlocks = blocks ?? serializeFigureBlocks(sanitizedBodyHtml, media);
   const snapshot: PublishedSnapshotRecordV1 = {
     contractVersion: PUBLICATION_CONTRACT_VERSION,
     articleId: article.id,
@@ -1600,6 +1729,8 @@ export function serializeStudioArticleToSnapshotV1(
     subcategorySlugs,
     tagSlugs: tagSlugs.length > 0 ? tagSlugs : [primaryCat.slug],
     authorIds: publicAuthors.map((a) => a.id),
+    ...(article.seriesId ? { seriesId: article.seriesId } : {}),
+    ...(knowledgeLinks?.length ? { knowledgeLinks: serializeKnowledgeLinks(knowledgeLinks) } : {}),
     authors: publicAuthors,
     publishedAt: article.publishedAt || article.updatedAt || article.createdAt,
     updatedAt: article.updatedAt || article.createdAt,
@@ -1607,11 +1738,13 @@ export function serializeStudioArticleToSnapshotV1(
       article.bodyHtml || cleanSummary
     ),
     ...(heroMedia ? { hero: heroMedia } : {}),
-    blocks,
+    blocks: serializedBlocks,
     ...(sanitizedBodyHtml ? { bodyHtml: sanitizedBodyHtml } : {}),
     headings: preparedBody.headings,
     sources: publicSources,
-    relatedIds: [],
+    relatedIds: [...(article.relatedIds || [])],
+    ...(article.keyConcepts?.length ? { keyConcepts: article.keyConcepts } : {}),
+    ...(article.editorialNotices?.length ? { editorialNotices: article.editorialNotices } : {}),
     seo: {
       title: stripHtmlTags(article.seo?.title || cleanTitle),
       description: stripHtmlTags(article.seo?.description || cleanSummary),

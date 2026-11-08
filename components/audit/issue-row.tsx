@@ -20,6 +20,7 @@ interface IssueRowProps {
   proposal?: FixProposal | null;
   onGoToField?: (finding: AuditFinding) => void;
   goToHref?: string;
+  goToLabel?: string;
   onApplyQuickFix?: (proposal: FixProposal) => Promise<boolean>;
 }
 
@@ -47,6 +48,7 @@ export function IssueRow({
   proposal,
   onGoToField,
   goToHref,
+  goToLabel,
   onApplyQuickFix,
 }: IssueRowProps) {
   const [showQuickFixPreview, setShowQuickFixPreview] = useState(false);
@@ -110,7 +112,7 @@ export function IssueRow({
               href={goToHref}
               className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
             >
-              <span>Go to Field</span>
+              <span>{goToLabel || 'Go to Field'}</span>
               <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
             </Link>
           ) : onGoToField ? (
@@ -119,7 +121,7 @@ export function IssueRow({
               onClick={() => onGoToField(finding)}
               className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
             >
-              <span>Go to Field</span>
+              <span>{goToLabel || 'Go to Field'}</span>
               <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
           ) : null}

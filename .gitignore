@@ -10,4 +10,9 @@ test-results/
 .aistudio/
 .playwright-cli/
 *.tsbuildinfo
+.env.local
+.env.*.local
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
 

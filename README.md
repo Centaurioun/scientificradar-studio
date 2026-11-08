@@ -2,7 +2,7 @@
 
 *Write science. Refine with confidence. Publish with control.*
 
-A modern, AI-assisted editorial CMS prototype for **ScientificRadar** (`scientificradar.com`), built with **Next.js 15 (App Router)**, **React 19**, **TypeScript**, **Tailwind CSS v4**, and **Tiptap**.
+A modern, AI-assisted editorial CMS prototype for **ScientificRadar** (`scientificradar.com`), built with **Next.js 16 (App Router)**, **React 19**, **TypeScript**, **Tailwind CSS v4**, and **Tiptap**.
 
 > **Safety & Production Isolation Notice:** This repository implements the **Gate P0 Isolated Prototype** defined in [`docs/SCIENTIFICRADAR_STUDIO_MASTER_SPEC.md`](docs/SCIENTIFICRADAR_STUDIO_MASTER_SPEC.md). **Production website `scientificradar.com` is completely untouched.** Selecting `Publish` updates local IndexedDB demo state only.
 
@@ -40,6 +40,10 @@ A modern, AI-assisted editorial CMS prototype for **ScientificRadar** (`scientif
 | Google AdSense, GA4, Search Console, Tag Manager | P2 | **Not Connected (Truthful UI)** | Honest setup cards under `Settings → Integrations` |
 
 ---
+
+## Runtime
+
+Use Node.js 24.22.2 (pinned in `.nvmrc`; supported range `>=24.22.2 <25`) and Bun 1.4.0 for unit tests and package installation. Node.js runs Next.js and server-side publishing routes; Bun remains the test runner.
 
 ## Local Development & Verification Commands
 
