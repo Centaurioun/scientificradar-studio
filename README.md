@@ -45,6 +45,8 @@ A modern, AI-assisted editorial CMS prototype for **ScientificRadar** (`scientif
 
 Use Node.js 24.22.2 (pinned in `.nvmrc`; supported range `>=24.22.2 <25`) and Bun 1.4.0 for unit tests and package installation. Node.js runs Next.js and server-side publishing routes; Bun remains the test runner.
 
+For standalone production build/start, private SQLite storage, reverse-proxy examples, health checks, backups and rollback, see the [Studio deployment runbook](docs/deployment-studio.md).
+
 ## Local Development & Verification Commands
 
 ```bash

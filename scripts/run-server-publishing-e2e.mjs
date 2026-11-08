@@ -27,7 +27,6 @@ function run(command, args) {
 
 try {
   const success = run('npm', ['run', 'build'])
-    && run(process.execPath, ['scripts/prepare-playwright-server.mjs'])
     && run('npx', ['playwright', 'test', 'tests/e2e/server-publishing-ui.spec.ts']);
   if (!success && process.exitCode === undefined) process.exitCode = 1;
 } finally {
