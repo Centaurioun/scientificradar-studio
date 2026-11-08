@@ -76,7 +76,17 @@ describe('Studio publication API routes', () => {
 
     const candidate = snapshot(mediaUrl, mediaHash);
     const editorDraft = privateEditorDraft();
-    const save = await candidatePut(request('/api/studio/publications/article-api', 'PUT', { snapshot: { ...candidate, status: 'published', seo: { noindex: false } }, editorDraft }, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
+    const untrustedSnapshot = {
+      ...candidate,
+      status: 'published',
+      seo: { noindex: false },
+      editorDraft: { secret: 'SECRET PRIVATE DRAFT' },
+      arbitraryMetadata: 'PRIVATE UNKNOWN FIELD',
+      blocks: candidate.blocks.map((block) => block.type === 'figure'
+        ? { ...block, attackerPayload: 'NESTED PRIVATE METADATA', media: { ...block.media, privateMediaNote: 'PRIVATE MEDIA METADATA' } }
+        : { ...block, attackerPayload: 'NESTED PRIVATE METADATA' }),
+    };
+    const save = await candidatePut(request('/api/studio/publications/article-api', 'PUT', { snapshot: untrustedSnapshot, editorDraft }, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(save.status, 200);
     assert.equal((await save.json() as { state: string }).state, 'in_review');
     const invalidDraft = await candidatePut(request('/api/studio/publications/article-api', 'PUT', { snapshot: candidate, editorDraft: { ...editorDraft, article: { ...editorDraft.article, id: 'another-article' } } }, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
@@ -93,6 +103,10 @@ describe('Studio publication API routes', () => {
     assert.equal(authorCandidate.status, 200);
     const privateCandidate = await authorCandidate.json() as { snapshot: PublishedSnapshotRecordV1; editorDraft: { schemaVersion: number; article: { status: string; publishedAt?: string; scheduledAt?: string; reviewNotes?: unknown; title: string; bodyHtml: string; sourceIds: string[]; authorId?: string; seo: { noindex?: boolean } } } };
     assert.equal(privateCandidate.snapshot.revisionId, 'revision-api');
+    assert.equal(Object.hasOwn(privateCandidate.snapshot, 'editorDraft'), false);
+    assert.equal(Object.hasOwn(privateCandidate.snapshot, 'arbitraryMetadata'), false);
+    assert.equal(Object.hasOwn(privateCandidate.snapshot.blocks[0], 'attackerPayload'), false);
+    assert.equal(privateCandidate.snapshot.blocks[0].type === 'figure' && Object.hasOwn(privateCandidate.snapshot.blocks[0].media, 'privateMediaNote'), false);
     assert.equal(privateCandidate.editorDraft.schemaVersion, 1);
     assert.equal(privateCandidate.editorDraft.article.title, 'Private recovery draft');
     assert.equal(privateCandidate.editorDraft.article.status, 'draft');
@@ -132,11 +146,13 @@ describe('Studio publication API routes', () => {
     assert.equal(list.length, 1);
     assert.equal(list[0].status, 'published');
     assert.equal(Object.hasOwn(list[0], 'editorDraft'), false);
+    assert.doesNotMatch(JSON.stringify(list), /SECRET PRIVATE DRAFT|PRIVATE UNKNOWN FIELD|NESTED PRIVATE METADATA|PRIVATE MEDIA METADATA/);
     const slugResponse = await publicSlugGet(new Request(`${origin}/api/publications/article-api`), { params: Promise.resolve({ slug: 'article-api' }) });
     assert.equal(slugResponse.status, 200);
     const publicArticle = await slugResponse.json() as { status: string } & Record<string, unknown>;
     assert.equal(publicArticle.status, 'published');
     assert.equal(Object.hasOwn(publicArticle, 'editorDraft'), false);
+    assert.doesNotMatch(JSON.stringify(publicArticle), /SECRET PRIVATE DRAFT|PRIVATE UNKNOWN FIELD|NESTED PRIVATE METADATA|PRIVATE MEDIA METADATA/);
     const mediaResponse = await publicMediaGet(new Request(`${origin}/api/public/media/${mediaHash}`), { params: Promise.resolve({ assetRevisionId: mediaHash }) });
     assert.equal(mediaResponse.status, 200);
     assert.ok(Buffer.from(await mediaResponse.arrayBuffer()).equals(png));

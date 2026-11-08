@@ -93,6 +93,61 @@ function normalizePrivateEditorDraft(value: unknown, articleId: string): Private
   return normalized;
 }
 
+function pickKnownFields(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const source = value as Record<string, unknown>;
+  return Object.fromEntries(keys.filter((key) => source[key] !== undefined).map((key) => [key, source[key]]));
+}
+
+function canonicalizePublicMedia(value: unknown): Record<string, unknown> {
+  const media = pickKnownFields(value, ['id', 'src', 'alt', 'width', 'height', 'caption', 'credit', 'rightsVerified', 'license']);
+  if (value && typeof value === 'object' && !Array.isArray(value) && 'rightsEvidence' in value) {
+    media.rightsEvidence = pickKnownFields((value as Record<string, unknown>).rightsEvidence, ['evidenceId', 'mediaId', 'assetRevisionId', 'license']);
+  }
+  return media;
+}
+
+function canonicalizePublicBlock(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const block = value as Record<string, unknown>;
+  switch (block.type) {
+    case 'paragraph': return pickKnownFields(block, ['type', 'id', 'text', 'dropCap', 'citations']);
+    case 'heading': return pickKnownFields(block, ['type', 'id', 'level', 'text']);
+    case 'figure': return { ...pickKnownFields(block, ['type', 'id', 'layout', 'figureNumber']), media: canonicalizePublicMedia(block.media) };
+    case 'quote': return pickKnownFields(block, ['type', 'id', 'quote', 'attribution']);
+    case 'math': return {
+      ...pickKnownFields(block, ['type', 'id', 'tex', 'label', 'explanation']),
+      ...(Array.isArray(block.variables) ? { variables: block.variables.map((item) => pickKnownFields(item, ['symbol', 'meaning'])) } : {}),
+    };
+    case 'table': {
+      const table = pickKnownFields(block.table, ['id', 'caption', 'headers', 'rows', 'footnote']);
+      return { ...pickKnownFields(block, ['type', 'id']), table };
+    }
+    case 'key-takeaways': return pickKnownFields(block, ['type', 'id', 'title', 'items']);
+    default: return { type: block.type };
+  }
+}
+
+/** Drop all properties that are not part of contract v1 before persisting or serving public JSON. */
+function canonicalizePublicSnapshot(value: unknown): PublishedSnapshotRecordV1 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_SNAPSHOT');
+  const source = value as Record<string, unknown>;
+  const snapshot = pickKnownFields(source, [
+    'contractVersion', 'articleId', 'revisionId', 'revisionNumber', 'slug', 'locale', 'translationGroupId', 'editorialType', 'status',
+    'title', 'dek', 'summary', 'categorySlug', 'subcategorySlugs', 'tagSlugs', 'authorIds', 'seriesId', 'publishedAt', 'updatedAt',
+    'withdrawnAt', 'withdrawalReason', 'readingTimeMinutes', 'featuredRank', 'mostReadDemoRank', 'bodyHtml', 'headings', 'relatedIds',
+  ]);
+  if (source.hero !== undefined) snapshot.hero = canonicalizePublicMedia(source.hero);
+  if (Array.isArray(source.blocks)) snapshot.blocks = source.blocks.map(canonicalizePublicBlock);
+  else if (source.blocks !== undefined) snapshot.blocks = source.blocks;
+  if (Array.isArray(source.sources)) snapshot.sources = source.sources.map((item) => pickKnownFields(item, ['id', 'label', 'title', 'authors', 'publication', 'year', 'href', 'doi', 'isIllustrativeDemo', 'note']));
+  else if (source.sources !== undefined) snapshot.sources = source.sources;
+  if (Array.isArray(source.authors)) snapshot.authors = source.authors.map((item) => pickKnownFields(item, ['id', 'name', 'role', 'credentialsNote', 'bio', 'isDemoPersona']));
+  if (Array.isArray(source.knowledgeLinks)) snapshot.knowledgeLinks = source.knowledgeLinks.map((item) => pickKnownFields(item, ['id', 'term', 'targetType', 'targetUrl', 'targetArticleId', 'locale', 'previewTitle', 'previewExcerpt', 'sourceAttribution', 'reviewStatus', 'isSampleDemoData']));
+  if (source.seo !== undefined) snapshot.seo = pickKnownFields(source.seo, ['title', 'description', 'canonicalUrl', 'noindex']);
+  return snapshot as unknown as PublishedSnapshotRecordV1;
+}
+
 /** Durable local/integration publication authority. It deliberately requires a persistent
  * filesystem path and a configured session key; route handlers never use an in-memory fallback. */
 export class ServerPublishingStore {
@@ -366,7 +421,7 @@ export class ServerPublishingStore {
     const candidate = rawSnapshot as PublishedSnapshotRecordV1;
     if (candidate.articleId !== articleId || typeof candidate.revisionId !== 'string' || !candidate.revisionId || !Number.isInteger(candidate.revisionNumber)) throw new Error('INVALID_SNAPSHOT_IDENTITY');
     // The client has no authority to set public state; candidates are always noindex and in review.
-    const snapshot = structuredClone(candidate);
+    const snapshot = canonicalizePublicSnapshot(candidate);
     snapshot.status = 'in_review';
     snapshot.seo = { ...snapshot.seo, noindex: true };
     if (typeof snapshot.bodyHtml === 'string') snapshot.bodyHtml = sanitizeCanonicalBodyHtml(snapshot.bodyHtml);
@@ -424,7 +479,7 @@ export class ServerPublishingStore {
       revisionNumber: candidate.revision_number,
       state: candidate.state,
       savedAt: candidate.saved_at,
-      snapshot: JSON.parse(candidate.snapshot_json) as PublishedSnapshotRecordV1,
+      snapshot: canonicalizePublicSnapshot(JSON.parse(candidate.snapshot_json)),
       editorDraft: candidate.editor_draft_json ? JSON.parse(candidate.editor_draft_json) as PrivateEditorDraftV1 : null,
       publication: activePublication
         ? { revisionId: activePublication.revision_id, status: 'published', publishedAt: activePublication.published_at }
@@ -521,7 +576,7 @@ export class ServerPublishingStore {
       if (candidate.state !== 'approved') throw new Error('REVISION_NOT_APPROVED');
       const prior = this.db.prepare('SELECT revision_id FROM active_publications WHERE article_id=?').get(articleId) as { revision_id: string } | undefined;
       const existingPublication = this.db.prepare('SELECT snapshot_hash,snapshot_json,published_at FROM publications WHERE article_id=? AND revision_id=?').get(articleId, revisionId) as { snapshot_hash: string; snapshot_json: string; published_at: string } | undefined;
-      const snapshot = JSON.parse(candidate.snapshot_json) as PublishedSnapshotRecordV1;
+      const snapshot = canonicalizePublicSnapshot(JSON.parse(candidate.snapshot_json));
       snapshot.status = 'published';
       snapshot.seo = { ...snapshot.seo, noindex: false };
       this.bindKnowledgeLinks(snapshot);
@@ -569,7 +624,7 @@ export class ServerPublishingStore {
     return this.idempotent(`restore:${articleId}`, idempotencyKey, { revisionId }, () => {
       const previous = this.db.prepare('SELECT snapshot_json FROM publications WHERE article_id=? AND revision_id=?').get(articleId, revisionId) as { snapshot_json: string } | undefined;
       if (!previous) throw new Error('NOT_FOUND');
-      const snapshot = JSON.parse(previous.snapshot_json) as PublishedSnapshotRecordV1;
+      const snapshot = canonicalizePublicSnapshot(JSON.parse(previous.snapshot_json));
       this.bindRegisteredRightsEvidence(snapshot, true);
       this.assertHtmlMedia(snapshot, true);
       const publishedAt = snapshot.publishedAt;
@@ -586,13 +641,13 @@ export class ServerPublishingStore {
 
   listPublications(): PublishedSnapshotRecordV1[] {
     return (this.db.prepare(`SELECT p.snapshot_json FROM publications p JOIN active_publications a
-      ON a.article_id=p.article_id AND a.revision_id=p.revision_id WHERE p.withdrawn_at IS NULL ORDER BY p.published_at DESC`).all() as Array<{ snapshot_json: string }>).map((row) => JSON.parse(row.snapshot_json) as PublishedSnapshotRecordV1);
+      ON a.article_id=p.article_id AND a.revision_id=p.revision_id WHERE p.withdrawn_at IS NULL ORDER BY p.published_at DESC`).all() as Array<{ snapshot_json: string }>).map((row) => canonicalizePublicSnapshot(JSON.parse(row.snapshot_json)));
   }
 
   getPublicationBySlug(slug: string): PublishedSnapshotRecordV1 | null {
     const row = this.db.prepare(`SELECT p.snapshot_json FROM publications p JOIN active_publications a
       ON a.article_id=p.article_id AND a.revision_id=p.revision_id WHERE p.withdrawn_at IS NULL AND p.slug=?`).get(slug) as { snapshot_json: string } | undefined;
-    return row ? JSON.parse(row.snapshot_json) as PublishedSnapshotRecordV1 : null;
+    return row ? canonicalizePublicSnapshot(JSON.parse(row.snapshot_json)) : null;
   }
 
   readPublicMedia(assetRevisionId: string): { mime: string; bytes: Uint8Array } | null {
