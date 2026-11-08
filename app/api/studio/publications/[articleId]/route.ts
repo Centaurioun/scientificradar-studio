@@ -13,3 +13,11 @@ export async function PUT(request: Request, { params }: { params: Promise<{ arti
     return noStoreJson(getServerPublishingStore().saveCandidate(actor, articleId, body.snapshot));
   } catch (error) { return errorResponse(error); }
 }
+
+export async function GET(_request: Request, { params }: { params: Promise<{ articleId: string }> }) {
+  try {
+    const actor = requireActor(_request, ['owner', 'editor', 'author', 'reviewer']);
+    const articleId = (await params).articleId;
+    return noStoreJson(getServerPublishingStore().loadCandidate(actor, articleId));
+  } catch (error) { return errorResponse(error); }
+}

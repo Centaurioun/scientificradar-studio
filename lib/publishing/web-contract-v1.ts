@@ -263,6 +263,7 @@ export interface SnapshotValidationResult {
 
 export interface ValidateSnapshotOptions {
   trustedMediaOrigins?: string[];
+  allowLoopbackHttpMediaOrigin?: boolean;
   /**
    * When true, Studio enforces strict pre-publish producer guarantees beyond Web's
    * baseline runtime check at SHA 3b096e84023ca1ba358b7d7dd4f25f17185fc8d7, such as
@@ -1003,7 +1004,8 @@ const UNSUPPORTED_RAW_HTML_PATTERNS: Array<{
 
 export function isSafePublishedMediaUrl(
   urlValue: string,
-  trustedMediaOrigins: ReadonlySet<string> = new Set()
+  trustedMediaOrigins: ReadonlySet<string> = new Set(),
+  allowLoopbackHttpMediaOrigin = false
 ): boolean {
   if (typeof urlValue !== 'string') return false;
   const trimmed = urlValue.trim();
@@ -1023,10 +1025,8 @@ export function isSafePublishedMediaUrl(
 
   try {
     const parsed = new URL(trimmed);
-    if (parsed.protocol !== 'https:') {
-      return false;
-    }
-    return trustedMediaOrigins.has(parsed.origin);
+    if (parsed.protocol === 'https:') return trustedMediaOrigins.has(parsed.origin);
+    return allowLoopbackHttpMediaOrigin && parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname) && trustedMediaOrigins.has(parsed.origin);
   } catch {
     return false;
   }
@@ -1039,7 +1039,7 @@ function validateMediaRecord(
   issues: SnapshotValidationIssue[],
   options?: ValidateSnapshotOptions
 ): void {
-  if (!isSafePublishedMediaUrl(media.src, trustedMediaOrigins)) {
+  if (!isSafePublishedMediaUrl(media.src, trustedMediaOrigins, options?.allowLoopbackHttpMediaOrigin)) {
     const previewSrc =
       typeof media.src === 'string' && media.src.length > 64
         ? `${media.src.slice(0, 64)}…`

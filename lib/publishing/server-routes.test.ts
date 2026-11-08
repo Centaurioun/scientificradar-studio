@@ -9,6 +9,7 @@ import { POST as usersPost } from '../../app/api/studio/auth/users/route';
 import { POST as mediaPost } from '../../app/api/studio/media-assets/route';
 import { POST as evidencePost } from '../../app/api/studio/media-evidence/route';
 import { PUT as candidatePut } from '../../app/api/studio/publications/[articleId]/route';
+import { GET as candidateGet } from '../../app/api/studio/publications/[articleId]/route';
 import { POST as reviewPost } from '../../app/api/studio/publications/[articleId]/review/route';
 import { POST as publishPost } from '../../app/api/studio/publications/[articleId]/publish/route';
 import { POST as withdrawPost } from '../../app/api/studio/publications/[articleId]/withdraw/route';
@@ -18,7 +19,7 @@ import { GET as publicSlugGet } from '../../app/api/publications/[slug]/route';
 import { GET as publicMediaGet } from '../../app/api/public/media/[assetRevisionId]/route';
 import type { PublishedSnapshotRecordV1 } from './web-contract-v1';
 
-const origin = 'https://studio.example.test';
+const origin = 'http://localhost:3000';
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2Z6YcAAAAASUVORK5CYII=', 'base64');
 const dataUrl = `data:image/png;base64,${png.toString('base64')}`;
 
@@ -28,6 +29,7 @@ describe('Studio publication API routes', () => {
   let authorCookie = '';
   let reviewerCookie = '';
   let rightsCookie = '';
+  let otherAuthorCookie = '';
   let mediaHash = '';
   let mediaUrl = '';
 
@@ -41,9 +43,11 @@ describe('Studio publication API routes', () => {
     process.env.STUDIO_BOOTSTRAP_PASSWORD = 'api test owner password 2026';
     ownerCookie = await sessionCookie('owner@example.test', 'api test owner password 2026');
     await createUser('author@example.test', 'api test author password 2026', 'author');
+    await createUser('other-author@example.test', 'api test other author 2026', 'author');
     await createUser('reviewer@example.test', 'api test reviewer password 2026', 'reviewer');
     await createUser('rights@example.test', 'api test rights password 2026', 'rights_reviewer');
     authorCookie = await sessionCookie('author@example.test', 'api test author password 2026');
+    otherAuthorCookie = await sessionCookie('other-author@example.test', 'api test other author 2026');
     reviewerCookie = await sessionCookie('reviewer@example.test', 'api test reviewer password 2026');
     rightsCookie = await sessionCookie('rights@example.test', 'api test rights password 2026');
   });
@@ -74,6 +78,15 @@ describe('Studio publication API routes', () => {
     const save = await candidatePut(request('/api/studio/publications/article-api', 'PUT', { snapshot: { ...candidate, status: 'published', seo: { noindex: false } } }, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(save.status, 200);
     assert.equal((await save.json() as { state: string }).state, 'in_review');
+    const candidateUnauthenticated = await candidateGet(request('/api/studio/publications/article-api', 'GET'), { params: Promise.resolve({ articleId: 'article-api' }) });
+    assert.equal(candidateUnauthenticated.status, 401);
+    const candidatePrivate = await candidateGet(request('/api/studio/publications/article-api', 'GET', undefined, otherAuthorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
+    assert.equal(candidatePrivate.status, 404);
+    const authorCandidate = await candidateGet(request('/api/studio/publications/article-api', 'GET', undefined, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
+    assert.equal(authorCandidate.status, 200);
+    assert.equal((await authorCandidate.json() as { snapshot: PublishedSnapshotRecordV1 }).snapshot.revisionId, 'revision-api');
+    const reviewerCandidate = await candidateGet(request('/api/studio/publications/article-api', 'GET', undefined, reviewerCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
+    assert.equal(reviewerCandidate.status, 200);
     const selfReview = await reviewPost(request('/api/studio/publications/article-api/review', 'POST', { revisionId: 'revision-api', decision: 'approve' }, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(selfReview.status, 403);
     const reviewerDecision = await reviewPost(request('/api/studio/publications/article-api/review', 'POST', { revisionId: 'revision-api', decision: 'approve', note: 'fixture review' }, reviewerCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
@@ -82,6 +95,9 @@ describe('Studio publication API routes', () => {
     assert.equal(deniedPublish.status, 403);
     const published = await publishPost(request('/api/studio/publications/article-api/publish', 'POST', { revisionId: 'revision-api' }, ownerCookie, origin, { 'Idempotency-Key': 'api-publish-1' }), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(published.status, 200);
+    const keyConflict = await publishPost(request('/api/studio/publications/article-api/publish', 'POST', { revisionId: 'different-revision' }, ownerCookie, origin, { 'Idempotency-Key': 'api-publish-1' }), { params: Promise.resolve({ articleId: 'article-api' }) });
+    assert.equal(keyConflict.status, 409);
+    assert.equal((await publicSlugGet(new Request(`${origin}/api/publications/article-api`), { params: Promise.resolve({ slug: 'article-api' }) }).then((response) => response.json()) as { revisionId: string }).revisionId, 'revision-api');
   });
 
   it('publishes only exact snapshots, serves public list/slug/media, and removes withdrawn items until restored', async () => {

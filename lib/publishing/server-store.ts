@@ -1,9 +1,9 @@
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { PublishedSnapshotRecordV1 } from './web-contract-v1';
-import { validatePublicationSnapshotV1 } from './web-contract-v1';
+import { sanitizeCanonicalBodyHtml, validatePublicationSnapshotV1 } from './web-contract-v1';
 
 export type ServerRole = 'owner' | 'editor' | 'author' | 'reviewer' | 'rights_reviewer';
 export interface AuthenticatedActor { id: string; email: string; role: ServerRole; }
@@ -17,6 +17,8 @@ export interface PublishingConfig {
   publicBaseUrl: string;
   secureCookies?: boolean;
   maxMediaBytes?: number;
+  maxAuthAttemptKeys?: number;
+  allowLoopbackHttpMediaOrigin?: boolean;
 }
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
@@ -58,6 +60,8 @@ export class ServerPublishingStore {
   private readonly sessionSecret: string;
   private readonly publicBaseUrl: string;
   private readonly maxMediaBytes: number;
+  private readonly maxAuthAttemptKeys: number;
+  private readonly allowLoopbackHttpMediaOrigin: boolean;
 
   constructor(config: PublishingConfig) {
     if (config.sessionSecret.length < 32) throw new Error('STUDIO_SESSION_SECRET must contain at least 32 characters');
@@ -69,10 +73,20 @@ export class ServerPublishingStore {
     this.sessionSecret = config.sessionSecret;
     this.publicBaseUrl = url.origin;
     this.maxMediaBytes = config.maxMediaBytes ?? 8 * 1024 * 1024;
+    this.maxAuthAttemptKeys = config.maxAuthAttemptKeys ?? 1000;
+    this.allowLoopbackHttpMediaOrigin = config.allowLoopbackHttpMediaOrigin === true && url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
     const databasePath = resolve(config.databasePath);
-    mkdirSync(dirname(databasePath), { recursive: true });
+    const directory = dirname(databasePath);
+    if (!existsSync(directory)) mkdirSync(directory, { mode: 0o700 });
+    const directoryStat = statSync(directory);
+    if (!directoryStat.isDirectory() || (directoryStat.mode & 0o077) !== 0) throw new Error('PUBLICATION_DATABASE_DIRECTORY_NOT_PRIVATE');
+    if (existsSync(databasePath)) {
+      if (!lstatSync(databasePath).isFile()) throw new Error('PUBLICATION_DATABASE_FILE_INVALID');
+      chmodSync(databasePath, 0o600);
+    } else closeSync(openSync(databasePath, 'wx', 0o600));
     this.db = new DatabaseSync(databasePath);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+    this.secureDatabaseFiles(databasePath);
     this.migrate();
     if (config.bootstrapEmail && config.bootstrapPassword) {
       this.bootstrapOwner(config.bootstrapEmail, config.bootstrapPassword);
@@ -80,6 +94,10 @@ export class ServerPublishingStore {
   }
 
   close(): void { this.db.close(); }
+
+  private secureDatabaseFiles(databasePath: string): void {
+    for (const path of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) if (existsSync(path) && lstatSync(path).isFile()) chmodSync(path, 0o600);
+  }
 
   private migrate(): void {
     this.db.exec(`
@@ -164,10 +182,11 @@ export class ServerPublishingStore {
   }
 
   login(email: string, password: string): { actor: AuthenticatedActor; token: string; expiresAt: string } | null {
+    if (typeof email !== 'string' || email.length > 254 || typeof password !== 'string' || password.length > 1024) return null;
     const normalizedEmail = email.trim().toLowerCase();
     const now = Date.now();
+    this.db.prepare('DELETE FROM auth_attempts WHERE window_started < ?').run(now - 15 * 60_000);
     const attempt = this.db.prepare('SELECT window_started,attempts FROM auth_attempts WHERE email=?').get(normalizedEmail) as { window_started: number; attempts: number } | undefined;
-    if (attempt && now - attempt.window_started < 15 * 60_000 && attempt.attempts >= 8) return null;
     const user = this.findUserByEmail(normalizedEmail);
     const salt = user ? Buffer.from(user.salt, 'hex') : Buffer.alloc(16, 7);
     const computed = passwordHash(password, salt);
@@ -177,6 +196,7 @@ export class ServerPublishingStore {
       const started = attempt && now - attempt.window_started < 15 * 60_000 ? attempt.window_started : now;
       const count = attempt && now - attempt.window_started < 15 * 60_000 ? attempt.attempts + 1 : 1;
       this.db.prepare('INSERT INTO auth_attempts(email,window_started,attempts) VALUES(?,?,?) ON CONFLICT(email) DO UPDATE SET window_started=excluded.window_started,attempts=excluded.attempts').run(normalizedEmail, started, count);
+      this.db.prepare(`DELETE FROM auth_attempts WHERE email IN (SELECT email FROM auth_attempts ORDER BY window_started ASC LIMIT MAX(0,(SELECT COUNT(*) FROM auth_attempts)-?))`).run(this.maxAuthAttemptKeys);
       return null;
     }
     this.db.prepare('DELETE FROM auth_attempts WHERE email=?').run(normalizedEmail);
@@ -293,7 +313,7 @@ export class ServerPublishingStore {
     else delete (snapshot as PublishedSnapshotRecordV1 & { knowledgeLinks?: unknown }).knowledgeLinks;
   }
 
-  saveCandidate(actor: AuthenticatedActor, articleId: string, rawSnapshot: unknown): { articleId: string; revisionId: string; state: 'in_review'; snapshotHash: string } {
+  saveCandidate(actor: AuthenticatedActor, articleId: string, rawSnapshot: unknown): { articleId: string; revisionId: string; state: 'in_review' | 'approved' | 'rejected'; snapshotHash: string } {
     if (!['owner', 'editor', 'author'].includes(actor.role)) throw new Error('FORBIDDEN');
     const bytes = Buffer.byteLength(JSON.stringify(rawSnapshot));
     if (bytes > MAX_SNAPSHOT_BYTES) throw new Error('SNAPSHOT_TOO_LARGE');
@@ -304,26 +324,51 @@ export class ServerPublishingStore {
     const snapshot = structuredClone(candidate);
     snapshot.status = 'in_review';
     snapshot.seo = { ...snapshot.seo, noindex: true };
+    if (typeof snapshot.bodyHtml === 'string') snapshot.bodyHtml = sanitizeCanonicalBodyHtml(snapshot.bodyHtml);
     this.bindKnowledgeLinks(snapshot);
     const validationCandidate = structuredClone(snapshot);
     validationCandidate.status = 'published';
     validationCandidate.seo = { ...validationCandidate.seo, noindex: false };
-    const validation = validatePublicationSnapshotV1(validationCandidate, { enforceStrictStudioPrePublish: false, trustedMediaOrigins: [new URL(this.publicBaseUrl).origin] });
+    const validation = validatePublicationSnapshotV1(validationCandidate, { enforceStrictStudioPrePublish: false, trustedMediaOrigins: [new URL(this.publicBaseUrl).origin], allowLoopbackHttpMediaOrigin: this.allowLoopbackHttpMediaOrigin });
     if (!validation.valid) throw new Error(`INVALID_SNAPSHOT:${validation.issues.map((issue) => issue.code).join(',')}`);
     this.bindRegisteredRightsEvidence(snapshot, false);
     this.assertHtmlMedia(snapshot, false);
     const snapshotJson = JSON.stringify(snapshot);
     const snapshotHash = sha256(snapshotJson);
-    const previousCandidate = this.db.prepare('SELECT snapshot_hash FROM candidates WHERE article_id=? AND revision_id=?').get(articleId, snapshot.revisionId) as { snapshot_hash: string } | undefined;
-    if (previousCandidate && previousCandidate.snapshot_hash !== snapshotHash) throw new Error('REVISION_IMMUTABLE');
+    const previousCandidate = this.db.prepare('SELECT snapshot_hash,saved_by,state FROM candidates WHERE article_id=? AND revision_id=?').get(articleId, snapshot.revisionId) as { snapshot_hash: string; saved_by: string; state: 'in_review' | 'approved' | 'rejected' } | undefined;
+    if (previousCandidate) {
+      if (previousCandidate.snapshot_hash !== snapshotHash) throw new Error('REVISION_IMMUTABLE');
+      if (previousCandidate.saved_by !== actor.id) throw new Error('REVISION_SUBMITTER_IMMUTABLE');
+      return { articleId, revisionId: snapshot.revisionId, state: previousCandidate.state, snapshotHash };
+    }
     const now = new Date().toISOString();
     this.db.prepare(`INSERT INTO candidates(article_id,revision_id,revision_number,slug,snapshot_json,snapshot_hash,state,saved_by,saved_at)
-      VALUES(?,?,?,?,?,?,'in_review',?,?) ON CONFLICT(article_id,revision_id) DO UPDATE SET
-      revision_number=excluded.revision_number,slug=excluded.slug,snapshot_json=excluded.snapshot_json,snapshot_hash=excluded.snapshot_hash,
-      state='in_review',saved_by=excluded.saved_by,saved_at=excluded.saved_at`)
+      VALUES(?,?,?,?,?,?,'in_review',?,?)`)
       .run(articleId, snapshot.revisionId, snapshot.revisionNumber, snapshot.slug, snapshotJson, snapshotHash, actor.id, now);
     this.audit('candidate_saved', actor, articleId, snapshot.revisionId, { snapshotHash });
     return { articleId, revisionId: snapshot.revisionId, state: 'in_review', snapshotHash };
+  }
+
+  loadCandidate(actor: AuthenticatedActor, articleId: string): {
+    articleId: string; revisionId: string; revisionNumber: number; state: 'in_review' | 'approved' | 'rejected';
+    savedAt: string; snapshot: PublishedSnapshotRecordV1;
+  } {
+    if (!['owner', 'editor', 'author', 'reviewer'].includes(actor.role)) throw new Error('FORBIDDEN');
+    const row = actor.role === 'author'
+      ? this.db.prepare(`SELECT article_id,revision_id,revision_number,state,saved_at,snapshot_json FROM candidates
+        WHERE article_id=? AND saved_by=? ORDER BY revision_number DESC,saved_at DESC LIMIT 1`).get(articleId, actor.id)
+      : this.db.prepare(`SELECT article_id,revision_id,revision_number,state,saved_at,snapshot_json FROM candidates
+        WHERE article_id=? ORDER BY revision_number DESC,saved_at DESC LIMIT 1`).get(articleId);
+    const candidate = row as { article_id: string; revision_id: string; revision_number: number; state: 'in_review' | 'approved' | 'rejected'; saved_at: string; snapshot_json: string } | undefined;
+    if (!candidate) throw new Error('NOT_FOUND');
+    return {
+      articleId: candidate.article_id,
+      revisionId: candidate.revision_id,
+      revisionNumber: candidate.revision_number,
+      state: candidate.state,
+      savedAt: candidate.saved_at,
+      snapshot: JSON.parse(candidate.snapshot_json) as PublishedSnapshotRecordV1,
+    };
   }
 
   private collectMedia(snapshot: PublishedSnapshotRecordV1): Array<{ media: Record<string, unknown>; path: string }> {
@@ -394,8 +439,8 @@ export class ServerPublishingStore {
     try {
       const existing = this.db.prepare('SELECT payload_hash,response_json FROM idempotency WHERE scope=? AND key=?').get(scope, key) as { payload_hash: string; response_json: string } | undefined;
       if (existing) {
-        this.db.exec('COMMIT');
         if (existing.payload_hash !== payloadHash) throw new Error('IDEMPOTENCY_KEY_CONFLICT');
+        this.db.exec('COMMIT');
         return JSON.parse(existing.response_json) as T;
       }
       const result = fn();
@@ -419,7 +464,7 @@ export class ServerPublishingStore {
       this.bindKnowledgeLinks(snapshot);
       const relatedVisible = new Set((this.db.prepare(`SELECT p.article_id FROM publications p JOIN active_publications a ON p.article_id=a.article_id AND p.revision_id=a.revision_id WHERE p.withdrawn_at IS NULL`).all() as Array<{ article_id: string }>).map((row) => row.article_id));
       snapshot.relatedIds = snapshot.relatedIds.filter((id) => id !== articleId && relatedVisible.has(id));
-      const validation = validatePublicationSnapshotV1(snapshot, { enforceStrictStudioPrePublish: true, trustedMediaOrigins: [new URL(this.publicBaseUrl).origin] });
+      const validation = validatePublicationSnapshotV1(snapshot, { enforceStrictStudioPrePublish: true, trustedMediaOrigins: [new URL(this.publicBaseUrl).origin], allowLoopbackHttpMediaOrigin: this.allowLoopbackHttpMediaOrigin });
       if (!validation.valid) throw new Error(`INVALID_PUBLIC_SNAPSHOT:${validation.issues.map((issue) => issue.code).join(',')}`);
       this.bindRegisteredRightsEvidence(snapshot, true);
       this.assertHtmlMedia(snapshot, true);
@@ -523,7 +568,7 @@ export function getServerPublishingStore(): ServerPublishingStore {
   const databasePath = process.env.PUBLICATION_DATABASE_PATH || (process.env.NODE_ENV === 'production' ? '' : './data/scientificradar-publications.sqlite');
   const publicBaseUrl = process.env.SCIENTIFICRADAR_STUDIO_PUBLISHING_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000');
   if (!databasePath || !publicBaseUrl || sessionSecret.length < 32) throw new Error('Server publishing is not configured; set PUBLICATION_DATABASE_PATH, SCIENTIFICRADAR_STUDIO_PUBLISHING_URL and STUDIO_SESSION_SECRET.');
-  singleton = new ServerPublishingStore({ databasePath, publicBaseUrl, sessionSecret, bootstrapEmail: process.env.STUDIO_BOOTSTRAP_EMAIL, bootstrapPassword: process.env.STUDIO_BOOTSTRAP_PASSWORD, maxMediaBytes: Number(process.env.PUBLISHING_MAX_MEDIA_BYTES || 8 * 1024 * 1024), secureCookies: process.env.NODE_ENV === 'production' });
+  singleton = new ServerPublishingStore({ databasePath, publicBaseUrl, sessionSecret, bootstrapEmail: process.env.STUDIO_BOOTSTRAP_EMAIL, bootstrapPassword: process.env.STUDIO_BOOTSTRAP_PASSWORD, maxMediaBytes: Number(process.env.PUBLISHING_MAX_MEDIA_BYTES || 8 * 1024 * 1024), secureCookies: process.env.NODE_ENV === 'production', allowLoopbackHttpMediaOrigin: process.env.NODE_ENV !== 'production' });
   return singleton;
 }
 

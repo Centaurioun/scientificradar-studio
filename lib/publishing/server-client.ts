@@ -101,6 +101,19 @@ export async function saveCandidate(input: { snapshot: PublishedSnapshotRecordV1
   return request(`/api/studio/publications/${encodeURIComponent(snapshot.articleId)}`, { method: 'PUT', body: JSON.stringify({ snapshot }) });
 }
 
+export interface ServerCandidate {
+  articleId: string;
+  revisionId: string;
+  revisionNumber: number;
+  state: 'in_review' | 'approved' | 'rejected';
+  savedAt: string;
+  snapshot: PublishedSnapshotRecordV1;
+}
+
+export async function loadCandidate(articleId: string): Promise<ServerCandidate> {
+  return request(`/api/studio/publications/${encodeURIComponent(articleId)}`, { method: 'GET' });
+}
+
 export async function recordRightsEvidence(input: RightsEvidenceInput): Promise<unknown> {
   return request('/api/studio/media-evidence', { method: 'POST', body: JSON.stringify(input) });
 }

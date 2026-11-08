@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { after, before, describe, it } from 'node:test';
 import { ServerPublishingStore, type AuthenticatedActor } from './server-store';
-import type { PublishedSnapshotRecordV1 } from './web-contract-v1';
+import { isSafePublishedMediaUrl, type PublishedSnapshotRecordV1 } from './web-contract-v1';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2Z6YcAAAAASUVORK5CYII=', 'base64');
 const pngDataUrl = `data:image/png;base64,${png.toString('base64')}`;
@@ -17,17 +18,22 @@ describe('durable server publishing workflow', () => {
   let author: AuthenticatedActor;
   let reviewer: AuthenticatedActor;
   let rightsReviewer: AuthenticatedActor;
+  let editor: AuthenticatedActor;
   let assetRevisionId = '';
   let publicSrc = '';
+  let databasePath = '';
+  const sessionSecret = 'test-session-secret-for-local-suite-32-bytes';
 
   before(() => {
     root = mkdtempSync(join(tmpdir(), 'scientificradar-publishing-'));
-    store = new ServerPublishingStore({ databasePath: join(root, 'publishing.sqlite'), sessionSecret: 'test-session-secret-for-local-suite-32-bytes', publicBaseUrl: 'https://studio.example.test', bootstrapEmail: 'owner@example.test', bootstrapPassword: 'correct horse battery staple test' });
+    databasePath = join(root, 'publishing.sqlite');
+    store = new ServerPublishingStore({ databasePath, sessionSecret, publicBaseUrl: 'https://studio.example.test', bootstrapEmail: 'owner@example.test', bootstrapPassword: 'correct horse battery staple test' });
     const ownerLogin = store.login('owner@example.test', 'correct horse battery staple test');
     assert.ok(ownerLogin);
     owner = ownerLogin.actor;
     assert.equal(store.login('owner@example.test', 'bad-password'), null);
     author = store.createUser(owner, { email: 'author@example.test', password: 'author secret test password', role: 'author' });
+    editor = store.createUser(owner, { email: 'editor@example.test', password: 'editor secret test password', role: 'editor' });
     reviewer = store.createUser(owner, { email: 'reviewer@example.test', password: 'reviewer secret test password', role: 'reviewer' });
     rightsReviewer = store.createUser(owner, { email: 'rights@example.test', password: 'rights reviewer secret test', role: 'rights_reviewer' });
   });
@@ -58,8 +64,15 @@ describe('durable server publishing workflow', () => {
     store.reviewKnowledgeLink(reviewer, reviewedLink.id, 'approve');
     store.createKnowledgeLink(author, { id: forgedLink.id, term: forgedLink.term, targetType: forgedLink.targetType, targetUrl: forgedLink.targetUrl, locale: forgedLink.locale, previewTitle: forgedLink.previewTitle, previewExcerpt: forgedLink.previewExcerpt, sourceAttribution: forgedLink.sourceAttribution });
     first.knowledgeLinks = [reviewedLink, forgedLink];
+    first.bodyHtml = '<p onclick="alert(1)">Safe paragraph</p><a href="javascript:alert(1)">Unsafe link</a><figure data-media-id="media-figure-1"><img src="' + publicSrc + '" alt="fixture"></figure><table><tbody><tr><td>value</td></tr></tbody></table><span class="citation">[1]</span><span class="katex">x</span>';
     assert.equal(store.saveCandidate(author, first.articleId, first).state, 'in_review');
+    assert.equal(store.saveCandidate(author, first.articleId, first).state, 'in_review');
+    assert.throws(() => store.saveCandidate(editor, first.articleId, first), /REVISION_SUBMITTER_IMMUTABLE/);
     assert.throws(() => store.reviewCandidate(author, first.articleId, first.revisionId, 'approve'), /FORBIDDEN/);
+    const editorCandidate = { ...first, revisionId: 'editor-submitted-revision', revisionNumber: 3, title: 'Editor submitted candidate' };
+    store.saveCandidate(editor, editorCandidate.articleId, editorCandidate);
+    assert.throws(() => store.saveCandidate(owner, editorCandidate.articleId, editorCandidate), /REVISION_SUBMITTER_IMMUTABLE/);
+    assert.throws(() => store.reviewCandidate(editor, editorCandidate.articleId, editorCandidate.revisionId, 'approve'), /SELF_REVIEW_FORBIDDEN/);
     store.reviewCandidate(reviewer, first.articleId, first.revisionId, 'approve', 'Test fixture review');
     assert.throws(() => store.publish(author, first.articleId, first.revisionId, 'publish-1'), /FORBIDDEN/);
     const publication = store.publish(owner, first.articleId, first.revisionId, 'publish-1');
@@ -70,6 +83,11 @@ describe('durable server publishing workflow', () => {
     assert.equal(publicSnapshot?.status, 'published');
     assert.deepEqual(publicSnapshot?.knowledgeLinks?.map((link) => link.id), ['knowledge-reviewed']);
     assert.equal(publicSnapshot?.blocks[0]?.type, 'figure');
+    assert.doesNotMatch(publicSnapshot?.bodyHtml ?? '', /onclick|javascript:/i);
+    assert.match(publicSnapshot?.bodyHtml ?? '', /<figure/);
+    assert.match(publicSnapshot?.bodyHtml ?? '', /<table/);
+    assert.match(publicSnapshot?.bodyHtml ?? '', /\[1\]/);
+    assert.match(publicSnapshot?.bodyHtml ?? '', /katex/);
     assert.equal(store.readPublicMedia(assetRevisionId)?.bytes.byteLength, png.length);
     assert.ok(Buffer.from(store.readPublicMedia(assetRevisionId)?.bytes ?? new Uint8Array()).equals(png));
 
@@ -92,7 +110,7 @@ describe('durable server publishing workflow', () => {
     assert.equal(store.getPublicationBySlug(first.slug)?.revisionId, second.revisionId);
     assert.equal(store.readPublicMedia(assetRevisionId)?.bytes.byteLength, png.length);
     assert.deepEqual(store.getAuditEvents(first.articleId).map((event) => event.action), [
-      'candidate_saved', 'revision_approved', 'publication_published', 'candidate_saved', 'revision_approved',
+      'candidate_saved', 'candidate_saved', 'revision_approved', 'publication_published', 'candidate_saved', 'revision_approved',
       'correction_published', 'publication_withdrawn', 'publication_restored',
     ]);
   });
@@ -103,6 +121,56 @@ describe('durable server publishing workflow', () => {
     store.setUserAccess(owner, rightsReviewer.id, { disabled: true });
     assert.equal(store.actorForToken(login.token), null);
     assert.throws(() => new ServerPublishingStore({ databasePath: join(root, 'bad.sqlite'), sessionSecret: 'too-short', publicBaseUrl: 'https://studio.example.test' }), /STUDIO_SESSION_SECRET/);
+  });
+
+  it('bounds and prunes failed-login keys without allowing unrelated attempts to lock a real account', () => {
+    const isolated = join(root, 'auth-limits');
+    mkdirSync(isolated, { mode: 0o700 });
+    const limited = new ServerPublishingStore({ databasePath: join(isolated, 'auth.sqlite'), sessionSecret, publicBaseUrl: 'https://studio.example.test', bootstrapEmail: 'real@example.test', bootstrapPassword: 'real account password 2026', maxAuthAttemptKeys: 5 });
+    for (let index = 0; index < 12; index++) assert.equal(limited.login(`unknown-${index}@example.test`, 'incorrect'), null);
+    const db = new DatabaseSync(join(isolated, 'auth.sqlite'));
+    assert.ok((db.prepare('SELECT COUNT(*) AS count FROM auth_attempts').get() as { count: number }).count <= 5);
+    db.prepare('UPDATE auth_attempts SET window_started=0').run();
+    db.close();
+    assert.equal(limited.login('unknown-next@example.test', 'incorrect'), null);
+    const verify = new DatabaseSync(join(isolated, 'auth.sqlite'));
+    assert.equal((verify.prepare('SELECT COUNT(*) AS count FROM auth_attempts').get() as { count: number }).count, 1);
+    verify.close();
+    assert.equal(limited.login('x'.repeat(255), 'password'), null);
+    for (let index = 0; index < 12; index++) limited.login(`stranger-${index}@example.test`, 'wrong');
+    assert.ok(limited.login('real@example.test', 'real account password 2026'));
+    limited.close();
+  });
+
+  it('keeps database files private and rejects insecure configured directories', () => {
+    const isolated = join(root, 'private-db');
+    mkdirSync(isolated, { mode: 0o700 });
+    const secure = new ServerPublishingStore({ databasePath: join(isolated, 'store.sqlite'), sessionSecret, publicBaseUrl: 'https://studio.example.test' });
+    assert.equal(statSync(isolated).mode & 0o777, 0o700);
+    assert.equal(statSync(join(isolated, 'store.sqlite')).mode & 0o777, 0o600);
+    secure.close();
+    const insecure = join(root, 'insecure-db');
+    mkdirSync(insecure, { mode: 0o755 });
+    chmodSync(insecure, 0o755);
+    assert.throws(() => new ServerPublishingStore({ databasePath: join(insecure, 'store.sqlite'), sessionSecret, publicBaseUrl: 'https://studio.example.test' }), /PUBLICATION_DATABASE_DIRECTORY_NOT_PRIVATE/);
+    assert.equal(statSync(insecure).mode & 0o777, 0o755);
+  });
+
+  it('allows HTTP media only for an explicitly enabled exact loopback origin', () => {
+    const origins = new Set(['http://localhost:3000']);
+    assert.equal(isSafePublishedMediaUrl('http://localhost:3000/api/public/media/hash', origins, true), true);
+    assert.equal(isSafePublishedMediaUrl('http://localhost:3000/api/public/media/hash', origins, false), false);
+    assert.equal(isSafePublishedMediaUrl('http://attacker.example/api/public/media/hash', origins, true), false);
+    assert.equal(isSafePublishedMediaUrl('http://127.0.0.1:3000/api/public/media/hash', origins, true), false);
+  });
+
+  it('rehydrates the latest private candidate and public snapshot after reopening the durable database', () => {
+    store.close();
+    store = new ServerPublishingStore({ databasePath, sessionSecret, publicBaseUrl: 'https://studio.example.test' });
+    const ownerSession = store.login('owner@example.test', 'correct horse battery staple test');
+    assert.ok(ownerSession);
+    assert.equal(store.loadCandidate(ownerSession.actor, 'article-test').revisionId, 'editor-submitted-revision');
+    assert.equal(store.getPublicationBySlug('test-article')?.revisionId, 'rev-article-2');
   });
 });
 
