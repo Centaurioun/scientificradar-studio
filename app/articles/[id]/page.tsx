@@ -1,7 +1,7 @@
 'use client';
 
 import React, { use } from 'react';
-import { ArticleWorkspace } from '@/components/editor/article-workspace';
+import { ArticleWorkspaceRecoveryGate } from '@/components/editor/article-workspace-recovery-gate';
 
 export default function ArticleDetailEditorPage({
   params,
@@ -9,5 +9,5 @@ export default function ArticleDetailEditorPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  return <ArticleWorkspace articleId={id} />;
+  return <ArticleWorkspaceRecoveryGate articleId={id} />;
 }

@@ -208,7 +208,11 @@ export function ServerPublishingWorkflow({
         throw new Error('PUBLISHING_ARTICLE_ID_MISMATCH');
       }
       const response = record(
-        await saveCandidate({ snapshot: serialized.snapshot, mediaAssets: media })
+        await saveCandidate({
+          snapshot: serialized.snapshot,
+          editorDraft: { schemaVersion: 1, article: localArticle },
+          mediaAssets: media,
+        })
       );
       if (
         response.articleId !== article.id ||
