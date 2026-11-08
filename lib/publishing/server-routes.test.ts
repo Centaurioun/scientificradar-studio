@@ -78,6 +78,8 @@ describe('Studio publication API routes', () => {
     const save = await candidatePut(request('/api/studio/publications/article-api', 'PUT', { snapshot: { ...candidate, status: 'published', seo: { noindex: false } } }, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(save.status, 200);
     assert.equal((await save.json() as { state: string }).state, 'in_review');
+    const beforeApproval = await candidateGet(request('/api/studio/publications/article-api', 'GET', undefined, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
+    assert.equal((await beforeApproval.json() as { publication: unknown }).publication, null);
     const candidateUnauthenticated = await candidateGet(request('/api/studio/publications/article-api', 'GET'), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(candidateUnauthenticated.status, 401);
     const candidatePrivate = await candidateGet(request('/api/studio/publications/article-api', 'GET', undefined, otherAuthorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
@@ -91,10 +93,14 @@ describe('Studio publication API routes', () => {
     assert.equal(selfReview.status, 403);
     const reviewerDecision = await reviewPost(request('/api/studio/publications/article-api/review', 'POST', { revisionId: 'revision-api', decision: 'approve', note: 'fixture review' }, reviewerCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(reviewerDecision.status, 200);
+    const approvedCandidate = await candidateGet(request('/api/studio/publications/article-api', 'GET', undefined, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
+    assert.equal((await approvedCandidate.json() as { state: string }).state, 'approved');
     const deniedPublish = await publishPost(request('/api/studio/publications/article-api/publish', 'POST', { revisionId: 'revision-api' }, reviewerCookie, origin, { 'Idempotency-Key': 'api-publish-1' }), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(deniedPublish.status, 403);
     const published = await publishPost(request('/api/studio/publications/article-api/publish', 'POST', { revisionId: 'revision-api' }, ownerCookie, origin, { 'Idempotency-Key': 'api-publish-1' }), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(published.status, 200);
+    const publishedCandidate = await candidateGet(request('/api/studio/publications/article-api', 'GET', undefined, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
+    assert.equal((await publishedCandidate.json() as { publication: { revisionId: string; status: string } }).publication.status, 'published');
     const keyConflict = await publishPost(request('/api/studio/publications/article-api/publish', 'POST', { revisionId: 'different-revision' }, ownerCookie, origin, { 'Idempotency-Key': 'api-publish-1' }), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(keyConflict.status, 409);
     assert.equal((await publicSlugGet(new Request(`${origin}/api/publications/article-api`), { params: Promise.resolve({ slug: 'article-api' }) }).then((response) => response.json()) as { revisionId: string }).revisionId, 'revision-api');
@@ -115,11 +121,15 @@ describe('Studio publication API routes', () => {
 
     const withdraw = await withdrawPost(request('/api/studio/publications/article-api/withdraw', 'POST', { revisionId: 'revision-api', reason: 'Fixture takedown' }, ownerCookie, origin, { 'Idempotency-Key': 'api-withdraw-1' }), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(withdraw.status, 200);
+    const withdrawnCandidate = await candidateGet(request('/api/studio/publications/article-api', 'GET', undefined, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
+    assert.equal((await withdrawnCandidate.json() as { publication: { revisionId: string; status: string; withdrawnAt: string } }).publication.status, 'withdrawn');
     assert.deepEqual(await (await publicListGet()).json(), []);
     assert.equal((await publicSlugGet(new Request(`${origin}/api/publications/article-api`), { params: Promise.resolve({ slug: 'article-api' }) })).status, 404);
     assert.equal((await publicMediaGet(new Request(`${origin}/api/public/media/${mediaHash}`), { params: Promise.resolve({ assetRevisionId: mediaHash }) })).status, 404);
     const restore = await restorePost(request('/api/studio/publications/article-api/restore', 'POST', { revisionId: 'revision-api' }, ownerCookie, origin, { 'Idempotency-Key': 'api-restore-1' }), { params: Promise.resolve({ articleId: 'article-api' }) });
     assert.equal(restore.status, 200);
+    const restoredCandidate = await candidateGet(request('/api/studio/publications/article-api', 'GET', undefined, authorCookie), { params: Promise.resolve({ articleId: 'article-api' }) });
+    assert.equal((await restoredCandidate.json() as { publication: { revisionId: string; status: string } }).publication.status, 'published');
     assert.equal((await (await publicListGet()).json() as unknown[]).length, 1);
   });
 

@@ -108,6 +108,7 @@ export interface ServerCandidate {
   state: 'in_review' | 'approved' | 'rejected';
   savedAt: string;
   snapshot: PublishedSnapshotRecordV1;
+  publication: { revisionId: string; status: 'published'; publishedAt: string } | { revisionId: string; status: 'withdrawn'; publishedAt: string; withdrawnAt: string } | null;
 }
 
 export async function loadCandidate(articleId: string): Promise<ServerCandidate> {

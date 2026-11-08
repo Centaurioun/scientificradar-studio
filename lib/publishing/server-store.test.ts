@@ -174,6 +174,9 @@ describe('durable server publishing workflow', () => {
     const ownerSession = store.login('owner@example.test', 'correct horse battery staple test');
     assert.ok(ownerSession);
     assert.equal(store.loadCandidate(ownerSession.actor, 'article-test').revisionId, 'editor-submitted-revision');
+    assert.deepEqual(store.loadCandidate(ownerSession.actor, 'article-test').publication, {
+      revisionId: 'rev-article-2', status: 'published', publishedAt: store.getPublicationBySlug('test-article')?.publishedAt,
+    });
     assert.equal(store.getPublicationBySlug('test-article')?.revisionId, 'rev-article-2');
   });
 });

@@ -353,6 +353,7 @@ export class ServerPublishingStore {
   loadCandidate(actor: AuthenticatedActor, articleId: string): {
     articleId: string; revisionId: string; revisionNumber: number; state: 'in_review' | 'approved' | 'rejected';
     savedAt: string; snapshot: PublishedSnapshotRecordV1;
+    publication: { revisionId: string; status: 'published'; publishedAt: string } | { revisionId: string; status: 'withdrawn'; publishedAt: string; withdrawnAt: string } | null;
   } {
     if (!['owner', 'editor', 'author', 'reviewer'].includes(actor.role)) throw new Error('FORBIDDEN');
     const row = actor.role === 'author'
@@ -362,6 +363,11 @@ export class ServerPublishingStore {
         WHERE article_id=? ORDER BY revision_number DESC,saved_at DESC LIMIT 1`).get(articleId);
     const candidate = row as { article_id: string; revision_id: string; revision_number: number; state: 'in_review' | 'approved' | 'rejected'; saved_at: string; snapshot_json: string } | undefined;
     if (!candidate) throw new Error('NOT_FOUND');
+    const activePublication = this.db.prepare(`SELECT p.revision_id,p.published_at FROM publications p
+      JOIN active_publications a ON a.article_id=p.article_id AND a.revision_id=p.revision_id
+      WHERE p.article_id=? AND p.withdrawn_at IS NULL`).get(articleId) as { revision_id: string; published_at: string } | undefined;
+    const latestWithdrawal = activePublication ? undefined : this.db.prepare(`SELECT revision_id,published_at,withdrawn_at FROM publications
+      WHERE article_id=? AND withdrawn_at IS NOT NULL ORDER BY withdrawn_at DESC,published_at DESC LIMIT 1`).get(articleId) as { revision_id: string; published_at: string; withdrawn_at: string } | undefined;
     return {
       articleId: candidate.article_id,
       revisionId: candidate.revision_id,
@@ -369,6 +375,11 @@ export class ServerPublishingStore {
       state: candidate.state,
       savedAt: candidate.saved_at,
       snapshot: JSON.parse(candidate.snapshot_json) as PublishedSnapshotRecordV1,
+      publication: activePublication
+        ? { revisionId: activePublication.revision_id, status: 'published', publishedAt: activePublication.published_at }
+        : latestWithdrawal
+          ? { revisionId: latestWithdrawal.revision_id, status: 'withdrawn', publishedAt: latestWithdrawal.published_at, withdrawnAt: latestWithdrawal.withdrawn_at }
+          : null,
     };
   }
 
