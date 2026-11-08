@@ -14,6 +14,7 @@
     "test": "bun test lib",
     "test:unit": "bun test lib",
     "test:e2e": "node scripts/prepare-playwright-server.mjs && playwright test",
+    "test:e2e:publishing": "node scripts/run-server-publishing-e2e.mjs",
     "test:e2e:install": "playwright install chromium",
     "test:e2e:install:ci": "playwright install --with-deps chromium",
     "clean": "next clean"

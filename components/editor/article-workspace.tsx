@@ -64,6 +64,8 @@ import {
 } from '@/lib/datetime/parse';
 
 import { AppShell } from '@/components/layout/app-shell';
+import { isServerPublishingConfigured } from '@/lib/publishing/server-client';
+import { ServerPublishingWorkflow } from './server-publishing-workflow';
 
 interface ArticleWorkspaceProps {
   articleId?: string;
@@ -73,6 +75,7 @@ type InspectorTab = 'taxonomy' | 'sources' | 'figures' | 'seo' | 'revisions';
 
 export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   const router = useRouter();
+  const serverPublishingEnabled = isServerPublishingConfigured();
   const [fallbackArticleId] = useState(() => `art-${Date.now()}`);
   const effectiveArticleId = articleId || fallbackArticleId;
   const {
@@ -620,6 +623,10 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
   };
 
   const handleStatusChange = async (nextStatus: ArticleStatus, note?: string) => {
+    if (serverPublishingEnabled && nextStatus === 'published') {
+      setWorkflowFeedback('Server publishing is enabled; use the authenticated server publication workflow below.');
+      return;
+    }
     if (isDirty) {
       const savedOk = await performSave(false);
       if (!savedOk) return;
@@ -671,7 +678,9 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
 
           <div className="flex items-center gap-2">
             <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-semibold uppercase text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-              {currentDraftArticle.status.replace('_', ' ')} · v{currentDraftArticle.version}
+              {serverPublishingEnabled
+                ? `Local draft · v${currentDraftArticle.version}`
+                : `${currentDraftArticle.status.replace('_', ' ')} · v${currentDraftArticle.version}`}
             </span>
             <span className="text-xs text-slate-400">·</span>
 
@@ -763,7 +772,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
           </button>
 
           {/* Workflow transitions */}
-          {currentDraftArticle.status === 'draft' && (
+          {!serverPublishingEnabled && currentDraftArticle.status === 'draft' && (
             <button
               type="button"
               onClick={() => void handleStatusChange('in_review', 'Submitted for scientific review')}
@@ -774,7 +783,7 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
             </button>
           )}
 
-          {(activeRole === 'owner' || activeRole === 'editor') && (
+          {!serverPublishingEnabled && (activeRole === 'owner' || activeRole === 'editor') && (
             <button
               type="button"
               onClick={async () => {
@@ -822,6 +831,33 @@ export function ArticleWorkspace({ articleId }: ArticleWorkspaceProps) {
           </button>
         </div>
       </div>
+
+      {serverPublishingEnabled && (
+        <ServerPublishingWorkflow
+          key={currentDraftArticle.id}
+          article={currentDraftArticle}
+          categories={categories}
+          tags={tags}
+          authors={authors}
+          sources={sources}
+          media={media}
+          knowledgeLinks={knowledgeLinks}
+          isDirty={isDirty}
+          persistLocalRevision={async () => {
+            const saved = await performSave(
+              true,
+              'Local recovery snapshot before server publication candidate'
+            );
+            if (!saved) return null;
+            return {
+              ...currentDraftArticle,
+              body: latestBodyRef.current.body,
+              bodyHtml: latestBodyRef.current.bodyHtml,
+              version: lastSyncedVersionRef.current ?? currentDraftArticle.version,
+            };
+          }}
+        />
+      )}
 
       {/* Save Error Banner */}
       {saveError && (
